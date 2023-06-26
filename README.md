@@ -53,7 +53,7 @@ Performs principal component analysis (PCA) on a given dataset. It calculates th
 ### 10. `fs_randomforest`
 Used to apply the random forest algorithm for classification or regression tasks. It takes in a data frame with features and a target variable, and performs various operations such as data preprocessing, feature selection, and parallel computing. It returns a list containing the trained random forest model, predictions for the target variable, and the accuracy (classification accuracy or RMSE) of the model.
 
-### 11. `fs_fs_recrusivefeature` 
+### 11. `fs_recrusivefeature` 
 Loads a specified dataset, splits it into training and testing sets, and performs Recursive Feature Elimination (RFE) using the Random Forest algorithm on the training set. It returns a data frame containing the variable importance scores computed from the RFE analysis. This function can be used when you want to identify the most important variables in a dataset for predicting a specific outcome or target variable.
 
 ### 12. `fs_stepwise` 

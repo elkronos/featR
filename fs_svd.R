@@ -1,3 +1,5 @@
+library(memoise)
+
 #' Perform Singular Value Decomposition (SVD) on a Matrix
 #'
 #' This function performs Singular Value Decomposition (SVD) on a matrix.
@@ -18,8 +20,8 @@
 #' set.seed(123)
 #' matrix_data <- matrix(rnorm(9), nrow = 3)
 #'
-#' # Perform SVD using the perform_svd function with scaling and keeping only the first 2 singular values
-#' result_list <- perform_svd(matrix_data, scale_input = TRUE, n_singular_values = 2)
+#' # Perform SVD using the fs_svd function with scaling and keeping only the first 2 singular values
+#' result_list <- fs_svd(matrix_data, scale_input = TRUE, n_singular_values = 2)
 #'
 #' # Extract the singular values, left singular vectors, and right singular vectors from the result list
 #' singular_values <- result_list[[1]]
@@ -53,6 +55,9 @@ fs_svd <- memoise(function(matrix_data, scale_input = TRUE, n_singular_values = 
   right_singular_vectors <- svd_result$v
   #' If the `n_singular_values` argument is not NULL, only keep the first n_singular_values
   if (!is.null(n_singular_values)) {
+    if (!is.numeric(n_singular_values) || n_singular_values <= 0 || n_singular_values > min(dim(matrix_data))) {
+      stop("n_singular_values must be a positive integer not exceeding the number of singular values in the matrix.")
+    }
     singular_values <- singular_values[1:n_singular_values]
     left_singular_vectors <- left_singular_vectors[, 1:n_singular_values]
     right_singular_vectors <- right_singular_vectors[, 1:n_singular_values]

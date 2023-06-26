@@ -1,3 +1,6 @@
+library(e1071)
+library(caret)
+
 #' Train an SVM model using cross-validation and grid search
 #'
 #' This function trains an SVM model using cross-validation and grid search. It can be used for both classification and regression tasks. For classification, the function uses the svmLinear method and for regression, it uses the svmRadial method.
@@ -37,11 +40,12 @@
 #'
 #' @import e1071 caret
 #' @export
-# Load packages
-library(e1071)
-library(caret)
-# Save function
 fs_svm <- function(data, target, task, nfolds=5, tune_grid=NULL) {
+  
+  # Parameter checks
+  stopifnot(is.data.frame(data))
+  stopifnot(target %in% names(data))
+  stopifnot(task %in% c("classification", "regression"))
   
   # Create formula for dependent and independent variables
   all_vars <- names(data)
@@ -53,22 +57,27 @@ fs_svm <- function(data, target, task, nfolds=5, tune_grid=NULL) {
     svm_fit <- train(formula, data = data, method = "svmLinear", trControl = trainControl(method = "cv", number = nfolds), tuneGrid = tune_grid)
   } else if (task == "regression") {
     if (!is.null(tune_grid)) {
+      if (ncol(tune_grid) != 2) stop("Tuning grid for regression must have exactly two columns: 'sigma' and 'C'.")
       setNames(tune_grid, c("sigma", "C"))
     }
     svm_fit <- train(formula, data = data, method = "svmRadial", trControl = trainControl(method = "cv", number = nfolds), preProc = c("center", "scale"), tuneGrid = tune_grid)
-  } else {
-    stop("Invalid task. Please choose 'classification' or 'regression'.")
-  }
+  } 
   
-  # Make predictions on test set
-  predictions <- predict(svm_fit, newdata = data)
+  # Split the data into a training set and a test set
+  set.seed(123)
+  train_index <- createDataPartition(data[,target], p = 0.7, list = FALSE)
+  train_set <- data[train_index,]
+  test_set <- data[-train_index,]
   
-  # Calculate accuracy or R-squared score
+  # Make predictions on the test set
+  predictions <- predict(svm_fit, newdata = test_set)
+  
+  # Calculate performance measures
   if (task == "classification") {
-    accuracy <- sum(predictions == data[, target]) / nrow(data)
+    accuracy <- sum(predictions == test_set[, target]) / nrow(test_set)
     output <- list(model = svm_fit, predictions = predictions, accuracy = accuracy)
   } else {
-    rsq <- 1 - sum((predictions - data[, target])^2) / sum((data[, target] - mean(data[, target]))^2)
+    rsq <- 1 - sum((predictions - test_set[, target])^2) / sum((test_set[, target] - mean(test_set[, target]))^2)
     output <- list(model = svm_fit, predictions = predictions, r_squared = rsq)
   }
   

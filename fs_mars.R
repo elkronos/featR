@@ -1,84 +1,90 @@
+library(earth)
+library(caret)
+
 #' Train and evaluate a MARS model on a dataset
 #'
 #' This function takes a dataset, splits it into training and test sets,
 #' performs grid search over a predefined set of hyperparameters, and trains
 #' a MARS model on the training set using cross-validation. The best model is
-#' then used to make predictions on the test set, and the root mean squared error
-#' (RMSE) of the predictions is calculated and returned.
+#' then used to make predictions on the test set, and depending on the type of
+#' response variable, either the root mean squared error (RMSE) for numerical 
+#' response or accuracy for categorical response is calculated and returned.
 #'
-#' @importFrom earth earth
-#' @importFrom caret createDataPartition train trainControl
-#' @param data The dataset to use for training and testing the model
-#' @param p The proportion of the data to use for training (default: 0.8)
+#' NOTE: Ensure that the `earth` and `caret` libraries are loaded before using this function.
+#'
+#' @param data The dataset to use for training and testing the model.
+#' @param responseName The name of the response column. Can be any column name present in the data.
+#'        For regression tasks, it should be numeric, and for classification tasks, it should be a factor.
+#'        Default is "response".
+#' @param p The proportion of the data to use for training. Default is 0.8.
 #' @param degree A vector of integers specifying the polynomial degree of the
-#'   MARS model to fit (default: 1:3)
+#'        MARS model to fit. Default is 1:3.
 #' @param nprune A vector of integers specifying the number of basis functions
-#'   to prune from the MARS model (default: 5, 10, 15)
-#' @param method The method to use for model fitting (default: "earth")
-#' @param search The method to use for searching the hyperparameter space
-#'   (default: "grid")
-#' @param number The number of folds to use for cross-validation (default: 5)
-#' @return The RMSE of the predictions on the test set
+#'        to prune from the MARS model. Default is c(5, 10, 15).
+#' @param method The method to use for model fitting. Default is "earth".
+#' @param search The method to use for searching the hyperparameter space.
+#'        Default is "grid".
+#' @param number The number of folds to use for cross-validation. Default is 5.
+#' @param seed The seed value for reproducibility. Default is 123.
+#' @return A list containing the trained model and either the RMSE or accuracy, 
+#'         depending on the response variable type.
 #' @examples
-#' # Load iris dataset
+#' # Load required libraries and iris dataset
+#' library(earth)
+#' library(caret)
 #' data(iris)
 #' 
-#' # Rename Sepal.Length to response
-#' names(iris)[names(iris) == "Sepal.Length"] <- "response
+#' # Test the function for regression
+#' result_reg <- fs_mars(iris, responseName = "Sepal.Length", p = 0.7)
+#' print(result_reg$model)
+#' print(paste("RMSE:", result_reg$rmse))
+#'
+#' # Test the function for classification
+#' result_class <- fs_mars(iris, responseName = "Species", p = 0.7)
+#' print(result_class$model)
+#' print(paste("Accuracy:", result_class$accuracy))
 #' 
-#' # Test your function
-#' result <- fs_mars(iris, p = 0.7, method = "lm")
-#' 
-#' # Print the full model results
-#' print(result$model)
-#' 
-#' # Assuming you have obtained the model object from fs_mars
-#' model <- result$model
-#' 
-#' # Get variable importance
-#' var_importance <- varImp(model)
-#' 
-#' # Print variable importance
-#' print(var_importance)
-#' 
-# Save function
-fs_mars <- function(data, p = 0.8, degree = 1:3, nprune = c(5, 10, 15),
-                    method = "earth", search = "grid", number = 5) {
-  library(earth)
-  library(caret)
+#' @export
+fs_mars <- function(data, responseName = "response", p = 0.8, degree = 1:3, 
+                    nprune = c(5, 10, 15), method = "earth", search = "grid", 
+                    number = 5, seed = 123) {
+  
+  # Check if required libraries are loaded
+  if(!"earth" %in% loadedNamespaces()) stop("The 'earth' package is not loaded. Please install and load it before calling this function.")
+  if(!"caret" %in% loadedNamespaces()) stop("The 'caret' package is not loaded. Please install and load it before calling this function.")
   
   # Split data into training and test sets
-  set.seed(123)
-  trainIndex <- createDataPartition(data$response, p = p, list = FALSE)
+  set.seed(seed)
+  trainIndex <- caret::createDataPartition(data[[responseName]], p = p, list = FALSE)
   train <- data[trainIndex, ]
   test <- data[-trainIndex, ]
   
   # Define the grid of hyperparameters to search over
-  hyper_params <- expand.grid(nprune = nprune, degree = degree)
+  hyperParameters <- expand.grid(nprune = nprune, degree = degree)
   
   # Define the control parameters for the model training
-  ctrl <- trainControl(method = "repeatedcv", number = number, search = search)
+  ctrl <- caret::trainControl(method = "repeatedcv", number = number, search = search)
   
   # Train the model using grid search for hyperparameters
-  set.seed(123)
+  set.seed(seed)
   if(method == "earth") {
-    mars_model <- train(response ~ ., data = train, method = method, trControl = ctrl, 
-                        tuneGrid = hyper_params)
+    mars_model <- caret::train(as.formula(paste(responseName, "~ .")), data = train, method = method, trControl = ctrl, 
+                               tuneGrid = hyperParameters)
   } else {
-    mars_model <- train(response ~ ., data = train, method = method, trControl = ctrl)
+    mars_model <- caret::train(as.formula(paste(responseName, "~ .")), data = train, method = method, trControl = ctrl)
   }
   
   # Make predictions on test set
   pred <- predict(mars_model, newdata = test)
   
   # Calculate the RMSE if the response variable is numeric
-  if(is.numeric(test$response)){
-    rmse <- sqrt(mean((test$response - pred)^2))
+  if(is.numeric(test[[responseName]])){
+    rmse <- sqrt(mean((test[[responseName]] - pred)^2))
     return(list(model = mars_model, rmse = rmse))
   }
   # Calculate accuracy if the response variable is categorical (factor)
-  else if(is.factor(test$response)){
-    accuracy <- sum(test$response == pred) / length(pred)
+  else if(is.factor(test[[responseName]])){
+    accuracy <- sum(test[[responseName]] == pred) / length(pred)
     return(list(model = mars_model, accuracy = accuracy))
   }
   else{

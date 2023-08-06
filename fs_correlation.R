@@ -12,9 +12,11 @@
 #' @param method The correlation method to use, either "pearson" or "spearman". 
 #'   The function will stop if any other method is provided.
 #'
-#' @return A list containing two elements: the correlation matrix and the
-#'   names of the selected variables. If no variables meet the correlation threshold, the
-#'   selected variables will be NULL.
+#' @return A list containing two elements: 
+#'   \itemize{
+#'     \item \strong{corr_matrix}: The correlation matrix (as a matrix). 
+#'     \item \strong{selected_vars}: Character vector containing the names of the selected variables. If no variables meet the correlation threshold, this will be NULL.
+#'   }
 #'
 #' @examples
 #' # Load the mtcars data set
@@ -32,6 +34,7 @@
 #'
 #' @export
 fs_correlation <- function(data, threshold, method = "pearson") {
+  
   # Check if data is a data frame or matrix
   if (!is.data.frame(data) && !is.matrix(data)) {
     stop("The 'data' argument must be a data frame or a matrix.")
@@ -42,33 +45,31 @@ fs_correlation <- function(data, threshold, method = "pearson") {
     stop("The 'threshold' argument must be a value between 0 and 1.")
   }
   
-  # Calculate the correlation matrix
-  if (method == "pearson") {
-    corr_matrix <- cor(data, method = "pearson")
-  } else if (method == "spearman") {
-    corr_matrix <- cor(data, method = "spearman")
-  } else {
+  # Validate method
+  if (!(method %in% c("pearson", "spearman"))) {
     stop("Invalid correlation method. Please specify 'pearson' or 'spearman'.")
   }
   
-  # Find the absolute correlation values above the threshold
-  # Include both lower and upper triangle of the matrix, but exclude diagonal
-  high_corr_vars <- which(abs(corr_matrix) > threshold & row(corr_matrix) != col(corr_matrix), arr.ind = TRUE)
+  # Calculate the correlation matrix
+  corr_matrix <- cor(data, method = method)
   
-  # Remove duplicate correlations
-  high_corr_vars <- high_corr_vars[high_corr_vars[,1] <= high_corr_vars[,2],]
+  # Set the diagonal of the matrix to 0
+  diag(corr_matrix) <- 0
+  
+  # Find the absolute correlation values above the threshold using the upper triangle
+  high_corr_vars <- which(abs(corr_matrix) > threshold & upper.tri(corr_matrix), arr.ind = TRUE)
   
   # Check if there are any selected variables
   if (nrow(high_corr_vars) == 0) {
     message("No variables meet the correlation threshold.")
-    return(list(corr_matrix = as.data.frame(corr_matrix), selected_vars = NULL))
+    return(list(corr_matrix = corr_matrix, selected_vars = NULL))
   }
   
   # Extract the selected variables from the data frame
   selected_vars <- unique(c(high_corr_vars[,1], high_corr_vars[,2]))
   selected_names <- colnames(data)[selected_vars]
   
-  # Save the correlation matrix and selected variables as data frames in a list
-  result <- list(corr_matrix = as.data.frame(corr_matrix), selected_vars = selected_names)
+  # Save the correlation matrix and selected variables in a list
+  result <- list(corr_matrix = corr_matrix, selected_vars = selected_names)
   return(result)
 }

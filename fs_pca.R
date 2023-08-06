@@ -10,6 +10,7 @@ library(stats)
 #'
 #' @param data A data frame containing the data to be analyzed. This data frame must contain at least one numeric column and one factor or character column for labels.
 #' @param num_pc An integer indicating the number of principal components to return. Default is 2.
+#' @param scale_data A logical indicating whether to scale the data before performing PCA. Default is TRUE.
 #'
 #' @return A list containing the following components:
 #' \itemize{
@@ -25,10 +26,11 @@ library(stats)
 #'
 #' @examples
 #' data(iris)
-#' fs_pca(iris)
+#' fs_pca(iris, num_pc = 2, scale_data = TRUE)
 #'
 #' @export
-fs_pca <- function(data, num_pc = 2) {
+
+fs_pca <- function(data, num_pc = 2, scale_data = TRUE) {
   
   # Check if data is valid for PCA
   if (is.null(data) | nrow(data) <= 1 | ncol(Filter(is.numeric, data)) == 0) {
@@ -42,8 +44,13 @@ fs_pca <- function(data, num_pc = 2) {
     stop("The data does not have any categorical or factor columns to use as labels.")
   }
   
-  # Perform PCA on the entire dataset
-  pca <- prcomp(select(data, -all_of(label_cols)), scale. = TRUE)
+  # Perform PCA on the numeric columns
+  pca <- prcomp(select(data, -all_of(label_cols)), scale. = scale_data)
+  
+  # Check if num_pc exceeds available PCs
+  if (num_pc > ncol(pca$x)) {
+    stop("The specified number of principal components exceeds the available number.")
+  }
   
   # Get the proportion of variance explained by each principal component
   var_explained <- round(summary(pca)$importance[2, 1:num_pc], 2)
@@ -86,12 +93,19 @@ fs_pca <- function(data, num_pc = 2) {
 #' plot_pca(pca_result, pca_result$pca_df, "Species")
 #' }
 #' @export
-plot_pca <- function(pca_result, pca_df, label_col) {
+plot_pca <- function(pca_result, label_col) {
   
   var_explained <- pca_result$var_explained
+  pca_df <- pca_result$pca_df
   
-  # Plot the PC scores, colored by the labels
-  pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = get(label_col))) + 
+  # Ensure the palette can accommodate the number of unique labels
+  num_colors <- length(unique(pca_df[[label_col]]))
+  if (num_colors > 8) { # Set1 has 8 distinct colors
+    stop("The number of unique labels exceeds the number of available colors in the 'Set1' palette.")
+  }
+  
+  # Plot the PC scores, colored by the labels using aes_string
+  pca_plot <- ggplot(pca_df, aes_string(x = "PC1", y = "PC2", color = label_col)) + 
     geom_point() +
     scale_color_brewer(palette = "Set1") +
     ggtitle("PCA Plot") +

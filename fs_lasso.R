@@ -9,8 +9,6 @@ library(glmnet)
 #' @param alpha The Lasso penalty parameter.
 #' @param nfolds The number of folds to use for cross-validation.
 #'
-#' @importFrom glmnet cv.glmnet coef
-#'
 #' @return A data.frame containing the variable importance scores sorted by importance.
 #' The data.frame has two columns: 'Variable' for the variable names and 'Importance' for the corresponding importance scores.
 #'
@@ -18,14 +16,8 @@ library(glmnet)
 #' # Create a fake dataset
 #' set.seed(123)
 #' n <- 100
-#' p <- 5
-#' x1 <- rnorm(n)
-#' x2 <- rnorm(n)
-#' x3 <- rnorm(n)
-#' x4 <- rnorm(n)
-#' x5 <- rnorm(n)
-#' y <- 2*x1 + 3*x2 + 0.5*x3 - 1.5*x4 + rnorm(n)
-#' fakeData <- data.frame(y, x1, x2, x3, x4, x5)
+#' y <- 2*rnorm(n) + 3*rnorm(n) + 0.5*rnorm(n) - 1.5*rnorm(n) + rnorm(n)
+#' fakeData <- data.frame(y = y, matrix(rnorm(5 * n), ncol = 5))
 #'
 #' # Train a Lasso regression model and get variable importance scores
 #' lassoImp <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1])
@@ -38,11 +30,21 @@ library(glmnet)
 #' @importFrom base nrow length stop
 #' @importFrom stats is.numeric
 #' @importFrom utils order
-fs_lasso <- function(x, y, alpha = 1, nfolds = 5) {
+#' @export
+fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE) {
+  
+  # Check for required package
+  if (!requireNamespace("glmnet", quietly = TRUE)) {
+    stop("The 'glmnet' package is required but not installed.")
+  }
   
   # Basic error handling
-  if (nrow(x) != length(y)) {
-    stop("Error: x and y must have the same number of rows.")
+  if (!is.data.frame(x) && !is.matrix(x)) {
+    stop("Error: x should be a data frame or matrix.")
+  }
+  
+  if (nrow(x) != length(y) || !is.numeric(y)) {
+    stop("Error: x and y must have the same number of rows and y should be numeric.")
   }
   
   if (!(is.numeric(alpha) && alpha >= 0)) {
@@ -54,7 +56,7 @@ fs_lasso <- function(x, y, alpha = 1, nfolds = 5) {
   }
   
   # Fit a Lasso regression model
-  lassoModel <- cv.glmnet(as.matrix(x), y, alpha = alpha, nfolds = nfolds)
+  lassoModel <- glmnet::cv.glmnet(as.matrix(x), y, alpha = alpha, nfolds = nfolds, standardize = standardize)
   
   # Extract variable importance scores
   lassoImp <- coef(lassoModel, s = "lambda.min")

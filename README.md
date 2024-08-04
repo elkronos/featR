@@ -70,7 +70,3 @@ Trains an SVM (Support Vector Machine) model using cross-validation and grid sea
 ### 15. `fs_variance`
 Takes a numeric matrix or data frame as input and applies variance thresholding to remove features (columns) whose variances are below a specified threshold. It returns a numeric matrix with the thresholded data. One might use this function to preprocess data before further analysis or modeling, especially when dealing with high-dimensional datasets and wanting to focus on the most informative features.
 
-
-# Contact
-- email: napoleonic_bores@proton.me
-- discord: elkronos

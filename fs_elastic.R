@@ -1,7 +1,13 @@
-# Load the necessary packages
+# Load necessary packages
+if (!requireNamespace("glmnet", quietly = TRUE)) install.packages("glmnet")
+if (!requireNamespace("caret", quietly = TRUE)) install.packages("caret")
+if (!requireNamespace("doParallel", quietly = TRUE)) install.packages("doParallel")
+if (!requireNamespace("Matrix", quietly = TRUE)) install.packages("Matrix")
+
 library(glmnet)
 library(caret)
 library(doParallel)
+library(Matrix)
 
 #' Elastic Net Regression with Optional PCA and Cross-Validation
 #'
@@ -48,66 +54,194 @@ library(doParallel)
 #' @importFrom glmnet glmnet
 #' @importFrom caret trainControl train
 #' @importFrom doParallel makeCluster registerDoParallel stopCluster detectCores
-#' @importFrom stats prcomp model.matrix model.response
+#' @importFrom stats prcomp model.matrix model.response complete.cases
 #' @export
 fs_elastic <- function(data, formula, alpha = seq(0, 1, by = 0.1), 
                        trControl = trainControl(method = "cv", number = 5), 
                        use_pca = FALSE, nPCs = NULL, lambda_seq = NULL) {
   
-  # Extract the response and predictor variables from the formula
+  cat("Extracting response and predictor variables...\n")
   y <- model.response(model.frame(formula, data))
   x <- model.matrix(formula, data)[,-1]
+  cat("Response variable (y):\n")
+  print(head(y))
+  cat("Predictor variables (x):\n")
+  print(head(x))
   
-  # Handle missing values
-  complete_cases <- complete.cases(x, y)
+  cat("Converting to sparse matrix for memory efficiency...\n")
+  x <- as(x, "CsparseMatrix")
+  
+  cat("Handling missing values...\n")
+  x_dense <- as.matrix(x)
+  complete_cases <- complete.cases(x_dense, y)
   if(any(!complete_cases)){
     y <- y[complete_cases]
     x <- x[complete_cases, ]
   }
+  cat("Response variable (y) after handling missing values:\n")
+  print(head(y))
+  cat("Predictor variables (x) after handling missing values:\n")
+  print(head(x))
   
   if(is.null(lambda_seq)){
     lambda_seq <- 10^seq(-3, 3, length = 100)
   }
   
+  if (use_pca) {
+    cat("Performing PCA...\n")
+    pca <- prcomp(as.matrix(x), scale. = TRUE, retx = TRUE)
+    if(is.null(nPCs)){
+      x <- pca$x
+    } else {
+      x <- pca$x[, 1:min(nPCs, ncol(pca$x))]
+    }
+    x <- as(x, "CsparseMatrix") # Convert PCA result to sparse matrix
+    cat("Predictor variables (x) after PCA:\n")
+    print(head(x))
+  }
+  
   tuneGrid <- expand.grid(alpha = alpha, lambda = lambda_seq)
+  
+  cat("Starting parallel processing...\n")
   cl <- makeCluster(detectCores() - 1)
   registerDoParallel(cl)
   
   clusterEvalQ(cl, {
     library(caret)
     library(glmnet)
+    library(Matrix)
   })
   
-  cv_fit <- foreach(i = 1:nrow(tuneGrid), .combine = "list", .packages = c("caret", "glmnet")) %dopar% {
+  cv_fit <- foreach(i = 1:nrow(tuneGrid), .combine = rbind, .packages = c("caret", "glmnet", "Matrix")) %dopar% {
     a <- tuneGrid$alpha[i]
     l <- tuneGrid$lambda[i]
-    x_train <- x
-    if (use_pca) {
-      pca <- prcomp(x, scale. = TRUE)
-      if(is.null(nPCs)){
-        x_train <- pca$x
-      } else {
-        x_train <- pca$x[, 1:min(nPCs, ncol(pca$x))]
-      }
-    }
-    fit <- train(x_train, y,
+    
+    fit <- train(x, y,
                  method = "glmnet",
                  tuneGrid = expand.grid(alpha = a, lambda = l),
                  trControl = trControl)
-    return(list(RMSE = min(fit$results$RMSE, na.rm = TRUE), model = fit))
+    data.frame(RMSE = min(fit$results$RMSE, na.rm = TRUE), alpha = a, lambda = l, model = I(list(fit)))
   }
   
   stopCluster(cl)
   
-  rmse_values <- sapply(cv_fit, function(fit) {
-    return(fit$RMSE)
-  })
+  cat("Results from cross-validation (cv_fit):\n")
+  print(cv_fit)
+  
+  rmse_values <- cv_fit$RMSE
+  
+  cat("Extracted RMSE values:\n")
+  print(rmse_values)
   
   best_index <- which.min(rmse_values)
-  best_model <- cv_fit[[best_index]]$model
+  best_model <- cv_fit$model[[best_index]]
+  
+  cat("Best model details:\n")
+  print(best_model)
   
   list(coef = coef(best_model$finalModel, s = best_model$bestTune$lambda),
        alpha = best_model$bestTune$alpha,
        lambda = best_model$bestTune$lambda,
        RMSE = min(best_model$results$RMSE, na.rm = TRUE))
 }
+
+# Load necessary libraries for testing
+if (!requireNamespace("testthat", quietly = TRUE)) install.packages("testthat")
+library(testthat)
+
+# Define UAT for fs_elastic function
+test_fs_elastic <- function() {
+  cat("Running UAT for fs_elastic...\n")
+  
+  # Test 1: Simple numeric data frame without PCA
+  set.seed(123)
+  df1 <- data.frame(
+    y = rnorm(100),
+    x1 = rnorm(100),
+    x2 = rnorm(100)
+  )
+  result1 <- fs_elastic(df1, y ~ .)
+  print(result1)
+  expect_s4_class(result1$coef, "dgCMatrix")
+  expect_type(result1$alpha, "double")
+  expect_type(result1$lambda, "double")
+  expect_type(result1$RMSE, "double")
+  
+  # Test 2: Simple numeric data frame with PCA
+  set.seed(123)
+  df2 <- data.frame(
+    y = rnorm(100),
+    x1 = rnorm(100),
+    x2 = rnorm(100)
+  )
+  result2 <- fs_elastic(df2, y ~ ., use_pca = TRUE)
+  print(result2)
+  expect_s4_class(result2$coef, "dgCMatrix")
+  expect_type(result2$alpha, "double")
+  expect_type(result2$lambda, "double")
+  expect_type(result2$RMSE, "double")
+  
+  # Test 3: Data frame with missing values
+  set.seed(123)
+  df3 <- data.frame(
+    y = c(rnorm(95), rep(NA, 5)),
+    x1 = rnorm(100),
+    x2 = rnorm(100)
+  )
+  result3 <- fs_elastic(df3, y ~ .)
+  print(result3)
+  expect_s4_class(result3$coef, "dgCMatrix")
+  expect_type(result3$alpha, "double")
+  expect_type(result3$lambda, "double")
+  expect_type(result3$RMSE, "double")
+  
+  # Test 4: Data frame with categorical variables
+  set.seed(123)
+  df4 <- data.frame(
+    y = rnorm(100),
+    x1 = rnorm(100),
+    x2 = sample(c("A", "B", "C"), 100, replace = TRUE)
+  )
+  result4 <- fs_elastic(df4, y ~ .)
+  print(result4)
+  expect_s4_class(result4$coef, "dgCMatrix")
+  expect_type(result4$alpha, "double")
+  expect_type(result4$lambda, "double")
+  expect_type(result4$RMSE, "double")
+  
+  # Test 5: Data frame with date variables
+  set.seed(123)
+  df5 <- data.frame(
+    y = rnorm(100),
+    x1 = rnorm(100),
+    x2 = seq(as.Date("2001/1/1"), by = "day", length.out = 100)
+  )
+  result5 <- fs_elastic(df5, y ~ .)
+  print(result5)
+  expect_s4_class(result5$coef, "dgCMatrix")
+  expect_type(result5$alpha, "double")
+  expect_type(result5$lambda, "double")
+  expect_type(result5$RMSE, "double")
+  
+  # Test 6: Error handling when target is missing
+  set.seed(123)
+  df6 <- data.frame(
+    x1 = rnorm(100),
+    x2 = rnorm(100)
+  )
+  expect_error(fs_elastic(df6, y ~ .), "object 'y' not found")
+  
+  # Test 7: Error handling for invalid formula
+  set.seed(123)
+  df7 <- data.frame(
+    y = rnorm(100),
+    x1 = rnorm(100),
+    x2 = rnorm(100)
+  )
+  expect_error(fs_elastic(df7, y ~ z), "object 'z' not found")
+  
+  cat("UAT for fs_elastic completed.\n")
+}
+
+# Run the UAT function
+test_fs_elastic()

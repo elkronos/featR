@@ -205,6 +205,10 @@ fs_mars <- function(data, responseName, p = 0.8, degree = 1:3,
   }
 }
 
+# Load necessary libraries for testing
+if (!requireNamespace("testthat", quietly = TRUE)) install.packages("testthat")
+library(testthat)
+
 # Define UAT for fs_mars function
 test_fs_mars <- function() {
   cat("Running UAT for fs_mars...\n")

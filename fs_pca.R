@@ -7,7 +7,7 @@ library(future.apply)
 library(Matrix)
 library(RColorBrewer)
 library(ggplot2)
-library(viridis)  # Load viridis for the new color palette
+library(viridis)
 
 #' Check if the data is valid for PCA
 #'

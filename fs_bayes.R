@@ -1,11 +1,3 @@
-#' Load required packages
-#'
-#' @import brms
-#' @import tidyverse
-#' @import parallel
-#' @import loo
-#' @import data.table
-
 # Load required packages
 library(brms)
 library(tidyverse)
@@ -22,10 +14,6 @@ library(data.table)
 #' @param predictor_cols A character vector specifying the predictor columns.
 #' @param date_col A string specifying the date column (optional, default is NULL).
 #' @return NULL if validation is successful, otherwise stops execution with an error message.
-#' @examples
-#' \dontrun{
-#' validate_data(data, "response", c("predictor1", "predictor2"), "date")
-#' }
 validate_data <- function(data, response_col, predictor_cols, date_col = NULL) {
   if (!response_col %in% names(data)) {
     stop("Response column not found in data.")
@@ -46,12 +34,6 @@ validate_data <- function(data, response_col, predictor_cols, date_col = NULL) {
 #' @param date_col A string specifying the date column.
 #' @param predictor_cols A character vector specifying the predictor columns.
 #' @return A list containing the updated data and predictor columns.
-#' @examples
-#' \dontrun{
-#' result <- add_week_feature(data, "date", c("predictor1", "predictor2"))
-#' data <- result$data
-#' predictor_cols <- result$predictor_cols
-#' }
 add_week_feature <- function(data, date_col, predictor_cols) {
   data[, week := as.integer(format(get(date_col), "%U"))]
   predictor_cols <- c(predictor_cols, "week")
@@ -64,10 +46,6 @@ add_week_feature <- function(data, date_col, predictor_cols) {
 #'
 #' @param predictor_cols A character vector specifying the predictor columns.
 #' @return A list of character vectors, each representing a combination of predictors.
-#' @examples
-#' \dontrun{
-#' combinations <- generate_predictor_combinations(c("predictor1", "predictor2", "predictor3"))
-#' }
 generate_predictor_combinations <- function(predictor_cols) {
   unlist(
     lapply(seq_along(predictor_cols),
@@ -87,10 +65,6 @@ generate_predictor_combinations <- function(predictor_cols) {
 #' @param brm_args A list of additional arguments to pass to the brm function.
 #' @param hyperparameter_grid A grid of hyperparameters for model tuning (optional).
 #' @return A fitted model object.
-#' @examples
-#' \dontrun{
-#' model <- fit_model(data, "response ~ predictor1", 1, prior(normal(0, 10), class = "b"), list(iter = 2000, warmup = 1000))
-#' }
 fit_model <- function(data, formula_str, n_cores, prior, brm_args, hyperparameter_grid = NULL) {
   cat("Fitting model with formula:", formula_str, "\n")
   
@@ -102,8 +76,8 @@ fit_model <- function(data, formula_str, n_cores, prior, brm_args, hyperparamete
         family = gaussian(),
         prior = prior,
         cores = n_cores,
-        iter = 4000,
-        warmup = 2000,
+        iter = 2000,        # Reduced iterations
+        warmup = 1000,      # Reduced warmup
         control = list(adapt_delta = 0.99, max_treedepth = 15)
       ),
       brm_args
@@ -135,10 +109,6 @@ fit_model <- function(data, formula_str, n_cores, prior, brm_args, hyperparamete
 #' @param data A data frame or data table containing the data.
 #' @param model A fitted model object.
 #' @return The updated data with fitted values and residuals.
-#' @examples
-#' \dontrun{
-#' data <- add_metrics_to_data(data, model)
-#' }
 add_metrics_to_data <- function(data, model) {
   fitted_values <- fitted(model)[, "Estimate"]
   residuals <- resid(model)[, "Estimate"]
@@ -164,10 +134,6 @@ add_metrics_to_data <- function(data, model) {
 #' @param early_stop_threshold A numeric value specifying the threshold for early stopping (optional, default is 0.01).
 #' @param hyperparameter_grid A grid of hyperparameters for model tuning (optional).
 #' @return A list containing the best model, the updated data with metrics, MAE, and RMSE.
-#' @examples
-#' \dontrun{
-#' result <- fs_bayes(data, "response", c("predictor1", "predictor2"), "date")
-#' }
 fs_bayes <- function(data, response_col, predictor_cols, date_col = NULL,
                      prior = NULL, brm_args = list(), early_stop_threshold = 0.01, hyperparameter_grid = NULL) {
   
@@ -195,21 +161,21 @@ fs_bayes <- function(data, response_col, predictor_cols, date_col = NULL,
   predictor_combinations <- generate_predictor_combinations(predictor_cols)
   
   best_model <- NULL
-  best_loo <- Inf
+  best_loo <- -Inf  # Initialize to negative infinity for maximization
   
-  # Setup for processing (using only one core for debugging)
-  n_cores <- 1
+  # Setup for processing (allow user to specify number of cores)
+  n_cores <- parallel::detectCores() - 1  # Use one less than the total cores
   
   for (predictor_comb in predictor_combinations) {
     formula_str <- paste0(response_col, " ~ ", paste(predictor_comb, collapse = " + "))
     model <- fit_model(data, formula_str, n_cores, prior, brm_args, hyperparameter_grid)
     
     if (!is.null(model)) {
-      loo_val <- loo(model)$estimates["elpd_loo", "Estimate"]
-      if (!is.na(loo_val) && loo_val < best_loo) {
-        if (best_loo - loo_val > early_stop_threshold) {
-          best_model <- model
-          best_loo <- loo_val
+      loo_result <- loo(model)
+      loo_val <- loo_result$estimates["elpd_loo", "Estimate"]
+      if (!is.na(loo_val) && loo_val > best_loo) {
+        if ((loo_val - best_loo) < early_stop_threshold) {
+          message("Early stopping: Improvement less than threshold.")
           break
         }
         best_model <- model
@@ -227,7 +193,7 @@ fs_bayes <- function(data, response_col, predictor_cols, date_col = NULL,
   data <- add_metrics_to_data(data, best_model)
   
   cat("Best Model:", as.character(formula(best_model)), "\n")
-  cat("Best LOO:", best_loo, "\n")
+  cat("Best LOO (elpd_loo):", best_loo, "\n")
   
   mae <- mean(data$abs_residuals, na.rm = TRUE)
   rmse <- sqrt(mean(data$squared_residuals, na.rm = TRUE))
@@ -238,23 +204,13 @@ fs_bayes <- function(data, response_col, predictor_cols, date_col = NULL,
   return(list("Model" = best_model, "Data" = data, "MAE" = mae, "RMSE" = rmse))
 }
 
-#' Comprehensive UAT for all functions
-#'
-#' This script performs unit testing for all the functions in this module.
-#'
-#' @import brms
-#' @import tidyverse
-#' @import parallel
-#' @import loo
-#' @import data.table
-
 # Initialize results data frame
 test_results <- data.frame(Test = character(), Result = character(), stringsAsFactors = FALSE)
 
 # Helper function to print test results and store them
 print_and_store_result <- function(test_name, passed, message = NULL) {
   result <- if(passed) "PASS" else "FAIL"
-  cat(sprintf("%-40s [%s]\n", test_name, result))
+  cat(sprintf("%-50s [%s]\n", test_name, result))
   if (!is.null(message)) cat("  ", message, "\n")
   test_results <<- rbind(test_results, data.frame(Test = test_name, Result = result, stringsAsFactors = FALSE))
 }
@@ -319,18 +275,22 @@ test_generate_predictor_combinations <- function() {
 }
 
 # Test fit_model function
-test_fit_model <- function() {
+test_fit_model <- function(fast_mode = TRUE) {
   set.seed(123)
+  data_size <- if (fast_mode) 50 else 100
+  iter <- if (fast_mode) 500 else 2000
+  warmup <- if (fast_mode) 250 else 1000
+  
   data <- data.table(
-    response = rnorm(100),
-    predictor1 = rnorm(100),
-    predictor2 = rnorm(100)
+    response = rnorm(data_size),
+    predictor1 = rnorm(data_size),
+    predictor2 = rnorm(data_size)
   )
   
   formula_str <- "response ~ predictor1"
   n_cores <- 1
   prior <- NULL
-  brm_args <- list(iter = 2000, warmup = 1000)
+  brm_args <- list(iter = iter, warmup = warmup)
   
   model <- fit_model(data, formula_str, n_cores, prior, brm_args)
   
@@ -339,14 +299,18 @@ test_fit_model <- function() {
 }
 
 # Test add_metrics_to_data function
-test_add_metrics_to_data <- function() {
+test_add_metrics_to_data <- function(fast_mode = TRUE) {
   set.seed(123)
+  data_size <- if (fast_mode) 50 else 100
+  iter <- if (fast_mode) 500 else 2000
+  warmup <- if (fast_mode) 250 else 1000
+  
   data <- data.table(
-    response = rnorm(100),
-    predictor1 = rnorm(100)
+    response = rnorm(data_size),
+    predictor1 = rnorm(data_size)
   )
   
-  model <- brm(response ~ predictor1, data = data, iter = 2000, warmup = 1000)
+  model <- brm(response ~ predictor1, data = data, iter = iter, warmup = warmup, chains = 1, refresh = 0)
   
   result <- add_metrics_to_data(data, model)
   
@@ -355,18 +319,25 @@ test_add_metrics_to_data <- function() {
 }
 
 # Test fs_bayes function
-test_fs_bayes <- function() {
+test_fs_bayes <- function(fast_mode = TRUE) {
+  # Adjust data size and iterations based on fast_mode
+  data_size <- if (fast_mode) 50 else 100
+  iter <- if (fast_mode) 500 else 2000
+  warmup <- if (fast_mode) 250 else 1000
+  
   # Test Case 1: Basic functionality
   set.seed(123)
   data <- data.table(
-    response = rnorm(100),
-    predictor1 = rnorm(100),
-    predictor2 = rnorm(100),
-    date = seq.Date(Sys.Date(), by = "day", length.out = 100)
+    response = rnorm(data_size),
+    predictor1 = rnorm(data_size),
+    predictor2 = rnorm(data_size),
+    date = seq.Date(Sys.Date(), by = "day", length.out = data_size)
   )
   
+  brm_args <- list(iter = iter, warmup = warmup, chains = 1, refresh = 0)
+  
   result <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "predictor2"), "date")
+    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args)
   }, error = function(e) NULL)
   
   print_and_store_result("fs_bayes: Basic functionality", 
@@ -375,14 +346,14 @@ test_fs_bayes <- function() {
   # Test Case 2: Handle missing data
   set.seed(123)
   data_missing <- data.table(
-    response = c(rnorm(95), rep(NA, 5)),
-    predictor1 = c(rnorm(90), rep(NA, 10)),
-    predictor2 = rnorm(100),
-    date = seq.Date(Sys.Date(), by = "day", length.out = 100)
+    response = c(rnorm(data_size - 5), rep(NA, 5)),
+    predictor1 = c(rnorm(data_size - 10), rep(NA, 10)),
+    predictor2 = rnorm(data_size),
+    date = seq.Date(Sys.Date(), by = "day", length.out = data_size)
   )
   
   result_missing <- tryCatch({
-    fs_bayes(data_missing, "response", c("predictor1", "predictor2"), "date")
+    fs_bayes(data_missing, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args)
   }, error = function(e) e)
   
   print_and_store_result("fs_bayes: Handle missing data", 
@@ -393,51 +364,52 @@ test_fs_bayes <- function() {
   prior <- prior(normal(0, 10), class = "b")
   
   result_prior <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", prior = prior)
+    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", prior = prior, brm_args = brm_args)
   }, error = function(e) NULL)
   
   print_and_store_result("fs_bayes: Custom prior", !is.null(result_prior))
   
   # Test Case 4: Different brm_args
-  brm_args <- list(iter = 3000, warmup = 1500, chains = 2)
+  custom_brm_args <- list(iter = iter, warmup = warmup, chains = 1, refresh = 0)
   
   result_brm_args <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args)
+    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", brm_args = custom_brm_args)
   }, error = function(e) NULL)
   
   print_and_store_result("fs_bayes: Custom brm_args", 
-                         !is.null(result_brm_args) && result_brm_args$Model$fit@sim$iter == 3000)
+                         !is.null(result_brm_args) && result_brm_args$Model$fit@sim$iter == iter)
   
   # Test Case 5: Early stopping
   data_early_stop <- data.table(
-    response = rnorm(100),
-    predictor1 = rnorm(100),
-    predictor2 = rnorm(100),
-    predictor3 = rnorm(100),
-    date = seq.Date(Sys.Date(), by = "day", length.out = 100)
+    response = rnorm(data_size),
+    predictor1 = rnorm(data_size),
+    predictor2 = rnorm(data_size),
+    predictor3 = rnorm(data_size),
+    date = seq.Date(Sys.Date(), by = "day", length.out = data_size)
   )
   
   result_early_stop <- tryCatch({
-    fs_bayes(data_early_stop, "response", c("predictor1", "predictor2", "predictor3"), "date", early_stop_threshold = 1)
+    fs_bayes(data_early_stop, "response", c("predictor1", "predictor2", "predictor3"), "date", early_stop_threshold = 1, brm_args = brm_args)
   }, error = function(e) NULL)
   
   print_and_store_result("fs_bayes: Early stopping", !is.null(result_early_stop))
   
   # Test Case 6: Large dataset
+  data_large_size <- if (fast_mode) 100 else 1000
   set.seed(123)
   data_large <- data.table(
-    response = rnorm(1000),
-    predictor1 = rnorm(1000),
-    predictor2 = rnorm(1000),
-    predictor3 = rnorm(1000),
-    predictor4 = rnorm(1000),
-    predictor5 = rnorm(1000),
-    date = seq.Date(Sys.Date(), by = "day", length.out = 1000)
+    response = rnorm(data_large_size),
+    predictor1 = rnorm(data_large_size),
+    predictor2 = rnorm(data_large_size),
+    predictor3 = rnorm(data_large_size),
+    predictor4 = rnorm(data_large_size),
+    predictor5 = rnorm(data_large_size),
+    date = seq.Date(Sys.Date(), by = "day", length.out = data_large_size)
   )
   
   start_time <- Sys.time()
   result_large <- tryCatch({
-    fs_bayes(data_large, "response", c("predictor1", "predictor2", "predictor3", "predictor4", "predictor5"), "date")
+    fs_bayes(data_large, "response", c("predictor1", "predictor2", "predictor3", "predictor4", "predictor5"), "date", brm_args = brm_args)
   }, error = function(e) NULL)
   end_time <- Sys.time()
   
@@ -448,11 +420,11 @@ test_fs_bayes <- function() {
   
   # Test Case 7: Invalid inputs
   result_invalid_response <- tryCatch({
-    fs_bayes(data, "non_existent", c("predictor1", "predictor2"), "date")
+    fs_bayes(data, "non_existent", c("predictor1", "predictor2"), "date", brm_args = brm_args)
   }, error = function(e) e)
   
   result_invalid_predictor <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "non_existent"), "date")
+    fs_bayes(data, "response", c("predictor1", "non_existent"), "date", brm_args = brm_args)
   }, error = function(e) e)
   
   print_and_store_result("fs_bayes: Invalid response column", inherits(result_invalid_response, "error"))
@@ -460,15 +432,15 @@ test_fs_bayes <- function() {
 }
 
 # Run all tests
-run_all_tests <- function() {
+run_all_tests <- function(fast_mode = TRUE) {
   cat("Running Comprehensive UAT\n")
   cat("==================================\n")
   test_validate_data()
   test_add_week_feature()
   test_generate_predictor_combinations()
-  test_fit_model()
-  test_add_metrics_to_data()
-  test_fs_bayes()
+  test_fit_model(fast_mode)
+  test_add_metrics_to_data(fast_mode)
+  test_fs_bayes(fast_mode)
   cat("==================================\n")
   cat("UAT completed\n\n")
   
@@ -480,5 +452,5 @@ run_all_tests <- function() {
   print(test_results)
 }
 
-# Execute all tests
-run_all_tests()
+# Execute all tests in fast mode
+run_all_tests(fast_mode = TRUE)

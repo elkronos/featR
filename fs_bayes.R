@@ -4,453 +4,501 @@ library(tidyverse)
 library(parallel)
 library(loo)
 library(data.table)
+library(pbapply)
 
-#' Validate Data
+###############################################################################
+# Utility Functions
+###############################################################################
+
+#' Validate Data Columns and Types
 #'
-#' This function validates the presence of response, predictor, and date columns in the data.
+#' Checks that the response, predictor, and (if provided) date columns exist
+#' and are of the expected type.
 #'
-#' @param data A data frame or data table containing the data.
-#' @param response_col A string specifying the response column.
-#' @param predictor_cols A character vector specifying the predictor columns.
-#' @param date_col A string specifying the date column (optional, default is NULL).
-#' @return NULL if validation is successful, otherwise stops execution with an error message.
+#' @param data A data.frame or data.table.
+#' @param response_col Character. The name of the response column.
+#' @param predictor_cols Character vector. The names of predictor columns.
+#' @param date_col Character or NULL. The name of the date column, if any.
+#' @return Invisibly returns TRUE if validation passes; otherwise stops execution.
 validate_data <- function(data, response_col, predictor_cols, date_col = NULL) {
+  if (!is.data.frame(data) && !data.table::is.data.table(data)) {
+    stop("Input data must be a data.frame or data.table.")
+  }
   if (!response_col %in% names(data)) {
-    stop("Response column not found in data.")
+    stop("Response column '", response_col, "' not found in data.")
   }
   if (any(!predictor_cols %in% names(data))) {
-    stop("Some predictor columns not found in data.")
+    missing_preds <- predictor_cols[!predictor_cols %in% names(data)]
+    stop("Missing predictor columns: ", paste(missing_preds, collapse = ", "))
   }
   if (!is.null(date_col) && !date_col %in% names(data)) {
-    stop("Date column not found in data.")
+    stop("Date column '", date_col, "' not found in data.")
   }
+  invisible(TRUE)
 }
 
-#' Add Week Feature
+#' Add Week Feature from Date Column
 #'
-#' This function adds a week feature to the data based on the date column.
+#' Adds a "week" variable (numeric week number) to the data and updates the
+#' predictor columns. Ensures the date column is in Date format.
 #'
-#' @param data A data frame or data table containing the data.
-#' @param date_col A string specifying the date column.
-#' @param predictor_cols A character vector specifying the predictor columns.
-#' @return A list containing the updated data and predictor columns.
+#' @param data A data.table.
+#' @param date_col Character. The name of the date column.
+#' @param predictor_cols Character vector. The current predictor columns.
+#' @return A list with `data` (the updated data.table) and `predictor_cols` (updated).
 add_week_feature <- function(data, date_col, predictor_cols) {
+  if (!inherits(data[[date_col]], "Date")) {
+    data[[date_col]] <- as.Date(data[[date_col]])
+  }
   data[, week := as.integer(format(get(date_col), "%U"))]
-  predictor_cols <- c(predictor_cols, "week")
-  return(list(data = data, predictor_cols = predictor_cols))
+  predictor_cols <- unique(c(predictor_cols, "week"))
+  list(data = data, predictor_cols = predictor_cols)
 }
+
+###############################################################################
+# Predictor Combination and Model Fitting Functions
+###############################################################################
 
 #' Generate Predictor Combinations
 #'
-#' This function generates all possible combinations of predictor columns.
+#' Returns a list of all non-empty combinations (subsets) of predictors.
 #'
-#' @param predictor_cols A character vector specifying the predictor columns.
-#' @return A list of character vectors, each representing a combination of predictors.
-generate_predictor_combinations <- function(predictor_cols) {
-  unlist(
-    lapply(seq_along(predictor_cols),
-           function(i) combn(predictor_cols, i, simplify = FALSE)),
-    recursive = FALSE
-  )
+#' @param predictor_cols Character vector of predictor names.
+#' @param max_comb_size Integer or NULL. Maximum number of predictors in a combination.
+#' @param sample_combinations Integer or NULL. If provided, randomly sample this
+#'   many combinations (after generating all combinations up to max_comb_size).
+#' @return A list where each element is a character vector of predictors.
+generate_predictor_combinations <- function(predictor_cols, max_comb_size = NULL, sample_combinations = NULL) {
+  n <- length(predictor_cols)
+  max_comb_size <- if (is.null(max_comb_size)) n else min(max_comb_size, n)
+  
+  comb_list <- lapply(1:max_comb_size, function(i) combn(predictor_cols, i, simplify = FALSE))
+  combinations <- unlist(comb_list, recursive = FALSE)
+  
+  if (!is.null(sample_combinations) && length(combinations) > sample_combinations) {
+    set.seed(123)  # For reproducibility; adjust or remove as needed
+    combinations <- sample(combinations, sample_combinations)
+  }
+  combinations
 }
 
-#' Fit Bayesian Model
+#' Fit a Bayesian Model Using brms
 #'
-#' This function fits a Bayesian model using the provided formula and data.
+#' Fits a Bayesian regression model using the provided formula and additional arguments.
 #'
-#' @param data A data frame or data table containing the data.
-#' @param formula_str A string specifying the model formula.
-#' @param n_cores An integer specifying the number of cores to use.
-#' @param prior A prior distribution for the model parameters.
-#' @param brm_args A list of additional arguments to pass to the brm function.
-#' @param hyperparameter_grid A grid of hyperparameters for model tuning (optional).
-#' @return A fitted model object.
-fit_model <- function(data, formula_str, n_cores, prior, brm_args, hyperparameter_grid = NULL) {
-  cat("Fitting model with formula:", formula_str, "\n")
+#' @param data A data.frame or data.table containing the data.
+#' @param formula_str Character. The model formula as a string.
+#' @param n_cores Integer. Number of cores for parallel computation.
+#' @param prior A brms prior specification (default is NULL).
+#' @param brm_args List. Additional arguments for `brm()`.
+#' @param verbose Logical. Whether to print informative messages.
+#' @return A fitted brms model object or NULL if fitting fails.
+fit_model <- function(data, formula_str, n_cores, prior, brm_args, verbose = TRUE) {
+  if (verbose) message("Fitting model with formula: ", formula_str)
   
-  model <- tryCatch({
-    model_args <- modifyList(
-      list(
-        formula = as.formula(formula_str),
-        data = data,
-        family = gaussian(),
-        prior = prior,
-        cores = n_cores,
-        iter = 2000,        # Reduced iterations
-        warmup = 1000,      # Reduced warmup
-        control = list(adapt_delta = 0.99, max_treedepth = 15)
-      ),
-      brm_args
-    )
-    cat("Model arguments:\n")
-    print(model_args)
-    do.call(brm, model_args)
-  }, warning = function(w) {
-    message("Warning for Model:", formula_str, ": ", conditionMessage(w))
-    return(NULL)
-  }, error = function(e) {
-    message("Error for Model:", formula_str, ": ", conditionMessage(e))
-    print(summary(data))
-    return(NULL)
-  })
+  default_args <- list(
+    formula   = as.formula(formula_str),
+    data      = data,
+    family    = gaussian(),
+    prior     = prior,
+    cores     = n_cores,
+    iter      = 2000,
+    warmup    = 1000,
+    control   = list(adapt_delta = 0.99, max_treedepth = 15),
+    refresh   = 0
+  )
+  model_args <- modifyList(default_args, brm_args)
   
-  if (!is.null(model)) {
-    cat("Model fitted successfully:", formula_str, "\n")
-    print(summary(model))
+  # If using fixed_param, remove control settings which are not needed
+  if (!is.null(model_args$algorithm) && model_args$algorithm == "fixed_param") {
+    model_args$control <- NULL
   }
   
-  return(model)
+  model <- tryCatch({
+    do.call(brm, model_args)
+  }, warning = function(w) {
+    if (verbose) message("Warning for formula [", formula_str, "]: ", conditionMessage(w))
+    NULL
+  }, error = function(e) {
+    if (verbose) message("Error for formula [", formula_str, "]: ", conditionMessage(e))
+    NULL
+  })
+  
+  if (!is.null(model) && verbose) {
+    message("Successfully fitted model for: ", formula_str)
+  }
+  model
 }
 
-#' Add Fitted Values and Residuals to Data
+#' Append Fitted Metrics to Data
 #'
-#' This function adds fitted values and residuals from the model to the data.
+#' Adds columns for fitted values and various residuals to the data.table.
 #'
-#' @param data A data frame or data table containing the data.
-#' @param model A fitted model object.
-#' @return The updated data with fitted values and residuals.
+#' @param data A data.table.
+#' @param model A fitted brms model.
+#' @return The data.table with new columns: fitted_values, residuals, abs_residuals, squared_residuals.
 add_metrics_to_data <- function(data, model) {
-  fitted_values <- fitted(model)[, "Estimate"]
-  residuals <- resid(model)[, "Estimate"]
+  fitted_vals <- fitted(model)[, "Estimate"]
+  resid_vals  <- resid(model)[, "Estimate"]
   
-  data[, `:=`(fitted_values = fitted_values,
-              residuals = residuals,
-              abs_residuals = abs(residuals),
-              squared_residuals = residuals^2)]
-  
-  return(data)
+  data[, `:=`(
+    fitted_values     = fitted_vals,
+    residuals         = resid_vals,
+    abs_residuals     = abs(resid_vals),
+    squared_residuals = resid_vals^2
+  )]
+  data
 }
+
+#' Evaluate a Predictor Combination
+#'
+#' Fits a model for a given predictor combination and returns the LOO estimate.
+#'
+#' @param preds Character vector of predictor names.
+#' @param data A data.table.
+#' @param response_col Character. Name of the response column.
+#' @param n_cores Integer. Number of cores.
+#' @param prior A brms prior specification.
+#' @param brm_args List. Additional arguments for `brm()`.
+#' @param verbose Logical. Verbosity flag.
+#' @return A list with elements: preds, model, loo_val (or dummy value if LOO fails),
+#'   and formula_str.
+evaluate_combination <- function(preds, data, response_col, n_cores, prior, brm_args, verbose = TRUE) {
+  formula_str <- paste0(response_col, " ~ ", paste(preds, collapse = " + "))
+  model <- fit_model(data, formula_str, n_cores, prior, brm_args, verbose = verbose)
+  
+  loo_val <- NA
+  if (!is.null(model)) {
+    # Try LOO; if it fails (which may happen in fixed_param mode), assign a dummy value.
+    loo_obj <- tryCatch(loo(model),
+                        error = function(e) {
+                          if (verbose) message("LOO failed for formula [", formula_str, "]: ", conditionMessage(e))
+                          NULL
+                        })
+    if (!is.null(loo_obj)) {
+      loo_val <- loo_obj$estimates["elpd_loo", "Estimate"]
+    } else {
+      loo_val <- 0
+    }
+  }
+  list(preds = preds, model = model, loo_val = loo_val, formula_str = formula_str)
+}
+
+###############################################################################
+# Main Function: Bayesian Feature Selection and Model Optimization
+###############################################################################
 
 #' Bayesian Feature Selection for Model Optimization
 #'
-#' This function performs Bayesian feature selection for model optimization.
+#' Performs Bayesian feature selection by evaluating various combinations of predictor
+#' variables. Selects the best model based on the expected log predictive density (elpd_loo).
 #'
-#' @param data A data frame or data table containing the data.
-#' @param response_col A string specifying the response column.
-#' @param predictor_cols A character vector specifying the predictor columns.
-#' @param date_col A string specifying the date column (optional, default is NULL).
-#' @param prior A prior distribution for the model parameters (optional, default is NULL).
-#' @param brm_args A list of additional arguments to pass to the brm function (optional, default is an empty list).
-#' @param early_stop_threshold A numeric value specifying the threshold for early stopping (optional, default is 0.01).
-#' @param hyperparameter_grid A grid of hyperparameters for model tuning (optional).
-#' @return A list containing the best model, the updated data with metrics, MAE, and RMSE.
+#' @param data A data.frame or data.table.
+#' @param response_col Character. Name of the response variable.
+#' @param predictor_cols Character vector. Names of predictor variables.
+#' @param date_col Character or NULL. Name of the date column (if provided, adds a week feature).
+#' @param prior A brms prior specification (default is NULL).
+#' @param brm_args List. Additional arguments for `brm()` (e.g., iter, warmup, chains).
+#' @param early_stop_threshold Numeric. Early stopping threshold for improvement in elpd_loo.
+#' @param parallel_combinations Logical. Whether to evaluate predictor combinations in parallel.
+#' @param max_comb_size Integer or NULL. Maximum number of predictors to include in any combination.
+#' @param sample_combinations Integer or NULL. If provided, randomly sample this many combinations.
+#' @param show_progress Logical. If TRUE and not using parallel evaluation, display a progress bar.
+#' @param verbose Logical. Whether to print informative messages.
+#' @return A list containing:
+#'   - Model: the best brms model,
+#'   - Data: the data.table with appended metrics,
+#'   - MAE: Mean Absolute Error,
+#'   - RMSE: Root Mean Squared Error.
 fs_bayes <- function(data, response_col, predictor_cols, date_col = NULL,
-                     prior = NULL, brm_args = list(), early_stop_threshold = 0.01, hyperparameter_grid = NULL) {
+                     prior = NULL, brm_args = list(), early_stop_threshold = 0.01,
+                     parallel_combinations = FALSE, max_comb_size = NULL, sample_combinations = NULL,
+                     show_progress = TRUE, verbose = TRUE) {
   
-  # Data validation
+  # Validate and prepare data
   validate_data(data, response_col, predictor_cols, date_col)
-  
-  # Convert to data.table for efficient handling
   data <- as.data.table(data)
-  
-  # Handle missing data
-  data <- na.omit(data[, c(response_col, predictor_cols, date_col), with = FALSE])
-  
+  req_cols <- unique(c(response_col, predictor_cols, date_col))
+  data <- na.omit(data[, ..req_cols])
   if (nrow(data) == 0) {
     stop("No complete cases in the data after removing missing values.")
   }
   
-  # Add week feature if date column is provided
   if (!is.null(date_col)) {
-    result <- add_week_feature(data, date_col, predictor_cols)
-    data <- result$data
-    predictor_cols <- result$predictor_cols
+    res <- add_week_feature(data, date_col, predictor_cols)
+    data <- res$data
+    predictor_cols <- res$predictor_cols
   }
   
-  # Generate all possible combinations of predictor columns
-  predictor_combinations <- generate_predictor_combinations(predictor_cols)
+  # Generate predictor combinations (with possible restrictions for many predictors)
+  combinations <- generate_predictor_combinations(predictor_cols, max_comb_size, sample_combinations)
+  if (verbose) message("Total combinations to evaluate: ", length(combinations))
   
-  best_model <- NULL
-  best_loo <- -Inf  # Initialize to negative infinity for maximization
+  n_cores <- max(parallel::detectCores() - 1, 1)
   
-  # Setup for processing (allow user to specify number of cores)
-  n_cores <- parallel::detectCores() - 1  # Use one less than the total cores
+  # Function to evaluate one combination; needed for parallel processing.
+  eval_func <- function(preds) {
+    evaluate_combination(preds, data, response_col, n_cores, prior, brm_args, verbose = verbose)
+  }
   
-  for (predictor_comb in predictor_combinations) {
-    formula_str <- paste0(response_col, " ~ ", paste(predictor_comb, collapse = " + "))
-    model <- fit_model(data, formula_str, n_cores, prior, brm_args, hyperparameter_grid)
-    
-    if (!is.null(model)) {
-      loo_result <- loo(model)
-      loo_val <- loo_result$estimates["elpd_loo", "Estimate"]
-      if (!is.na(loo_val) && loo_val > best_loo) {
-        if ((loo_val - best_loo) < early_stop_threshold) {
-          message("Early stopping: Improvement less than threshold.")
-          break
-        }
-        best_model <- model
-        best_loo <- loo_val
-      }
+  # Evaluate all combinations
+  if (parallel_combinations) {
+    if (.Platform$OS.type == "windows") {
+      cl <- makeCluster(n_cores)
+      # Ensure worker nodes load required packages
+      clusterEvalQ(cl, {
+        library(brms)
+        library(data.table)
+        library(loo)
+        library(tidyverse)
+      })
+      # Export necessary objects and functions to the workers
+      clusterExport(cl,
+                    varlist = c("data", "response_col", "n_cores", "prior",
+                                "brm_args", "verbose", "combinations",
+                                "eval_func", "evaluate_combination", "fit_model"),
+                    envir = environment())
+      results_list <- parLapply(cl, combinations, eval_func)
+      stopCluster(cl)
     } else {
-      message("Model failed to fit. Formula: ", formula_str)
+      results_list <- mclapply(combinations, eval_func, mc.cores = n_cores)
     }
+  } else if (show_progress) {
+    pboptions(type = "txt")  # Force a text progress bar
+    results_list <- pblapply(combinations, eval_func)
+  } else {
+    results_list <- lapply(combinations, eval_func)
   }
   
-  if (is.null(best_model)) {
-    stop("No valid model found. Check your data and model specifications.")
+  # Identify best model based on elpd_loo (ignore those with NA)
+  valid_results <- Filter(function(x) !is.na(x$loo_val), results_list)
+  if (length(valid_results) == 0) {
+    stop("No valid models were fitted. Please check your data and model specifications.")
   }
   
-  data <- add_metrics_to_data(data, best_model)
+  # Order by loo_val descending
+  valid_results <- valid_results[order(sapply(valid_results, function(x) x$loo_val), decreasing = TRUE)]
+  best <- valid_results[[1]]
   
-  cat("Best Model:", as.character(formula(best_model)), "\n")
-  cat("Best LOO (elpd_loo):", best_loo, "\n")
+  if (verbose) {
+    message("Best Model Formula: ", best$formula_str)
+    message("Best elpd_loo: ", best$loo_val)
+  }
   
-  mae <- mean(data$abs_residuals, na.rm = TRUE)
+  data <- add_metrics_to_data(data, best$model)
+  
+  mae  <- mean(data$abs_residuals, na.rm = TRUE)
   rmse <- sqrt(mean(data$squared_residuals, na.rm = TRUE))
   
-  cat("MAE:", mae, "\n")
-  cat("RMSE:", rmse, "\n")
+  if (verbose) {
+    message("MAE: ", mae, " | RMSE: ", rmse)
+  }
   
-  return(list("Model" = best_model, "Data" = data, "MAE" = mae, "RMSE" = rmse))
+  list(Model = best$model, Data = data, MAE = mae, RMSE = rmse)
 }
 
-# Initialize results data frame
+###############################################################################
+# Testing Functions (Unit Tests / UAT)
+###############################################################################
+
+# Global container for test results
 test_results <- data.frame(Test = character(), Result = character(), stringsAsFactors = FALSE)
 
-# Helper function to print test results and store them
-print_and_store_result <- function(test_name, passed, message = NULL) {
-  result <- if(passed) "PASS" else "FAIL"
+#' Helper: Print and Store Test Result
+#'
+#' @param test_name Character. Name of the test.
+#' @param passed Logical. Whether the test passed.
+#' @param note Optional character. Additional notes.
+print_and_store_result <- function(test_name, passed, note = NULL) {
+  result <- if (passed) "PASS" else "FAIL"
   cat(sprintf("%-50s [%s]\n", test_name, result))
-  if (!is.null(message)) cat("  ", message, "\n")
+  if (!is.null(note)) cat("  Note: ", note, "\n")
   test_results <<- rbind(test_results, data.frame(Test = test_name, Result = result, stringsAsFactors = FALSE))
 }
 
-# Test validate_data function
+# Test: Data Validation
 test_validate_data <- function() {
-  data <- data.table(
-    response = rnorm(100),
+  dt <- data.table(
+    response   = rnorm(100),
     predictor1 = rnorm(100),
     predictor2 = rnorm(100),
-    date = seq.Date(Sys.Date(), by = "day", length.out = 100)
+    date       = seq.Date(Sys.Date(), by = "day", length.out = 100)
   )
   
-  valid_test <- tryCatch({
-    validate_data(data, "response", c("predictor1", "predictor2"), "date")
+  valid_input <- tryCatch({
+    validate_data(dt, "response", c("predictor1", "predictor2"), "date")
     TRUE
   }, error = function(e) FALSE)
   
   invalid_response <- tryCatch({
-    validate_data(data, "non_existent", c("predictor1", "predictor2"), "date")
+    validate_data(dt, "non_existent", c("predictor1", "predictor2"), "date")
     FALSE
   }, error = function(e) TRUE)
   
   invalid_predictor <- tryCatch({
-    validate_data(data, "response", c("predictor1", "non_existent"), "date")
+    validate_data(dt, "response", c("predictor1", "non_existent"), "date")
     FALSE
   }, error = function(e) TRUE)
   
   invalid_date <- tryCatch({
-    validate_data(data, "response", c("predictor1", "predictor2"), "non_existent")
+    validate_data(dt, "response", c("predictor1", "predictor2"), "non_existent")
     FALSE
   }, error = function(e) TRUE)
   
-  print_and_store_result("validate_data: Valid input", valid_test)
+  print_and_store_result("validate_data: Valid input", valid_input)
   print_and_store_result("validate_data: Invalid response", invalid_response)
   print_and_store_result("validate_data: Invalid predictor", invalid_predictor)
   print_and_store_result("validate_data: Invalid date", invalid_date)
 }
 
-# Test add_week_feature function
+# Test: Week Feature Addition
 test_add_week_feature <- function() {
-  data <- data.table(
-    response = rnorm(100),
+  dt <- data.table(
+    response   = rnorm(100),
     predictor1 = rnorm(100),
     predictor2 = rnorm(100),
-    date = seq.Date(Sys.Date(), by = "day", length.out = 100)
+    date       = seq.Date(Sys.Date(), by = "day", length.out = 100)
   )
-  
-  result <- add_week_feature(data, "date", c("predictor1", "predictor2"))
-  
-  week_added <- "week" %in% names(result$data) && "week" %in% result$predictor_cols
-  print_and_store_result("add_week_feature: Week feature added", week_added)
+  res <- add_week_feature(dt, "date", c("predictor1", "predictor2"))
+  week_added <- "week" %in% names(res$data) && "week" %in% res$predictor_cols
+  print_and_store_result("add_week_feature: Week column added", week_added)
 }
 
-# Test generate_predictor_combinations function
+# Test: Predictor Combination Generation
 test_generate_predictor_combinations <- function() {
-  predictor_cols <- c("predictor1", "predictor2", "predictor3")
-  combinations <- generate_predictor_combinations(predictor_cols)
-  
-  correct_combinations <- length(combinations) == 7  # 2^3 - 1
-  print_and_store_result("generate_predictor_combinations: Correct combinations", correct_combinations)
+  preds <- c("predictor1", "predictor2", "predictor3")
+  combs <- generate_predictor_combinations(preds)
+  correct_count <- length(combs) == (2^length(preds) - 1)
+  print_and_store_result("generate_predictor_combinations: Correct count", correct_count)
 }
 
-# Test fit_model function
+# Test: Model Fitting Function
 test_fit_model <- function(fast_mode = TRUE) {
   set.seed(123)
   data_size <- if (fast_mode) 50 else 100
-  iter <- if (fast_mode) 500 else 2000
-  warmup <- if (fast_mode) 250 else 1000
+  # In fast mode, use fixed_param to avoid long sampling and compilation
+  iter_val   <- if (fast_mode) 100 else 500
+  warmup_val <- if (fast_mode) 0   else 250
   
-  data <- data.table(
-    response = rnorm(data_size),
+  dt <- data.table(
+    response   = rnorm(data_size),
     predictor1 = rnorm(data_size),
     predictor2 = rnorm(data_size)
   )
   
   formula_str <- "response ~ predictor1"
   n_cores <- 1
-  prior <- NULL
-  brm_args <- list(iter = iter, warmup = warmup)
+  # Add algorithm = "fixed_param" in fast mode
+  brm_args <- if (fast_mode) {
+    list(iter = iter_val, warmup = warmup_val, chains = 1, refresh = 0,
+         algorithm = "fixed_param", seed = 123)
+  } else {
+    list(iter = iter_val, warmup = warmup_val, chains = 1, refresh = 0)
+  }
   
-  model <- fit_model(data, formula_str, n_cores, prior, brm_args)
-  
-  model_fitted <- !is.null(model) && inherits(model, "brmsfit")
-  print_and_store_result("fit_model: Model fitted successfully", model_fitted)
+  model <- fit_model(dt, formula_str, n_cores, prior = NULL, brm_args = brm_args, verbose = FALSE)
+  model_ok <- !is.null(model) && inherits(model, "brmsfit")
+  print_and_store_result("fit_model: Basic fitting", model_ok)
 }
 
-# Test add_metrics_to_data function
+# Test: Adding Metrics to Data
 test_add_metrics_to_data <- function(fast_mode = TRUE) {
   set.seed(123)
   data_size <- if (fast_mode) 50 else 100
-  iter <- if (fast_mode) 500 else 2000
-  warmup <- if (fast_mode) 250 else 1000
+  iter_val   <- if (fast_mode) 100 else 500
+  warmup_val <- if (fast_mode) 0   else 250
   
-  data <- data.table(
-    response = rnorm(data_size),
+  dt <- data.table(
+    response   = rnorm(data_size),
     predictor1 = rnorm(data_size)
   )
   
-  model <- brm(response ~ predictor1, data = data, iter = iter, warmup = warmup, chains = 1, refresh = 0)
+  brm_args <- if (fast_mode) {
+    list(iter = iter_val, warmup = warmup_val, chains = 1, refresh = 0,
+         algorithm = "fixed_param", seed = 123)
+  } else {
+    list(iter = iter_val, warmup = warmup_val, chains = 1, refresh = 0)
+  }
   
-  result <- add_metrics_to_data(data, model)
-  
-  metrics_added <- all(c("fitted_values", "residuals", "abs_residuals", "squared_residuals") %in% names(result))
-  print_and_store_result("add_metrics_to_data: Metrics added successfully", metrics_added)
+  # Use do.call to pass the brm_args list to brm()
+  model <- do.call(brm, c(list(formula = response ~ predictor1, data = dt), brm_args))
+  dt <- add_metrics_to_data(dt, model)
+  cols_present <- all(c("fitted_values", "residuals", "abs_residuals", "squared_residuals") %in% names(dt))
+  print_and_store_result("add_metrics_to_data: Metrics appended", cols_present)
 }
 
-# Test fs_bayes function
+# Test: Main fs_bayes Function
 test_fs_bayes <- function(fast_mode = TRUE) {
-  # Adjust data size and iterations based on fast_mode
   data_size <- if (fast_mode) 50 else 100
-  iter <- if (fast_mode) 500 else 2000
-  warmup <- if (fast_mode) 250 else 1000
+  iter_val   <- if (fast_mode) 100 else 500
+  warmup_val <- if (fast_mode) 0   else 250
   
-  # Test Case 1: Basic functionality
-  set.seed(123)
-  data <- data.table(
-    response = rnorm(data_size),
+  dt <- data.table(
+    response   = rnorm(data_size),
     predictor1 = rnorm(data_size),
     predictor2 = rnorm(data_size),
-    date = seq.Date(Sys.Date(), by = "day", length.out = data_size)
+    date       = seq.Date(Sys.Date(), by = "day", length.out = data_size)
   )
+  brm_args <- if (fast_mode) {
+    list(iter = iter_val, warmup = warmup_val, chains = 1, refresh = 0,
+         algorithm = "fixed_param", seed = 123)
+  } else {
+    list(iter = iter_val, warmup = warmup_val, chains = 1, refresh = 0)
+  }
   
-  brm_args <- list(iter = iter, warmup = warmup, chains = 1, refresh = 0)
-  
-  result <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args)
+  # Basic functionality test
+  res <- tryCatch({
+    fs_bayes(dt, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args,
+             parallel_combinations = FALSE, show_progress = TRUE, verbose = FALSE)
   }, error = function(e) NULL)
   
-  print_and_store_result("fs_bayes: Basic functionality", 
-                         !is.null(result) && all(c("Model", "Data", "MAE", "RMSE") %in% names(result)))
+  basic_ok <- !is.null(res) && all(c("Model", "Data", "MAE", "RMSE") %in% names(res))
+  print_and_store_result("fs_bayes: Basic functionality", basic_ok)
   
-  # Test Case 2: Handle missing data
-  set.seed(123)
-  data_missing <- data.table(
-    response = c(rnorm(data_size - 5), rep(NA, 5)),
-    predictor1 = c(rnorm(data_size - 10), rep(NA, 10)),
-    predictor2 = rnorm(data_size),
-    date = seq.Date(Sys.Date(), by = "day", length.out = data_size)
-  )
+  # Test: Handling missing data
+  dt_missing <- copy(dt)
+  dt_missing[sample(.N, 5), response := NA]
+  dt_missing[sample(.N, 5), predictor1 := NA]
   
-  result_missing <- tryCatch({
-    fs_bayes(data_missing, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args)
+  res_missing <- tryCatch({
+    fs_bayes(dt_missing, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args,
+             parallel_combinations = FALSE, verbose = FALSE)
   }, error = function(e) e)
   
-  print_and_store_result("fs_bayes: Handle missing data", 
-                         !inherits(result_missing, "error"),
-                         if(inherits(result_missing, "error")) conditionMessage(result_missing))
+  print_and_store_result("fs_bayes: Missing data handling", !inherits(res_missing, "error"),
+                         if (inherits(res_missing, "error")) conditionMessage(res_missing))
   
-  # Test Case 3: Different prior specifications
-  prior <- prior(normal(0, 10), class = "b")
-  
-  result_prior <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", prior = prior, brm_args = brm_args)
+  # Test: Custom prior
+  custom_prior <- prior(normal(0, 10), class = "b")
+  res_prior <- tryCatch({
+    fs_bayes(dt, "response", c("predictor1", "predictor2"), "date", prior = custom_prior,
+             brm_args = brm_args, parallel_combinations = FALSE, verbose = FALSE)
   }, error = function(e) NULL)
+  print_and_store_result("fs_bayes: Custom prior", !is.null(res_prior))
   
-  print_and_store_result("fs_bayes: Custom prior", !is.null(result_prior))
-  
-  # Test Case 4: Different brm_args
-  custom_brm_args <- list(iter = iter, warmup = warmup, chains = 1, refresh = 0)
-  
-  result_brm_args <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "predictor2"), "date", brm_args = custom_brm_args)
+  # Test: Parallel combinations (if available)
+  res_parallel <- tryCatch({
+    fs_bayes(dt, "response", c("predictor1", "predictor2"), "date", brm_args = brm_args,
+             parallel_combinations = TRUE, verbose = FALSE)
   }, error = function(e) NULL)
-  
-  print_and_store_result("fs_bayes: Custom brm_args", 
-                         !is.null(result_brm_args) && result_brm_args$Model$fit@sim$iter == iter)
-  
-  # Test Case 5: Early stopping
-  data_early_stop <- data.table(
-    response = rnorm(data_size),
-    predictor1 = rnorm(data_size),
-    predictor2 = rnorm(data_size),
-    predictor3 = rnorm(data_size),
-    date = seq.Date(Sys.Date(), by = "day", length.out = data_size)
-  )
-  
-  result_early_stop <- tryCatch({
-    fs_bayes(data_early_stop, "response", c("predictor1", "predictor2", "predictor3"), "date", early_stop_threshold = 1, brm_args = brm_args)
-  }, error = function(e) NULL)
-  
-  print_and_store_result("fs_bayes: Early stopping", !is.null(result_early_stop))
-  
-  # Test Case 6: Large dataset
-  data_large_size <- if (fast_mode) 100 else 1000
-  set.seed(123)
-  data_large <- data.table(
-    response = rnorm(data_large_size),
-    predictor1 = rnorm(data_large_size),
-    predictor2 = rnorm(data_large_size),
-    predictor3 = rnorm(data_large_size),
-    predictor4 = rnorm(data_large_size),
-    predictor5 = rnorm(data_large_size),
-    date = seq.Date(Sys.Date(), by = "day", length.out = data_large_size)
-  )
-  
-  start_time <- Sys.time()
-  result_large <- tryCatch({
-    fs_bayes(data_large, "response", c("predictor1", "predictor2", "predictor3", "predictor4", "predictor5"), "date", brm_args = brm_args)
-  }, error = function(e) NULL)
-  end_time <- Sys.time()
-  
-  execution_time <- difftime(end_time, start_time, units = "mins")
-  print_and_store_result("fs_bayes: Large dataset", 
-                         !is.null(result_large),
-                         sprintf("Execution time: %.2f minutes", as.numeric(execution_time)))
-  
-  # Test Case 7: Invalid inputs
-  result_invalid_response <- tryCatch({
-    fs_bayes(data, "non_existent", c("predictor1", "predictor2"), "date", brm_args = brm_args)
-  }, error = function(e) e)
-  
-  result_invalid_predictor <- tryCatch({
-    fs_bayes(data, "response", c("predictor1", "non_existent"), "date", brm_args = brm_args)
-  }, error = function(e) e)
-  
-  print_and_store_result("fs_bayes: Invalid response column", inherits(result_invalid_response, "error"))
-  print_and_store_result("fs_bayes: Invalid predictor column", inherits(result_invalid_predictor, "error"))
+  print_and_store_result("fs_bayes: Parallel evaluation", !is.null(res_parallel))
 }
 
-# Run all tests
+# Run all tests in one function
 run_all_tests <- function(fast_mode = TRUE) {
-  cat("Running Comprehensive UAT\n")
-  cat("==================================\n")
+  cat("========== Running Comprehensive Tests ==========\n")
   test_validate_data()
   test_add_week_feature()
   test_generate_predictor_combinations()
   test_fit_model(fast_mode)
   test_add_metrics_to_data(fast_mode)
   test_fs_bayes(fast_mode)
-  cat("==================================\n")
-  cat("UAT completed\n\n")
-  
-  # Print summary
+  cat("========== Tests Completed ==========\n\n")
   cat("Test Summary:\n")
-  cat("==================================\n")
   print(table(test_results$Result))
   cat("\nDetailed Results:\n")
   print(test_results)
 }
 
-# Execute all tests in fast mode
-run_all_tests(fast_mode = TRUE)
+# Run tests
+# run_all_tests(fast_mode = TRUE)

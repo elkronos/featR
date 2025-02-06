@@ -1,243 +1,299 @@
-# Load packages
+# Load required packages
 library(caret)
 library(doParallel)
+
+##############################################
+# Validation and Preprocessing Helper Functions
+##############################################
 
 #' Validate Control Parameters
 #'
 #' Validates the structure and contents of the control parameters list.
 #'
-#' @param control_params A list containing control parameters. It must include 'method' and 'number' elements.
+#' @param control_params A list containing control parameters. Must include `method` and `number` elements.
 #'
-#' @return None. This function throws an error if the validation fails.
+#' @return Invisibly returns TRUE if validation is successful. Throws an error otherwise.
 #'
 #' @examples
-#' \dontrun{
 #' validate_control_params(list(method = "cv", number = 5))
-#' }
 validate_control_params <- function(control_params) {
-  if (!is.list(control_params)) stop("control_params should be a list.")
-  if (!all(c("method", "number") %in% names(control_params))) {
-    stop("control_params should contain 'method' and 'number' elements.")
+  if (!is.list(control_params)) {
+    stop("control_params should be a list.")
   }
+  required_elements <- c("method", "number")
+  if (!all(required_elements %in% names(control_params))) {
+    stop("control_params must contain 'method' and 'number' elements.")
+  }
+  valid_methods <- c("cv", "LOOCV", "repeatedcv", "boot", "none")
+  if (!(control_params$method %in% valid_methods)) {
+    stop(paste0("Invalid method in control_params. Must be one of: ", paste(valid_methods, collapse = ", "), "."))
+  }
+  if (!is.numeric(control_params$number) || control_params$number <= 0) {
+    stop("control_params$number must be a positive integer.")
+  }
+  invisible(TRUE)
 }
 
-#' Handle Categorical Variables
+#' Handle Categorical Variables via One-Hot Encoding
 #'
-#' Converts categorical variables in the dataset to numeric values.
+#' Converts categorical variables in a data frame to numeric variables using one-hot encoding.
 #'
-#' @param data A data frame containing the dataset.
+#' @param data A data frame.
 #'
-#' @return A data frame with categorical variables converted to numeric.
+#' @return A data frame with one-hot encoded categorical variables.
 #'
 #' @examples
-#' \dontrun{
-#' data <- data.frame(cat1 = as.factor(c("A", "B", "A")), cat2 = as.factor(c("C", "C", "D")), num = c(1, 2, 3))
+#' data <- data.frame(cat1 = factor(c("A", "B", "A")), num = 1:3)
 #' handle_categorical_variables(data)
-#' }
 handle_categorical_variables <- function(data) {
-  data <- data.frame(lapply(data, function(x) {
-    if (is.factor(x)) as.numeric(as.factor(x)) else x
-  }))
-  return(data)
+  dummies <- dummyVars(" ~ .", data = data)
+  data_transformed <- data.frame(predict(dummies, newdata = data))
+  return(data_transformed)
 }
 
 #' Split Data into Training and Testing Sets
 #'
-#' Splits the dataset into training and testing sets.
+#' Splits a dataset into training (80%) and testing (20%) sets.
 #'
-#' @param data A data frame containing the dataset.
-#' @param response_var_index An integer indicating the index of the response variable.
-#' @param seed An integer used to set the random seed for reproducibility.
+#' @param data A data frame.
+#' @param response_var_index An integer index of the response variable.
+#' @param seed An integer seed for reproducibility.
 #'
-#' @return A list with two elements: trainData and testData.
+#' @return A list with elements `trainData` and `testData`.
 #'
 #' @examples
-#' \dontrun{
 #' data <- data.frame(response = rnorm(100), predictor = rnorm(100))
-#' split_data(data, 1, 123)
-#' }
+#' split_data(data, response_var_index = 1, seed = 123)
 split_data <- function(data, response_var_index, seed) {
   set.seed(seed)
-  trainIndex <- createDataPartition(data[, response_var_index], p = .8, list = FALSE)
-  trainData <- data[trainIndex, ]
-  testData <- data[-trainIndex, ]
-  return(list(trainData = trainData, testData = testData))
+  
+  response <- data[[response_var_index]]
+  # For classification tasks, ensure response is a factor
+  if (is.factor(response) || is.character(response)) {
+    response <- as.factor(response)
+  } else {
+    response <- as.numeric(response)
+  }
+  
+  trainIndex <- createDataPartition(response, p = 0.8, list = FALSE)
+  list(trainData = data[trainIndex, , drop = FALSE],
+       testData = data[-trainIndex, , drop = FALSE])
 }
+
+##############################################
+# Modeling and Feature Selection Functions
+##############################################
 
 #' Perform Recursive Feature Elimination (RFE)
 #'
-#' Performs Recursive Feature Elimination to select optimal features.
+#' Performs recursive feature elimination on the training data.
 #'
-#' @param trainData A data frame containing the training dataset.
-#' @param response_var_index An integer indicating the index of the response variable.
-#' @param sizes A numeric vector indicating the different subset sizes of features to evaluate.
-#' @param control_params A list containing control parameters for the RFE process.
-#' @param feature_funcs A list of functions to use for RFE, typically from the caret package.
-#' @param parallel A logical value indicating whether to use parallel processing.
-#' @param early_stop A logical value indicating whether to stop early based on resampling results.
+#' @param trainData A data frame for training.
+#' @param response_var_index An integer index for the response variable.
+#' @param sizes A numeric vector of feature subset sizes to evaluate.
+#' @param control_params A list with control parameters (must contain `method` and `number`).
+#' @param feature_funcs A list of functions to be used for RFE (e.g., `rfFuncs`).
+#' @param parallel Logical. Should parallel processing be used?
+#' @param early_stop Logical. Should early stopping based on resampling results be enabled?
 #'
-#' @return An object of class rfe containing the results of the RFE process.
+#' @return An object of class `rfe` containing the results.
 #'
 #' @examples
-#' \dontrun{
+#' # Example for regression with random forest functions:
 #' data <- data.frame(response = rnorm(100), predictor1 = rnorm(100), predictor2 = rnorm(100))
 #' control_params <- list(method = "cv", number = 5)
-#' trainData <- split_data(data, 1, 123)$trainData
-#' perform_rfe(trainData, 1, c(1, 2), control_params, rfFuncs, FALSE, FALSE)
-#' }
+#' trainData <- split_data(data, 1, seed = 123)$trainData
+#' perform_rfe(trainData, 1, sizes = c(1,2), control_params, feature_funcs = rfFuncs, parallel = FALSE, early_stop = FALSE)
 perform_rfe <- function(trainData, response_var_index, sizes, control_params, feature_funcs, parallel, early_stop) {
-  ctrl <- rfeControl(functions = feature_funcs, method = control_params$method, number = control_params$number, 
-                     verbose = TRUE, allowParallel = parallel)
+  ctrl <- rfeControl(functions = feature_funcs,
+                     method = control_params$method,
+                     number = control_params$number,
+                     verbose = TRUE,
+                     allowParallel = parallel)
   if (early_stop) {
     ctrl$returnResamp <- "final"
     ctrl$saveDetails <- TRUE
   }
+  
+  # Remove response variable column for predictors
+  predictors <- trainData[, -response_var_index, drop = FALSE]
+  response <- trainData[[response_var_index]]
+  
   rfeProfile <- tryCatch({
-    rfe(x = trainData[, -response_var_index], y = trainData[, response_var_index], 
-        sizes = sizes, rfeControl = ctrl)
+    rfe(x = predictors, y = response, sizes = sizes, rfeControl = ctrl)
   }, error = function(e) {
     stop("Error during RFE: ", e$message)
   })
+  
   return(rfeProfile)
 }
 
-#' Train the Final Model
+#' Train the Final Model with Selected Features
 #'
-#' Trains the final model using the optimal set of features.
+#' Trains a model using the selected optimal features.
 #'
 #' @param data A data frame containing the dataset.
-#' @param optimal_vars A character vector of optimal variable names.
-#' @param response_var_index An integer indicating the index of the response variable.
-#' @param control_params A list containing control parameters for model training.
+#' @param optimal_vars A character vector of variable names selected by RFE.
+#' @param response_var_index An integer index of the response variable.
+#' @param control_params A list with control parameters for training.
+#' @param model_method A character string specifying the modeling method (default "rf").
+#' @param cross_validate Logical. Should cross-validation be performed?
 #'
-#' @return An object of class train containing the final model.
+#' @return A trained model object of class `train`.
 #'
 #' @examples
-#' \dontrun{
 #' data <- data.frame(response = rnorm(100), predictor1 = rnorm(100), predictor2 = rnorm(100))
-#' control_params <- list(method = "cv", number = 5)
-#' train_final_model(data, c("predictor1", "predictor2"), 1, control_params)
-#' }
-train_final_model <- function(data, optimal_vars, response_var_index, control_params) {
-  final_model <- train(data[, optimal_vars], data[, response_var_index], method = "rf",
-                       trControl = trainControl(method = control_params$method, number = control_params$number))
+#' train_final_model(data, optimal_vars = c("predictor1", "predictor2"), response_var_index = 1,
+#'                   control_params = list(method = "cv", number = 5), model_method = "rf")
+train_final_model <- function(data, optimal_vars, response_var_index, control_params, model_method = "rf", cross_validate = TRUE) {
+  if (cross_validate) {
+    tr_control <- trainControl(method = control_params$method, number = control_params$number)
+  } else {
+    tr_control <- trainControl(method = "none")
+  }
+  
+  predictors <- data[, optimal_vars, drop = FALSE]
+  response <- data[[response_var_index]]
+  
+  final_model <- train(x = predictors, y = response, method = model_method, trControl = tr_control)
   return(final_model)
 }
 
-#' Recursive Feature Selection Wrapper
+##############################################
+# Main Recursive Feature Selection Wrapper
+##############################################
+
+#' Recursive Feature Selection and Model Training Wrapper
 #'
-#' A wrapper function for performing recursive feature selection and training the final model.
+#' Orchestrates the recursive feature elimination process and trains the final model (if requested).
 #'
 #' @param data A data frame containing the dataset.
-#' @param response_var_index An integer indicating the index of the response variable.
-#' @param seed An integer used to set the random seed for reproducibility. Default is 123.
-#' @param control_params A list containing control parameters for the RFE and model training processes. Default is list(method = "cv", number = 5).
-#' @param sizes A numeric vector indicating the different subset sizes of features to evaluate. Default is NULL.
-#' @param parallel A logical value indicating whether to use parallel processing. Default is FALSE.
-#' @param feature_funcs A list of functions to use for RFE, typically from the caret package. Default is rfFuncs.
-#' @param handle_categorical A logical value indicating whether to convert categorical variables to numeric. Default is FALSE.
-#' @param return_final_model A logical value indicating whether to return the final trained model. Default is FALSE.
-#' @param cross_validate_final_model A logical value indicating whether to cross-validate the final model. Default is TRUE.
-#' @param early_stop A logical value indicating whether to stop early based on resampling results. Default is FALSE.
+#' @param response_var_index An integer index for the response variable.
+#' @param seed Integer seed for reproducibility (default 123).
+#' @param control_params A list with control parameters for RFE and model training (default: list(method = "cv", number = 5)).
+#' @param sizes Numeric vector of feature subset sizes to evaluate (default: all possible sizes).
+#' @param parallel Logical. Should parallel processing be enabled? (default FALSE)
+#' @param feature_funcs A list of functions to use for RFE (default: rfFuncs).
+#' @param handle_categorical Logical. Should categorical variables be one-hot encoded? (default FALSE)
+#' @param return_final_model Logical. Should the final model be trained and returned? (default FALSE)
+#' @param cross_validate_final_model Logical. Should cross-validation be applied to the final model? (default TRUE)
+#' @param early_stop Logical. Should early stopping based on resampling results be enabled? (default FALSE)
+#' @param model_method Character string specifying the modeling method for final training (default "rf").
 #'
-#' @return A list containing the results of the recursive feature selection process and, optionally, the final model.
+#' @return A list with the following elements:
+#' \describe{
+#'   \item{OptimalNumberOfVariables}{The optimal number of features selected.}
+#'   \item{OptimalVariables}{A character vector of the optimal variable names.}
+#'   \item{VariableImportance}{Details of variable importance from RFE.}
+#'   \item{ResamplingResults}{The resampling results from RFE.}
+#'   \item{FinalModel}{The final trained model (if requested), otherwise NULL.}
+#' }
 #'
 #' @examples
 #' \dontrun{
-#' data <- data.frame(response = rnorm(100), predictor1 = rnorm(100), predictor2 = rnorm(100))
-#' fs_recursivefeature(data, 1, seed = 123, control_params = list(method = "cv", number = 5), sizes = c(1, 2), parallel = FALSE, return_final_model = TRUE)
+#' data <- data.frame(response = rnorm(100),
+#'                    predictor1 = rnorm(100),
+#'                    predictor2 = rnorm(100))
+#' results <- fs_recursivefeature(data, response_var_index = 1, seed = 123,
+#'                                control_params = list(method = "cv", number = 5),
+#'                                sizes = c(1,2), parallel = FALSE,
+#'                                return_final_model = TRUE, model_method = "lm")
 #' }
 fs_recursivefeature <- function(data, response_var_index, seed = 123, 
                                 control_params = list(method = "cv", number = 5),
                                 sizes = NULL, parallel = FALSE, feature_funcs = rfFuncs,
                                 handle_categorical = FALSE, return_final_model = FALSE,
-                                cross_validate_final_model = TRUE, early_stop = FALSE) {
-  
-  # Input validation
-  response_var_index <- as.integer(response_var_index)  # Ensure it's an integer
-  if (!is.integer(response_var_index) || response_var_index > ncol(data) || response_var_index < 1) {
-    stop("Invalid response_var_index. It should be an integer between 1 and the number of columns in the dataset.")
+                                cross_validate_final_model = TRUE, early_stop = FALSE,
+                                model_method = "rf") {
+  # Validate response variable index
+  response_var_index <- as.integer(response_var_index)
+  if (response_var_index < 1 || response_var_index > ncol(data)) {
+    stop("Invalid response_var_index. It should be an integer between 1 and the number of columns in data.")
   }
+  
+  # Validate control parameters
   validate_control_params(control_params)
   
-  # Split the data
+  # Split the data into training and testing sets
   data_split <- split_data(data, response_var_index, seed)
   trainData <- data_split$trainData
   testData <- data_split$testData
   
-  # Handle categorical variables (after splitting)
+  # Handle categorical variables if requested (applied separately to train and test sets)
   if (handle_categorical) {
     trainData <- handle_categorical_variables(trainData)
-    testData <- handle_categorical_variables(testData)
+    testData  <- handle_categorical_variables(testData)
   }
   
-  # Default sizes if not provided
+  # Set default sizes if not provided
   if (is.null(sizes)) {
-    sizes <- c(1:(ncol(trainData) - 1))
+    # Exclude the response column from the count
+    sizes <- seq(1, ncol(trainData) - 1)
   }
   
-  # Set up parallel processing if required
+  # Set up parallel processing if requested
   if (parallel) {
-    cl <- makeCluster(detectCores() - 1)
+    cores <- max(1, detectCores() - 1)
+    cl <- makeCluster(cores)
     registerDoParallel(cl)
+    # Ensure cluster shutdown when function exits
     on.exit(stopCluster(cl))
   }
   
-  # Perform RFE
+  # Perform Recursive Feature Elimination (RFE)
   rfeProfile <- perform_rfe(trainData, response_var_index, sizes, control_params, feature_funcs, parallel, early_stop)
   
-  # Extracting results
-  optimal_num_vars <- rfeProfile$optSize
+  # Extract optimal features and variable importance information
+  optimal_num_vars <- rfeProfile$optsize
   optimal_vars <- rfeProfile$optVariables
   var_importance <- rfeProfile$variables
   
   final_model <- NULL
   if (return_final_model) {
-    # Use the entire dataset for final model training
-    final_model <- train_final_model(rbind(trainData, testData), optimal_vars, response_var_index, control_params)
+    # Combine train and test sets for final model training
+    full_data <- rbind(trainData, testData)
+    final_model <- train_final_model(full_data, optimal_vars, response_var_index, control_params, model_method, cross_validate_final_model)
   }
   
-  # Return the results
-  list(
+  return(list(
     OptimalNumberOfVariables = optimal_num_vars,
     OptimalVariables = optimal_vars,
     VariableImportance = var_importance,
     ResamplingResults = rfeProfile$results,
     FinalModel = final_model
-  )
+  ))
 }
+
+##############################################
+# Testing and Utility Functions
+##############################################
+
+# Global object to store test results
+test_results <- data.frame(Test = character(), Result = character(), stringsAsFactors = FALSE)
 
 #' Print and Store Test Result
 #'
-#' Helper function to print and store the results of a test.
+#' Helper function to print and record the outcome of a test.
 #'
-#' @param test_name A character string representing the name of the test.
-#' @param passed A logical value indicating whether the test passed.
-#' @param message An optional character string providing additional information about the test result.
+#' @param test_name A character string naming the test.
+#' @param passed Logical. Whether the test passed.
+#' @param message Optional additional information.
 #'
-#' @return None. This function prints the test result and stores it in a global data frame.
-#'
-#' @examples
-#' \dontrun{
-#' print_and_store_result("Example Test", TRUE, "Test passed successfully.")
-#' }
+#' @return None.
 print_and_store_result <- function(test_name, passed, message = NULL) {
-  result <- if(passed) "PASS" else "FAIL"
+  result <- if (passed) "PASS" else "FAIL"
   cat(sprintf("%-40s [%s]\n", test_name, result))
-  if (!is.null(message)) cat("  ", message, "\n")
-  test_results <<- rbind(test_results, data.frame(Test = test_name, Result = result, stringsAsFactors = FALSE))
+  if (!is.null(message)) {
+    cat("  ", message, "\n")
+  }
+  assign("test_results", rbind(test_results, data.frame(Test = test_name, Result = result, stringsAsFactors = FALSE)), envir = .GlobalEnv)
 }
 
-#' Test Validate Control Parameters Function
+#' Test validate_control_params Function
 #'
-#' Tests the validate_control_params function with valid and invalid inputs.
+#' Tests the validate_control_params function with both valid and invalid inputs.
 #'
-#' @return None. This function prints and stores the results of the tests.
-#'
-#' @examples
-#' \dontrun{
-#' test_validate_control_params()
-#' }
+#' @return None.
 test_validate_control_params <- function() {
   valid_input <- tryCatch({
     validate_control_params(list(method = "cv", number = 5))
@@ -254,67 +310,63 @@ test_validate_control_params <- function() {
     FALSE
   }, error = function(e) TRUE)
   
+  invalid_method <- tryCatch({
+    validate_control_params(list(method = "invalid_method", number = 5))
+    FALSE
+  }, error = function(e) TRUE)
+  
+  invalid_number <- tryCatch({
+    validate_control_params(list(method = "cv", number = -1))
+    FALSE
+  }, error = function(e) TRUE)
+  
   print_and_store_result("validate_control_params: Valid input", valid_input)
   print_and_store_result("validate_control_params: Not a list", invalid_input_not_list)
   print_and_store_result("validate_control_params: Missing elements", invalid_input_missing_elements)
+  print_and_store_result("validate_control_params: Invalid method", invalid_method)
+  print_and_store_result("validate_control_params: Invalid number", invalid_number)
 }
 
-#' Test Handle Categorical Variables Function
+#' Test handle_categorical_variables Function
 #'
-#' Tests the handle_categorical_variables function to ensure it converts categorical variables to numeric.
+#' Tests the one-hot encoding functionality.
 #'
-#' @return None. This function prints and stores the results of the tests.
-#'
-#' @examples
-#' \dontrun{
-#' test_handle_categorical_variables()
-#' }
+#' @return None.
 test_handle_categorical_variables <- function() {
   data <- data.frame(
-    cat1 = as.factor(c("A", "B", "A")),
-    cat2 = as.factor(c("C", "C", "D")),
-    num = c(1, 2, 3)
+    cat1 = factor(c("A", "B", "A")),
+    cat2 = factor(c("C", "C", "D")),
+    num = 1:3
   )
-  
   result <- handle_categorical_variables(data)
   
-  cat_converted <- all(sapply(result, is.numeric))
-  print_and_store_result("handle_categorical_variables: Categorical to numeric conversion", cat_converted)
+  # Check that all columns are numeric and that new columns were added
+  cat_converted <- all(sapply(result, is.numeric)) && (ncol(result) > ncol(data))
+  print_and_store_result("handle_categorical_variables: One-hot encoding", cat_converted)
 }
 
-#' Test Split Data Function
+#' Test split_data Function
 #'
-#' Tests the split_data function to ensure it correctly splits the data into training and testing sets.
+#' Verifies that data is split into training and testing sets appropriately.
 #'
-#' @return None. This function prints and stores the results of the tests.
-#'
-#' @examples
-#' \dontrun{
-#' test_split_data()
-#' }
+#' @return None.
 test_split_data <- function() {
   set.seed(123)
   data <- data.frame(
     response = rnorm(100),
     predictor = rnorm(100)
   )
-  
-  data_split <- split_data(data, 1, 123)
+  data_split <- split_data(data, 1, seed = 123)
   train_data <- data_split$trainData
-  correct_split <- nrow(train_data) == 80
+  correct_split <- (nrow(train_data) == 80)
   print_and_store_result("split_data: Correct data split", correct_split)
 }
 
-#' Test Perform RFE Function
+#' Test perform_rfe Function
 #'
-#' Tests the perform_rfe function to ensure it performs recursive feature elimination correctly.
+#' Tests that RFE can run without errors on a basic dataset.
 #'
-#' @return None. This function prints and stores the results of the tests.
-#'
-#' @examples
-#' \dontrun{
-#' test_perform_rfe()
-#' }
+#' @return None.
 test_perform_rfe <- function() {
   set.seed(123)
   data <- data.frame(
@@ -322,29 +374,23 @@ test_perform_rfe <- function() {
     predictor1 = rnorm(100),
     predictor2 = rnorm(100)
   )
-  
   control_params <- list(method = "cv", number = 5)
-  data_split <- split_data(data, 1, 123)
-  train_data <- data_split$trainData
+  train_data <- split_data(data, 1, seed = 123)$trainData
   
   result <- tryCatch({
-    perform_rfe(train_data, 1, c(1, 2), control_params, rfFuncs, FALSE, FALSE)
+    # Use a dummy variable instead of "_" to avoid pipe placeholder issues
+    dummy <- perform_rfe(train_data, 1, sizes = c(1, 2), control_params, feature_funcs = rfFuncs, parallel = FALSE, early_stop = FALSE)
     TRUE
   }, error = function(e) FALSE)
   
   print_and_store_result("perform_rfe: Basic functionality", result)
 }
 
-#' Test Train Final Model Function
+#' Test train_final_model Function
 #'
-#' Tests the train_final_model function to ensure it trains the final model correctly.
+#' Verifies that the final model is trained correctly.
 #'
-#' @return None. This function prints and stores the results of the tests.
-#'
-#' @examples
-#' \dontrun{
-#' test_train_final_model()
-#' }
+#' @return None.
 test_train_final_model <- function() {
   set.seed(123)
   data <- data.frame(
@@ -352,28 +398,22 @@ test_train_final_model <- function() {
     predictor1 = rnorm(100),
     predictor2 = rnorm(100)
   )
-  
   control_params <- list(method = "cv", number = 5)
   optimal_vars <- c("predictor1", "predictor2")
   
   final_model <- tryCatch({
-    model <- train_final_model(data, optimal_vars, 1, control_params)
+    model <- train_final_model(data, optimal_vars, 1, control_params, model_method = "rf")
     !is.null(model) && inherits(model, "train")
   }, error = function(e) FALSE)
   
   print_and_store_result("train_final_model: Model training", final_model)
 }
 
-#' Test Recursive Feature Selection Wrapper Function
+#' Test fs_recursivefeature Function
 #'
-#' Tests the fs_recursivefeature function to ensure it performs the entire feature selection and model training process correctly.
+#' Runs a full integration test of the fs_recursivefeature wrapper.
 #'
-#' @return None. This function prints and stores the results of the tests.
-#'
-#' @examples
-#' \dontrun{
-#' test_fs_recursivefeature()
-#' }
+#' @return None.
 test_fs_recursivefeature <- function() {
   set.seed(123)
   data <- data.frame(
@@ -383,36 +423,34 @@ test_fs_recursivefeature <- function() {
   )
   
   result <- tryCatch({
-    fs_recursivefeature(data, 1, seed = 123, control_params = list(method = "cv", number = 5), sizes = c(1, 2), parallel = FALSE, return_final_model = TRUE)
-  }, error = function(e) list(error = TRUE, message = e$message))
+    res <- fs_recursivefeature(data, response_var_index = 1, seed = 123,
+                               control_params = list(method = "cv", number = 5),
+                               sizes = c(1, 2), parallel = FALSE, return_final_model = TRUE,
+                               model_method = "lm")
+    !is.null(res$FinalModel) && inherits(res$FinalModel, "train")
+  }, error = function(e) FALSE)
   
-  if (!is.null(result$error) && result$error) {
-    print_and_store_result("fs_recursivefeature: Basic functionality", FALSE, result$message)
-  } else {
-    correct_result <- !is.null(result) && all(c("OptimalNumberOfVariables", "OptimalVariables", "VariableImportance", "ResamplingResults", "FinalModel") %in% names(result))
-    print_and_store_result("fs_recursivefeature: Basic functionality", correct_result)
-  }
+  print_and_store_result("fs_recursivefeature: Basic functionality", result)
 }
 
 #' Run All Tests
 #'
-#' Runs all unit tests and prints a summary of the results.
+#' Executes all unit tests and prints a summary of the results.
 #'
-#' @return None. This function prints the results of all the tests.
-#'
-#' @examples
-#' \dontrun{
-#' run_all_tests()
-#' }
+#' @return None.
 run_all_tests <- function() {
+  # Reset the global test_results data frame
+  assign("test_results", data.frame(Test = character(), Result = character(), stringsAsFactors = FALSE), envir = .GlobalEnv)
   cat("Running Comprehensive UAT\n")
   cat("==================================\n")
+  
   test_validate_control_params()
   test_handle_categorical_variables()
   test_split_data()
   test_perform_rfe()
   test_train_final_model()
   test_fs_recursivefeature()
+  
   cat("==================================\n")
   cat("UAT completed\n\n")
   
@@ -424,5 +462,5 @@ run_all_tests <- function() {
   print(test_results)
 }
 
-# Execute all tests
-run_all_tests()
+# Run tests
+# run_all_tests()

@@ -1,200 +1,248 @@
-library(glmnet)
-library(parallel)
-library(Matrix)
-
-#' Validate input parameters for fs_lasso
+#' Validate Input Parameters
 #'
-#' This function checks the input parameters for the fs_lasso function to ensure they meet the required criteria.
+#' Checks the user-provided parameters for consistency and correctness.
 #'
 #' @param x A data frame or matrix of predictor variables.
 #' @param y A numeric vector of response variables.
-#' @param alpha A non-negative numeric value representing the Lasso penalty parameter.
-#' @param nfolds A numeric value greater than 1 representing the number of folds for cross-validation.
-#' @param standardize A logical value indicating whether to standardize the predictors.
-#' @param parallel A logical value indicating whether to use parallel processing.
-#' @param verbose A logical value indicating whether to print progress messages.
-#' @param seed A single numeric value to set the random seed for reproducibility.
-#' @param custom_folds A vector representing custom cross-validation folds.
-#' @param return_model A logical value indicating whether to return the trained model object.
-#' @importFrom stats is.numeric
-validate_parameters <- function(x, y, alpha, nfolds, standardize, parallel, verbose, seed, custom_folds, return_model) {
-  if (!is.data.frame(x) && !is.matrix(x)) {
+#' @param alpha A numeric value between 0 (exclusive) and 1 (inclusive) for the lasso penalty.
+#' @param nfolds An integer greater than 1 specifying the number of folds for cross-validation.
+#' @param standardize Logical; whether to standardize predictors.
+#' @param parallel Logical; whether to use parallel processing.
+#' @param verbose Logical; whether to print progress messages.
+#' @param seed Either NULL or a single integer value for reproducibility.
+#' @param custom_folds Optional integer vector of custom fold IDs (must be same length as y).
+#' @param return_model Logical; whether to return the fitted model.
+#'
+#' @return Invisibly returns TRUE if all parameters are valid; otherwise, stops with an error.
+#' @keywords internal
+validate_parameters <- function(x, y, alpha, nfolds, standardize,
+                                parallel, verbose, seed, custom_folds,
+                                return_model) {
+  # x must be a data frame or matrix
+  if (!inherits(x, c("data.frame", "matrix"))) {
     stop("Error: 'x' should be a data frame or matrix.")
   }
   
+  # Ensure x and y have the same number of observations
   if (nrow(x) != length(y)) {
     stop("Error: 'x' and 'y' must have the same number of rows.")
   }
   
+  # y must be numeric
   if (!is.numeric(y)) {
-    stop("Error: 'y' should be numeric.")
+    stop("Error: 'y' should be a numeric vector.")
   }
   
-  if (!(is.numeric(alpha) && alpha >= 0)) {
-    stop("Error: 'alpha' must be a non-negative numeric value.")
+  # alpha must be a single numeric in (0, 1]
+  if (!(is.numeric(alpha) && length(alpha) == 1 && alpha > 0 && alpha <= 1)) {
+    stop("Error: 'alpha' must be a numeric value between 0 (exclusive) and 1 (inclusive).")
   }
   
-  if (!(is.numeric(nfolds) && nfolds > 1)) {
-    stop("Error: 'nfolds' must be a numeric value greater than 1.")
+  # nfolds must be an integer > 1
+  if (!(is.numeric(nfolds) && nfolds > 1 && nfolds == as.integer(nfolds))) {
+    stop("Error: 'nfolds' must be an integer greater than 1.")
   }
   
-  if (!is.logical(standardize)) {
-    stop("Error: 'standardize' must be a logical value.")
+  # standardize, parallel, verbose, and return_model must be logical
+  for (param in list(standardize = standardize,
+                     parallel = parallel,
+                     verbose = verbose,
+                     return_model = return_model)) {
+    if (!is.logical(param)) {
+      stop("Error: 'standardize', 'parallel', 'verbose', and 'return_model' must be logical values.")
+    }
   }
   
-  if (!is.logical(parallel)) {
-    stop("Error: 'parallel' must be a logical value.")
+  # Seed should be either NULL or a single integer
+  if (!is.null(seed) && (!is.numeric(seed) || length(seed) != 1 || seed != as.integer(seed))) {
+    stop("Error: 'seed' must be a single integer value or NULL.")
   }
   
-  if (!is.logical(verbose)) {
-    stop("Error: 'verbose' must be a logical value.")
+  # Validate custom_folds if provided
+  if (!is.null(custom_folds)) {
+    if (!(is.integer(custom_folds) || all(custom_folds == as.integer(custom_folds)))) {
+      stop("Error: 'custom_folds' must be an integer vector.")
+    }
+    if (length(custom_folds) != length(y)) {
+      stop("Error: 'custom_folds' must be the same length as 'y'.")
+    }
+    if (any(custom_folds < 1 | custom_folds > nfolds)) {
+      stop("Error: 'custom_folds' contains invalid fold IDs (must be between 1 and nfolds).")
+    }
   }
   
-  if (!is.null(seed) && (!is.numeric(seed) || length(seed) != 1)) {
-    stop("Error: 'seed' must be a single numeric value.")
-  }
-  
-  if (!is.null(custom_folds) && (!is.vector(custom_folds) || length(custom_folds) != length(y))) {
-    stop("Error: 'custom_folds' must be a vector of the same length as 'y'.")
-  }
-  
-  if (!is.logical(return_model)) {
-    stop("Error: 'return_model' must be a logical value.")
-  }
+  return(invisible(TRUE))
 }
 
-#' Handle missing values by imputing with the mean
+#' Handle Missing Values in Predictor Data
 #'
-#' This function imputes missing values in the dataset by replacing them with the mean of the corresponding column.
+#' Imputes missing values in a numeric matrix or data frame using column means.
 #'
-#' @param x A data frame or matrix of predictor variables.
-#' @param y A numeric vector of response variables.
-#' @param nfolds A numeric value greater than 1 representing the number of folds for cross-validation.
-#' @param custom_folds A vector representing custom cross-validation folds.
-#' @importFrom stats colMeans
-#' @return The data frame or matrix with missing values imputed.
-handle_missing_values <- function(x, y, nfolds, custom_folds) {
-  if (is.null(custom_folds)) {
-    folds <- sample(1:nfolds, nrow(x), replace = TRUE)
-  } else {
-    folds <- custom_folds
-  }
-  
-  for (fold in unique(folds)) {
-    train_idx <- which(folds != fold)
-    test_idx <- which(folds == fold)
-    
-    train_x <- x[train_idx, ]
-    train_y <- y[train_idx]
-    
-    if (any(is.na(train_x))) {
-      col_means <- colMeans(train_x, na.rm = TRUE)
-      for (col in seq_along(col_means)) {
-        train_x[is.na(train_x[, col]), col] <- col_means[col]
-      }
-    }
-    
-    if (any(is.na(x[test_idx, ]))) {
-      for (col in seq_along(col_means)) {
-        x[test_idx, col][is.na(x[test_idx, col])] <- col_means[col]
+#' @param x A numeric matrix or data frame.
+#'
+#' @return The data with missing values imputed.
+#' @keywords internal
+handle_missing_values <- function(x) {
+  if (anyNA(x)) {
+    # Use colMeans (ignoring NA) and then replace
+    col_means <- colMeans(x, na.rm = TRUE)
+    for (j in seq_along(col_means)) {
+      missing_idx <- which(is.na(x[, j]))
+      if (length(missing_idx)) {
+        x[missing_idx, j] <- col_means[j]
       }
     }
   }
-  
   return(x)
 }
 
-#' Convert x to a sparse matrix for scalability
+#' Convert Predictors to a Sparse Matrix
 #'
-#' This function converts a data frame or matrix to a sparse matrix format for better scalability.
+#' Converts a matrix or data frame of predictors to a sparse matrix format.
 #'
 #' @param x A data frame or matrix of predictor variables.
-#' @importFrom Matrix as
-#' @return A sparse matrix representation of the input data.
+#'
+#' @return A sparse matrix (of class "CsparseMatrix").
+#' @keywords internal
 convert_to_sparse <- function(x) {
-  return(as(as.matrix(x), "CsparseMatrix"))
+  # Ensure the input is a matrix then convert to a sparse format.
+  as(as.matrix(x), "CsparseMatrix")
 }
 
-#' Fit a Lasso regression model
+#' Manage Parallel Cluster Setup and Teardown
 #'
-#' This function fits a Lasso regression model to the provided data using cross-validation.
+#' Sets up a parallel processing cluster if enabled and registers the backend.
+#'
+#' @param enable_parallel Logical; whether to enable parallel processing.
+#' @param verbose Logical; whether to print status messages.
+#'
+#' @return A list containing the cluster object (if any) and the number of cores used.
+#' @keywords internal
+manage_parallel_cluster <- function(enable_parallel, verbose) {
+  cluster_info <- list(cluster = NULL, n_cores = 1)
+  
+  if (enable_parallel) {
+    n_cores <- max(1, parallel::detectCores() - 1)
+    cl <- parallel::makeCluster(n_cores)
+    doParallel::registerDoParallel(cl)
+    if (verbose) message("Parallel processing enabled using ", n_cores, " cores.")
+    cluster_info$cluster <- cl
+    cluster_info$n_cores <- n_cores
+  } else {
+    doParallel::registerDoSEQ()  # Ensures sequential processing
+  }
+  
+  return(cluster_info)
+}
+
+#' Fit a Lasso Regression Model with Cross-Validation
+#'
+#' Fits a lasso model using the \code{cv.glmnet} function, optionally using custom folds.
 #'
 #' @param x A sparse matrix of predictor variables.
 #' @param y A numeric vector of response variables.
-#' @param alpha A non-negative numeric value representing the Lasso penalty parameter.
-#' @param nfolds A numeric value greater than 1 representing the number of folds for cross-validation.
-#' @param standardize A logical value indicating whether to standardize the predictors.
-#' @param parallel A logical value indicating whether to use parallel processing.
-#' @param custom_folds A vector representing custom cross-validation folds.
-#' @param seed A single numeric value to set the random seed for reproducibility.
-#' @param verbose A logical value indicating whether to print progress messages.
-#' @importFrom glmnet cv.glmnet
-#' @importFrom parallel makeCluster stopCluster detectCores clusterEvalQ
-#' @importFrom stats set.seed
-#' @return A fitted Lasso model.
-fit_lasso_model <- function(x, y, alpha, nfolds, standardize, parallel, custom_folds, seed, verbose) {
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
+#' @param alpha A numeric value between 0 (exclusive) and 1 (inclusive) for the lasso penalty.
+#' @param nfolds An integer specifying the number of cross-validation folds.
+#' @param standardize Logical; whether to standardize predictors.
+#' @param parallel Logical; whether to use parallel processing.
+#' @param custom_folds Optional integer vector of custom fold IDs.
+#' @param seed Optional integer for setting the random seed.
+#' @param verbose Logical; whether to print status messages.
+#'
+#' @return The fitted lasso model object from \code{cv.glmnet}.
+#' @import glmnet
+#' @keywords internal
+fit_lasso_model <- function(x, y, alpha, nfolds, standardize,
+                            parallel, custom_folds, seed, verbose) {
+  if (!is.null(seed)) set.seed(seed)
   
-  if (parallel) {
-    cl <- makeCluster(detectCores() - 1)
-    clusterEvalQ(cl, library(glmnet))
-    if (verbose) message("Parallel processing enabled.")
-  }
+  # Setup parallel cluster if needed
+  cluster_info <- manage_parallel_cluster(parallel, verbose)
   
+  # Fit the model using custom folds if provided
   if (is.null(custom_folds)) {
-    lassoModel <- cv.glmnet(x, y, alpha = alpha, nfolds = nfolds, standardize = standardize, parallel = parallel, keep = TRUE)
+    lasso_model <- glmnet::cv.glmnet(x, y,
+                                     alpha = alpha,
+                                     nfolds = nfolds,
+                                     standardize = standardize,
+                                     parallel = parallel,
+                                     keep = TRUE)
   } else {
-    lassoModel <- cv.glmnet(x, y, alpha = alpha, foldid = custom_folds, standardize = standardize, parallel = parallel, keep = TRUE)
+    lasso_model <- glmnet::cv.glmnet(x, y,
+                                     alpha = alpha,
+                                     foldid = custom_folds,
+                                     standardize = standardize,
+                                     parallel = parallel,
+                                     keep = TRUE)
   }
   
-  if (parallel) {
-    stopCluster(cl)
+  # Stop the cluster if it was started
+  if (parallel && !is.null(cluster_info$cluster)) {
+    parallel::stopCluster(cluster_info$cluster)
+    doParallel::registerDoSEQ()
   }
   
-  return(lassoModel)
+  return(lasso_model)
 }
 
-#' Extract variable importance scores
+#' Extract Variable Importance from a Fitted Lasso Model
 #'
-#' This function extracts the variable importance scores from a fitted Lasso model.
+#' Retrieves and orders the coefficients (excluding the intercept) as variable importance.
 #'
-#' @param lassoModel A fitted Lasso model.
-#' @param x A sparse matrix of predictor variables.
-#' @importFrom glmnet coef
-#' @return A data frame containing variable names and their corresponding importance scores.
-extract_importance <- function(lassoModel, x) {
-  lassoImp <- as.vector(coef(lassoModel, s = "lambda.min"))[-1] # Removing the intercept
+#' @param lasso_model A fitted lasso model object from \code{cv.glmnet}.
+#' @param x A sparse matrix of predictor variables (used for extracting predictor names).
+#'
+#' @return A data frame with variables and their corresponding importance scores.
+#' @keywords internal
+extract_importance <- function(lasso_model, x) {
+  # Extract coefficients at the lambda that minimizes CV error.
+  coefs <- as.vector(stats::coef(lasso_model, s = "lambda.min"))
+  # Remove the intercept (first coefficient)
+  var_coef <- coefs[-1]
   
-  lassoImp <- data.frame(
-    Variable = colnames(x),
-    Importance = lassoImp
+  # Ensure the predictor names exist; if not, assign default names.
+  predictor_names <- colnames(x)
+  if (is.null(predictor_names)) {
+    predictor_names <- paste0("V", seq_along(var_coef))
+  }
+  
+  importance_df <- data.frame(
+    Variable = predictor_names,
+    Importance = var_coef,
+    stringsAsFactors = FALSE
   )
   
-  lassoImp <- lassoImp[order(-lassoImp$Importance), ]
-  return(lassoImp)
+  # Order by descending absolute importance
+  importance_df <- importance_df[order(-abs(importance_df$Importance)), ]
+  rownames(importance_df) <- NULL
+  return(importance_df)
 }
 
-#' Fit and evaluate a Lasso regression model
+###############################################################################
+# Main Function: fs_lasso
+###############################################################################
+
+#' Fit and Evaluate a Lasso Regression Model with Feature Selection
 #'
-#' This function fits a Lasso regression model to the provided data using cross-validation, extracts variable importance scores, and optionally returns the fitted model object.
+#' This function preprocesses the input data, fits a lasso regression model
+#' using cross-validation, extracts variable importance scores, and optionally
+#' returns the fitted model.
 #'
 #' @param x A data frame or matrix of predictor variables.
 #' @param y A numeric vector of response variables.
-#' @param alpha A non-negative numeric value representing the Lasso penalty parameter. Default is 1.
-#' @param nfolds A numeric value greater than 1 representing the number of folds for cross-validation. Default is 5.
-#' @param standardize A logical value indicating whether to standardize the predictors. Default is TRUE.
-#' @param parallel A logical value indicating whether to use parallel processing. Default is TRUE.
-#' @param verbose A logical value indicating whether to print progress messages. Default is FALSE.
-#' @param seed A single numeric value to set the random seed for reproducibility. Default is NULL.
-#' @param return_model A logical value indicating whether to return the trained model object. Default is FALSE.
-#' @param custom_folds A vector representing custom cross-validation folds. Default is NULL.
-#' @return A list containing:
-#'   \itemize{
-#'     \item \code{importance}: A data frame with variable importance scores sorted by importance.
-#'     \item \code{model}: The trained Lasso model (if \code{return_model} is TRUE).
-#'   }
+#' @param alpha A numeric value between 0 (exclusive) and 1 (inclusive) for the lasso penalty. Default is 1.
+#' @param nfolds Number of folds for cross-validation. Must be an integer > 1. Default is 5.
+#' @param standardize Logical indicating whether to standardize predictors. Default is TRUE.
+#' @param parallel Logical indicating whether to use parallel processing. Default is TRUE.
+#' @param verbose Logical indicating whether to print progress messages. Default is FALSE.
+#' @param seed An optional integer seed for reproducibility. Default is NULL.
+#' @param return_model Logical indicating whether to return the fitted model. Default is FALSE.
+#' @param custom_folds Optional integer vector of custom fold IDs (same length as y). Default is NULL.
+#'
+#' @return A list with the following components:
+#'   \item{importance}{A data frame of variable importance scores.}
+#'   \item{model}{(Optional) The fitted lasso model (included if return_model is TRUE).}
+#'
 #' @examples
 #' \dontrun{
 #'   set.seed(123)
@@ -202,44 +250,52 @@ extract_importance <- function(lassoModel, x) {
 #'   X <- matrix(rnorm(n * 5), ncol = 5)
 #'   y <- 2 * X[,1] - 3 * X[,2] + 1.5 * X[,3] + rnorm(n)
 #'   colnames(X) <- paste0("X", 1:5)
-#'   fakeData <- data.frame(y = y, X)
-#'   result <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1], verbose = TRUE, seed = 123)
+#'   result <- fs_lasso(x = X, y = y, verbose = TRUE, seed = 123)
 #'   print(result$importance)
 #' }
-#' @importFrom glmnet cv.glmnet coef
-#' @importFrom parallel makeCluster stopCluster detectCores clusterEvalQ
-#' @importFrom stats colMeans is.numeric set.seed
-#' @importFrom Matrix as
 #' @export
-fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE, parallel = TRUE, verbose = FALSE, seed = NULL, return_model = FALSE, custom_folds = NULL) {
+fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE,
+                     parallel = TRUE, verbose = FALSE, seed = NULL,
+                     return_model = FALSE, custom_folds = NULL) {
   
-  # Validate parameters
-  validate_parameters(x, y, alpha, nfolds, standardize, parallel, verbose, seed, custom_folds, return_model)
+  # Validate the input parameters
+  validate_parameters(x, y, alpha, nfolds, standardize,
+                      parallel, verbose, seed, custom_folds, return_model)
   
-  # Handle missing values
-  x <- handle_missing_values(x, y, nfolds, custom_folds)
+  # Handle missing data
+  x <- handle_missing_values(x)
   
-  # Convert to sparse matrix
-  x <- convert_to_sparse(x)
+  # Ensure predictor names exist
+  if (is.null(colnames(x))) {
+    colnames(x) <- paste0("V", seq_len(ncol(x)))
+  }
   
-  # Fit Lasso model
-  lassoModel <- fit_lasso_model(x, y, alpha, nfolds, standardize, parallel, custom_folds, seed, verbose)
+  # Convert predictors to a sparse matrix for efficiency
+  x_sparse <- convert_to_sparse(x)
   
-  # Extract importance scores
-  lassoImp <- extract_importance(lassoModel, x)
+  # Fit the lasso model using cross-validation
+  lasso_model <- fit_lasso_model(x_sparse, y, alpha, nfolds, standardize,
+                                 parallel, custom_folds, seed, verbose)
   
-  # Return results
-  result <- list(importance = lassoImp)
+  # Extract variable importance scores
+  importance_df <- extract_importance(lasso_model, x_sparse)
+  
+  # Return the results
+  result <- list(importance = importance_df)
   if (return_model) {
-    result$model <- lassoModel
+    result$model <- lasso_model
   }
   
   return(result)
 }
 
-#' Test fs_lasso function
+###############################################################################
+# Test Function for fs_lasso
+###############################################################################
+
+#' Run Unit Tests for the fs_lasso Function
 #'
-#' This function runs a series of tests to validate the functionality of the fs_lasso function.
+#' This function runs several tests to ensure the functionality and robustness of \code{fs_lasso}.
 #'
 #' @examples
 #' \dontrun{
@@ -247,91 +303,85 @@ fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE, parallel =
 #' }
 #' @export
 test_fs_lasso <- function() {
-  cat("Running UAT for fs_lasso...\n")
+  cat("Running unit tests for fs_lasso...\n")
   
-  # Test 1: Basic Functionality with Default Parameters
-  cat("Test 1: Basic Functionality with Default Parameters\n")
+  # Prepare sample data
   set.seed(123)
   n <- 100
-  X <- matrix(rnorm(n * 5), ncol = 5)
-  y <- 2 * X[,1] - 3 * X[,2] + 1.5 * X[,3] + rnorm(n)
-  colnames(X) <- paste0("X", 1:5)
-  fakeData <- data.frame(y = y, X)
-  result <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1])
-  print(result$importance)
+  p <- 5
+  X <- matrix(rnorm(n * p), ncol = p)
+  y <- 2 * X[, 1] - 3 * X[, 2] + 1.5 * X[, 3] + rnorm(n)
+  colnames(X) <- paste0("X", 1:p)
+  data_df <- data.frame(X)
+  
+  # Test 1: Basic Functionality
+  cat("Test 1: Basic functionality...\n")
+  result1 <- fs_lasso(x = X, y = y)
+  print(result1$importance)
   
   # Test 2: Verbose Option
-  cat("Test 2: Verbose Option\n")
-  result_verbose <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1], verbose = TRUE)
-  print(result_verbose$importance)
+  cat("Test 2: Verbose option...\n")
+  result2 <- fs_lasso(x = X, y = y, verbose = TRUE)
+  print(result2$importance)
   
-  # Test 3: Parallel Processing
-  cat("Test 3: Parallel Processing\n")
-  result_parallel <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1], parallel = TRUE, verbose = TRUE)
-  print(result_parallel$importance)
+  # Test 3: Parallel Processing Option
+  cat("Test 3: Parallel processing...\n")
+  result3 <- fs_lasso(x = X, y = y, parallel = TRUE, verbose = TRUE)
+  print(result3$importance)
   
-  # Test 4: Custom Seed for Reproducibility
-  cat("Test 4: Custom Seed for Reproducibility\n")
-  result_seed1 <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1], seed = 123)
-  result_seed2 <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1], seed = 123)
-  identical_results <- all(result_seed1$importance == result_seed2$importance)
-  print(result_seed1$importance)
-  print(paste("Results are identical:", identical_results))
+  # Test 4: Reproducibility with Seed
+  cat("Test 4: Reproducibility with seed...\n")
+  res_seed1 <- fs_lasso(x = X, y = y, seed = 123)
+  res_seed2 <- fs_lasso(x = X, y = y, seed = 123)
+  cat("Are results identical? ", identical(res_seed1$importance, res_seed2$importance), "\n")
   
-  # Test 5: Return Model Object
-  cat("Test 5: Return Model Object\n")
-  result_model <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1], return_model = TRUE)
-  print(result_model$importance)
-  print(class(result_model$model))
+  # Test 5: Return the Fitted Model Object
+  cat("Test 5: Return model object...\n")
+  result5 <- fs_lasso(x = X, y = y, return_model = TRUE)
+  print(class(result5$model))
   
   # Test 6: Handling Missing Values
-  cat("Test 6: Handling Missing Values\n")
-  fakeData_with_na <- fakeData
-  fakeData_with_na[1:10, 2] <- NA
-  result_na <- fs_lasso(x = fakeData_with_na[, -1], y = fakeData_with_na[, 1])
-  print(result_na$importance)
+  cat("Test 6: Handling missing values...\n")
+  X_na <- X
+  X_na[1:10, 2] <- NA
+  result6 <- fs_lasso(x = X_na, y = y)
+  print(result6$importance)
   
-  # Test 7: Scalability with Sparse Matrix
-  cat("Test 7: Scalability with Sparse Matrix\n")
-  set.seed(123)
-  large_n <- 10000
-  large_p <- 100
-  largeData <- data.frame(matrix(rnorm(large_n * large_p), ncol = large_p))
-  largeY <- 2 * largeData[,1] - 3 * largeData[,2] + 1.5 * largeData[,3] + rnorm(large_n)
-  result_sparse <- fs_lasso(x = largeData, y = largeY, verbose = TRUE)
-  print(head(result_sparse$importance))
+  # Test 7: Custom Cross-Validation Folds
+  cat("Test 7: Custom cross-validation folds...\n")
+  custom_folds <- as.integer(sample(1:5, n, replace = TRUE))
+  result7 <- fs_lasso(x = X, y = y, custom_folds = custom_folds)
+  print(result7$importance)
   
-  # Test 8: Custom Cross-Validation Folds
-  cat("Test 8: Custom Cross-Validation Folds\n")
-  custom_folds <- sample(1:5, n, replace = TRUE)
-  result_custom_folds <- fs_lasso(x = fakeData[, -1], y = fakeData[, 1], custom_folds = custom_folds)
-  print(result_custom_folds$importance)
-  
-  # Test 9: Invalid Inputs
-  cat("Test 9: Invalid Inputs\n")
+  # Test 8: Invalid Input Handling
+  cat("Test 8: Invalid inputs...\n")
   tryCatch({
-    fs_lasso("not a data frame", y)
+    fs_lasso("invalid", y)
   }, error = function(e) {
-    cat("Caught expected error:", e$message, "\n")
+    cat("Caught expected error: ", e$message, "\n")
   })
   
   tryCatch({
-    fs_lasso(x = fakeData[, -1], y = fakeData[, 1], alpha = -1)
+    fs_lasso(x = X, y = y, alpha = -0.5)
   }, error = function(e) {
-    cat("Caught expected error:", e$message, "\n")
+    cat("Caught expected error: ", e$message, "\n")
   })
   
   tryCatch({
-    fs_lasso(x = fakeData[, -1], y = fakeData[, 1], nfolds = 1)
+    fs_lasso(x = X, y = y, nfolds = 1)
   }, error = function(e) {
-    cat("Caught expected error:", e$message, "\n")
+    cat("Caught expected error: ", e$message, "\n")
   })
   
   tryCatch({
-    fs_lasso(x = fakeData[, -1], y = "not numeric")
+    fs_lasso(x = X, y = "non-numeric")
   }, error = function(e) {
-    cat("Caught expected error:", e$message, "\n")
+    cat("Caught expected error: ", e$message, "\n")
   })
   
-  cat("UAT for fs_lasso completed.\n")
+  cat("All tests completed.\n")
 }
+
+# Example usage (uncomment to run):
+# result <- fs_lasso(x = my_data[ , -1], y = my_data[ , 1], verbose = TRUE)
+# print(result$importance)

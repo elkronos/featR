@@ -1,133 +1,155 @@
-# Load necessary packages
-library(Boruta)
-library(caret)
-library(doParallel)
-library(testthat)
-library(foreach)
-library(iterators)
-library(ltm)
-library(polycor)
-
-#' Correlation-based feature selection
+#' Correlation-based Feature Selection
 #'
-#' This function selects features from a data set based on their correlation with
-#' other features. It returns a list containing the correlation matrix and the
-#' names of the selected variables.
+#' This function selects features from a dataset based on the correlation between variables.
+#' It computes a correlation matrix using a specified method and returns the matrix along with
+#' the names of the variables whose pairwise absolute correlations exceed a given threshold.
 #'
-#' @param data A data frame or matrix containing the data. For methods "pearson",
-#'   "spearman", and "kendall", all columns must be numeric. For "polychoric",
-#'   all columns must be ordered factors. For "pointbiserial", data can include
-#'   numeric and dichotomous variables.
-#' @param threshold A single numeric value between 0 and 1. Features with absolute
-#'   correlation above this threshold will be selected.
-#' @param method The correlation method to use:
-#'   \describe{
-#'     \item{"pearson"}{Standard Pearson correlation (numeric data).}
-#'     \item{"spearman"}{Spearman rank correlation (numeric data).}
-#'     \item{"kendall"}{Kendall's tau correlation (numeric data).}
-#'     \item{"polychoric"}{Polychoric correlation (ordered categorical data).}
-#'     \item{"pointbiserial"}{Point-biserial correlation (mix of numeric and dichotomous data).}
-#'   }
-#' @param na.rm Logical indicating whether to remove missing values before calculating correlations. Default is FALSE.
-#' @param parallel Logical indicating whether to use parallel processing. Default is FALSE.
-#' @param n_cores Number of cores to use for parallel processing if parallel is TRUE. Default is 2.
-#' @param sample_frac Fraction of the data to sample if the dataset is too large. Default is 1 (no sampling).
-#' @param output_format The format of the correlation matrix output, either "matrix" (default) or "data.frame".
-#' @param diag_value The value to set on the diagonal of the correlation matrix. Default is 0.
-#' @param no_vars_message Custom message when no variables meet the correlation threshold. Default is "No variables meet the correlation threshold."
-#' @param seed Optional seed for random number generation when sampling data. Default is NULL (no seed set).
-#' @param verbose Logical indicating whether to print detailed messages during execution. Default is FALSE.
+#' @param data A data frame or matrix containing the dataset. For methods \code{"pearson"},
+#'   \code{"spearman"}, and \code{"kendall"}, all columns must be numeric. For \code{"polychoric"},
+#'   all columns must be ordered factors. For \code{"pointbiserial"}, columns can be numeric or
+#'   dichotomous.
+#' @param threshold A numeric value between 0 and 1 indicating the correlation threshold.
+#'   Variable pairs with absolute correlation above this threshold will be selected.
+#' @param method Character string specifying the correlation method to use.
+#'   Options are: \code{"pearson"} (default), \code{"spearman"}, \code{"kendall"},
+#'   \code{"polychoric"}, and \code{"pointbiserial"}.
+#' @param na.rm Logical value (default \code{FALSE}) indicating whether to remove missing values
+#'   before computing the correlations.
+#' @param parallel Logical value (default \code{FALSE}) indicating whether to perform point-biserial
+#'   correlation computations in parallel.
+#' @param n_cores Numeric value (default \code{2}) specifying the number of cores to use for parallel
+#'   processing (when \code{parallel} is \code{TRUE}).
+#' @param sample_frac Numeric value between 0 and 1 (default \code{1}) specifying the fraction of data
+#'   to use (useful for large datasets). A value of 1 means no sampling.
+#' @param output_format Character string indicating the desired output format for the correlation matrix.
+#'   Either \code{"matrix"} (default) or \code{"data.frame"}.
+#' @param diag_value The value (default \code{0}) to assign to the diagonal of the correlation matrix.
+#' @param no_vars_message Custom message (default \code{"No variables meet the correlation threshold."})
+#'   to be printed if no variable pairs exceed the threshold.
+#' @param seed Optional numeric seed (default \code{NULL}) for reproducible sampling.
+#' @param verbose Logical value (default \code{FALSE}) indicating whether to print detailed progress messages.
 #'
-#' @return A list containing two elements:
-#'   \describe{
-#'     \item{\code{corr_matrix}}{The correlation matrix (format specified by \code{output_format}).}
-#'     \item{\code{selected_vars}}{Character vector containing the names of the selected variables. If no variables meet the correlation threshold, this will be an empty character vector.}
-#'   }
+#' @return A list with two elements:
+#' \describe{
+#'   \item{corr_matrix}{The correlation matrix (either as a matrix or data frame,
+#'      depending on \code{output_format}).}
+#'   \item{selected_vars}{A character vector containing the names of the selected variables.
+#'      If no variables meet the threshold, an empty character vector is returned.}
+#' }
+#'
+#' @importFrom stats cor
+#' @importFrom utils combn
 #'
 #' @examples
-#' # Load the mtcars data set
-#' data(mtcars)
+#' \dontrun{
+#' # Using the mtcars dataset with default Pearson correlation
+#' result <- fs_correlation(mtcars, threshold = 0.7)
+#' print(result$corr_matrix)
+#' print(result$selected_vars)
 #'
-#' # Default is Pearson
-#' corr_vars <- fs_correlation(mtcars, 0.7)
-#' print(corr_vars$corr_matrix)
-#' print(corr_vars$selected_vars)
-#'
-#' # Specify Spearman
-#' corr_vars <- fs_correlation(mtcars, 0.7, method = "spearman")
-#' print(corr_vars$corr_matrix)
-#' print(corr_vars$selected_vars)
-#'
-#' @importFrom stats cor cor.test
-#' @importFrom utils combn
+#' # Using Spearman correlation
+#' result <- fs_correlation(mtcars, threshold = 0.7, method = "spearman")
+#' print(result$corr_matrix)
+#' print(result$selected_vars)
+#' }
 #'
 #' @export
 fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
                            parallel = FALSE, n_cores = 2, sample_frac = 1,
-                           output_format = "matrix", diag_value = 0, no_vars_message = "No variables meet the correlation threshold.",
+                           output_format = "matrix", diag_value = 0,
+                           no_vars_message = "No variables meet the correlation threshold.",
                            seed = NULL, verbose = FALSE) {
+  
   # Validate inputs
-  validate_inputs(data, threshold, method, output_format)
+  validate_inputs(data, threshold, method, output_format, sample_frac, n_cores)
   
-  # Sample data if required
-  data <- sample_data(data, sample_frac, seed)
+  # Sample the data if required
+  data <- sample_data(data, sample_frac, seed, verbose)
   
-  # Load required packages
+  # Load any method-specific packages
   load_required_packages(method)
   
-  # Calculate correlation matrix
+  # Calculate the correlation matrix
   corr_matrix <- calculate_correlation(data, method, na.rm, parallel, n_cores, verbose)
   
-  # Set the diagonal of the matrix
+  # Set the diagonal values as specified
   diag(corr_matrix) <- diag_value
   
-  # Find the absolute correlation values above the threshold
+  # Identify variable pairs with absolute correlation above the threshold
   high_corr_vars <- find_high_correlation(corr_matrix, threshold)
   
-  # Check if there are any selected variables
+  # Determine the selected variables from the correlation matrix indices
   if (nrow(high_corr_vars) == 0) {
     message(no_vars_message)
-    selected_vars <- character(0)  # Return empty character vector instead of NULL
+    selected_vars <- character(0)
   } else {
-    # Extract the selected variables from the data frame
-    selected_vars <- unique(c(rownames(corr_matrix)[high_corr_vars[, 1]], colnames(corr_matrix)[high_corr_vars[, 2]]))
+    selected_vars <- unique(c(rownames(corr_matrix)[high_corr_vars[, 1]],
+                              colnames(corr_matrix)[high_corr_vars[, 2]]))
   }
   
-  # Convert correlation matrix to specified output format
+  # Convert correlation matrix to desired output format if needed
   if (output_format == "data.frame") {
     corr_matrix <- as.data.frame(as.table(corr_matrix))
     names(corr_matrix) <- c("Var1", "Var2", "Correlation")
   }
   
-  # Save the correlation matrix and selected variables in a list
-  result <- list(corr_matrix = corr_matrix, selected_vars = selected_vars)
-  return(result)
+  return(list(corr_matrix = corr_matrix, selected_vars = selected_vars))
 }
 
-# Helper Functions
-
-validate_inputs <- function(data, threshold, method, output_format) {
+#' Validate Function Inputs
+#'
+#' This function checks that the inputs provided to \code{fs_correlation} are valid.
+#'
+#' @param data A data frame or matrix containing the dataset.
+#' @param threshold A numeric value between 0 and 1 indicating the correlation threshold.
+#' @param method Character string specifying the correlation method.
+#'   Options: \code{"pearson"}, \code{"spearman"}, \code{"kendall"},
+#'   \code{"polychoric"}, \code{"pointbiserial"}.
+#' @param output_format Character string specifying the desired output format for the correlation matrix.
+#'   Either \code{"matrix"} or \code{"data.frame"}.
+#' @param sample_frac Numeric value between 0 and 1 specifying the fraction of data to use.
+#' @param n_cores Numeric value specifying the number of cores for parallel processing.
+#'
+#' @return This function does not return a value. It stops execution with an error message if an input is invalid.
+#'
+#' @examples
+#' \dontrun{
+#' validate_inputs(mtcars, 0.7, "pearson", "matrix", sample_frac = 1, n_cores = 2)
+#' }
+validate_inputs <- function(data, threshold, method, output_format, sample_frac, n_cores) {
   if (!is.data.frame(data) && !is.matrix(data)) {
     stop("The 'data' argument must be a data frame or a matrix.")
   }
+  
   valid_methods <- c("pearson", "spearman", "kendall", "polychoric", "pointbiserial")
   if (!(method %in% valid_methods)) {
     stop("Invalid correlation method. Please specify one of: ", paste(valid_methods, collapse = ", "), ".")
   }
+  
   if (!(is.numeric(threshold) && length(threshold) == 1 && threshold >= 0 && threshold <= 1)) {
     stop("The 'threshold' argument must be a single numeric value between 0 and 1.")
   }
+  
   if (!(output_format %in% c("matrix", "data.frame"))) {
     stop("Invalid output format. Please specify 'matrix' or 'data.frame'.")
   }
-  # Check data types based on method
+  
+  if (!(is.numeric(sample_frac) && length(sample_frac) == 1 && sample_frac > 0 && sample_frac <= 1)) {
+    stop("The 'sample_frac' argument must be a single numeric value between 0 (exclusive) and 1 (inclusive).")
+  }
+  
+  if (!(is.numeric(n_cores) && length(n_cores) == 1 && n_cores >= 1)) {
+    stop("The 'n_cores' argument must be a numeric value greater than or equal to 1.")
+  }
+  
+  # Data type check based on the chosen method
   if (method %in% c("pearson", "spearman", "kendall")) {
     if (!all(sapply(data, is.numeric))) {
       stop("All columns in 'data' must be numeric for method '", method, "'.")
     }
   } else if (method == "pointbiserial") {
     if (!all(sapply(data, function(x) is.numeric(x) || is_dichotomous(x)))) {
-      stop("All columns in 'data' must be numeric or dichotomous (factor with two levels) for method 'pointbiserial'.")
+      stop("For 'pointbiserial' method, all columns in 'data' must be numeric or dichotomous (with exactly 2 unique values).")
     }
   } else if (method == "polychoric") {
     if (!all(sapply(data, is.ordered))) {
@@ -136,6 +158,19 @@ validate_inputs <- function(data, threshold, method, output_format) {
   }
 }
 
+#' Load Required Packages for Correlation Methods
+#'
+#' This function checks for and loads any additional packages required by the
+#' specified correlation method.
+#'
+#' @param method Character string specifying the correlation method.
+#'
+#' @return No return value. An error is thrown if a required package is not installed.
+#'
+#' @examples
+#' \dontrun{
+#' load_required_packages("polychoric")
+#' }
 load_required_packages <- function(method) {
   if (method == "polychoric") {
     if (!requireNamespace("polycor", quietly = TRUE)) {
@@ -148,14 +183,54 @@ load_required_packages <- function(method) {
   }
 }
 
-sample_data <- function(data, sample_frac, seed = NULL) {
+#' Sample Data
+#'
+#' This function samples the dataset based on the specified fraction. It is useful
+#' for reducing computation time on very large datasets.
+#'
+#' @param data A data frame or matrix containing the dataset.
+#' @param sample_frac Numeric value between 0 and 1 specifying the fraction of data to use.
+#'   A value of 1 means no sampling (default).
+#' @param seed Optional numeric seed (default \code{NULL}) for reproducible sampling.
+#' @param verbose Logical value (default \code{FALSE}) indicating whether to print a message about sampling.
+#'
+#' @return A data frame or matrix containing the sampled data.
+#'
+#' @examples
+#' \dontrun{
+#' sampled_data <- sample_data(mtcars, sample_frac = 0.5, seed = 123)
+#' }
+sample_data <- function(data, sample_frac, seed = NULL, verbose = FALSE) {
   if (sample_frac < 1) {
     if (!is.null(seed)) set.seed(seed)
-    data <- data[sample(1:nrow(data), size = floor(sample_frac * nrow(data))), ]
+    if (verbose) message("Sampling data: ", sample_frac * 100, "% of the original dataset will be used.")
+    n_rows <- nrow(data)
+    sampled_indices <- sample(seq_len(n_rows), size = floor(sample_frac * n_rows))
+    data <- data[sampled_indices, , drop = FALSE]
   }
   return(data)
 }
 
+#' Calculate Correlation Matrix
+#'
+#' This function calculates the correlation matrix for the dataset using the specified method.
+#' For methods requiring special handling (\code{"polychoric"} and \code{"pointbiserial"}), the
+#' computation is delegated to specialized functions.
+#'
+#' @param data A data frame or matrix containing the dataset.
+#' @param method Character string specifying the correlation method.
+#' @param na.rm Logical value indicating whether to remove missing values before computing correlations.
+#' @param parallel Logical value indicating whether to use parallel processing (only applicable for
+#'   \code{"pointbiserial"}).
+#' @param n_cores Numeric value specifying the number of cores to use if parallel processing is enabled.
+#' @param verbose Logical value indicating whether to print progress messages.
+#'
+#' @return A correlation matrix.
+#'
+#' @examples
+#' \dontrun{
+#' corr_mat <- calculate_correlation(mtcars, "pearson", na.rm = TRUE, parallel = FALSE, n_cores = 2, verbose = FALSE)
+#' }
 calculate_correlation <- function(data, method, na.rm, parallel, n_cores, verbose) {
   if (method == "pointbiserial") {
     return(calculate_pointbiserial_correlation(data, na.rm, parallel, n_cores, verbose))
@@ -163,13 +238,34 @@ calculate_correlation <- function(data, method, na.rm, parallel, n_cores, verbos
     return(calculate_polychoric_correlation(data, verbose))
   } else {
     use_option <- if (na.rm) "complete.obs" else "everything"
+    if (verbose) message("Calculating ", method, " correlation matrix.")
     return(cor(data, method = method, use = use_option))
   }
 }
 
+#' Calculate Point-Biserial Correlation Matrix
+#'
+#' This function computes the point-biserial correlation matrix for datasets containing
+#' both numeric and dichotomous variables. Optionally, parallel processing can be used to
+#' speed up the computation.
+#'
+#' @param data A data frame or matrix containing the dataset.
+#' @param na.rm Logical value indicating whether to remove missing values before computation.
+#' @param parallel Logical value indicating whether to use parallel processing.
+#' @param n_cores Numeric value specifying the number of cores to use for parallel processing.
+#' @param verbose Logical value indicating whether to print detailed progress messages.
+#'
+#' @return A symmetric correlation matrix with point-biserial correlation coefficients.
+#'
+#' @importFrom foreach foreach %dopar%
+#'
+#' @examples
+#' \dontrun{
+#' result <- calculate_pointbiserial_correlation(data, na.rm = TRUE, parallel = TRUE, n_cores = 2, verbose = FALSE)
+#' }
 calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_cores, verbose) {
-  n <- ncol(data)
-  correlation_matrix <- matrix(NA, n, n)
+  n_vars <- ncol(data)
+  correlation_matrix <- matrix(NA, n_vars, n_vars)
   colnames(correlation_matrix) <- colnames(data)
   rownames(correlation_matrix) <- colnames(data)
   
@@ -180,47 +276,56 @@ calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_cores, 
     if (!requireNamespace("doParallel", quietly = TRUE)) {
       stop("Package 'doParallel' is required for parallel processing. Please install it.")
     }
-    cl <- makeCluster(n_cores)
-    registerDoParallel(cl)
+    cl <- parallel::makeCluster(n_cores)
+    doParallel::registerDoParallel(cl)
     on.exit({
-      stopCluster(cl)
-      registerDoSEQ()
+      parallel::stopCluster(cl)
+      foreach::registerDoSEQ()  # Reset to sequential execution
     })
-    # Create combinations of continuous and dichotomous variables
+    
+    # Bind the %dopar% operator explicitly from foreach:
+    `%dopar%` <- foreach::`%dopar%`
+    
+    # Create all combinations of continuous and dichotomous variable indices
     var_pairs <- expand.grid(continuous_vars, dichotomous_vars)
-    # Remove pairs where variables are the same
-    var_pairs <- var_pairs[var_pairs[,1] != var_pairs[,2], ]
-    results <- foreach(k = 1:nrow(var_pairs), .combine = rbind, .packages = c("ltm")) %dopar% {
+    var_pairs <- var_pairs[var_pairs[, 1] != var_pairs[, 2], , drop = FALSE]
+    
+    results <- foreach::foreach(k = seq_len(nrow(var_pairs)), .combine = rbind, .packages = "ltm") %dopar% {
       i <- var_pairs[k, 1]
       j <- var_pairs[k, 2]
-      if (verbose) message("Calculating point-biserial correlation for columns: ", colnames(data)[i], " and ", colnames(data)[j])
+      if (verbose) message("Calculating point-biserial correlation between: ", 
+                           colnames(data)[i], " and ", colnames(data)[j])
       corr_value <- tryCatch(
-        ltm::biserial.cor(data[[i]], as.numeric(data[[j]]), use = if (na.rm) "complete.obs" else "all.obs"),
+        ltm::biserial.cor(data[[i]], as.numeric(data[[j]]),
+                          use = if (na.rm) "complete.obs" else "all.obs"),
         error = function(e) NA
       )
       data.frame(i = i, j = j, corr = corr_value)
     }
-    # Fill in the correlation matrix
-    for (row in 1:nrow(results)) {
+    
+    # Populate the symmetric correlation matrix
+    for (row in seq_len(nrow(results))) {
       i <- results$i[row]
       j <- results$j[row]
-      corr_value <- results$corr[row]
-      correlation_matrix[i, j] <- corr_value
-      correlation_matrix[j, i] <- corr_value  # Make it symmetric
+      correlation_matrix[i, j] <- results$corr[row]
+      correlation_matrix[j, i] <- results$corr[row]
     }
+    
   } else {
     for (i in continuous_vars) {
       for (j in dichotomous_vars) {
         if (i == j) {
           correlation_matrix[i, j] <- 1
         } else {
-          if (verbose) message("Calculating point-biserial correlation for columns: ", colnames(data)[i], " and ", colnames(data)[j])
+          if (verbose) message("Calculating point-biserial correlation between: ", 
+                               colnames(data)[i], " and ", colnames(data)[j])
           corr_value <- tryCatch(
-            ltm::biserial.cor(data[[i]], as.numeric(data[[j]]), use = if (na.rm) "complete.obs" else "all.obs"),
+            ltm::biserial.cor(data[[i]], as.numeric(data[[j]]),
+                              use = if (na.rm) "complete.obs" else "all.obs"),
             error = function(e) NA
           )
           correlation_matrix[i, j] <- corr_value
-          correlation_matrix[j, i] <- corr_value  # Make it symmetric
+          correlation_matrix[j, i] <- corr_value
         }
       }
     }
@@ -229,177 +334,234 @@ calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_cores, 
   return(correlation_matrix)
 }
 
-is_dichotomous <- function(x) {
-  x <- x[!is.na(x)]
-  length(unique(x)) == 2
-}
-
-is_continuous <- function(x) {
-  x <- x[!is.na(x)]
-  length(unique(x)) > 2 && is.numeric(x)
-}
-
+#' Calculate Polychoric Correlation Matrix
+#'
+#' This function computes the polychoric correlation matrix for datasets with ordered factor
+#' variables. It is used when the data consists of ordinal measures.
+#'
+#' @param data A data frame containing ordered factor variables.
+#' @param verbose Logical value indicating whether to print progress messages.
+#'
+#' @return A polychoric correlation matrix.
+#'
+#' @importFrom polycor hetcor
+#'
+#' @examples
+#' \dontrun{
+#' corr_mat <- calculate_polychoric_correlation(ordered_data, verbose = TRUE)
+#' }
 calculate_polychoric_correlation <- function(data, verbose) {
   if (verbose) message("Calculating polychoric correlation matrix.")
+  # polycor::hetcor returns a list with element 'correlations'
   return(polycor::hetcor(data)$correlations)
 }
 
+#' Find High Correlation Pairs
+#'
+#' This function identifies pairs of variables in the correlation matrix that have an
+#' absolute correlation above a specified threshold. Only the upper triangle is considered
+#' to avoid duplicate pairs.
+#'
+#' @param corr_matrix A correlation matrix.
+#' @param threshold Numeric value specifying the correlation threshold.
+#'
+#' @return A matrix of indices (with columns for row and column) for variable pairs that exceed the threshold.
+#'
+#' @examples
+#' \dontrun{
+#' high_corr <- find_high_correlation(corr_matrix, threshold = 0.7)
+#' }
 find_high_correlation <- function(corr_matrix, threshold) {
-  high_corr_vars <- which(abs(corr_matrix) > threshold & !is.na(corr_matrix), arr.ind = TRUE)
-  # Remove duplicates and lower triangle entries
-  high_corr_vars <- high_corr_vars[high_corr_vars[, 1] < high_corr_vars[, 2], , drop = FALSE]
-  return(high_corr_vars)
+  indices <- which(abs(corr_matrix) > threshold & !is.na(corr_matrix), arr.ind = TRUE)
+  # Remove duplicate pairs (only consider the upper triangle)
+  indices <- indices[indices[, 1] < indices[, 2], , drop = FALSE]
+  return(indices)
 }
 
-# User Acceptance Testing (UAT)
+#' Check if Variable is Dichotomous
+#'
+#' This function checks whether a variable is dichotomous (i.e., has exactly two unique non-missing values).
+#'
+#' @param x A vector representing a variable.
+#'
+#' @return \code{TRUE} if the variable is dichotomous, otherwise \code{FALSE}.
+#'
+#' @examples
+#' \dontrun{
+#' is_dichotomous(c(0, 1, 1, 0))
+#' }
+is_dichotomous <- function(x) {
+  unique_vals <- unique(x[!is.na(x)])
+  length(unique_vals) == 2
+}
 
+#' Check if Variable is Continuous
+#'
+#' This function determines if a variable is continuous. A variable is considered continuous if
+#' it is numeric and has more than 2 unique non-missing values.
+#'
+#' @param x A vector representing a variable.
+#'
+#' @return \code{TRUE} if the variable is continuous, otherwise \code{FALSE}.
+#'
+#' @examples
+#' \dontrun{
+#' is_continuous(rnorm(100))
+#' }
+is_continuous <- function(x) {
+  x <- x[!is.na(x)]
+  is.numeric(x) && (length(unique(x)) > 2)
+}
+
+#' Test fs_correlation Function
+#'
+#' This function runs a suite of tests (using the \code{testthat} framework) to verify that
+#' the \code{fs_correlation} function behaves as expected with various parameters and datasets.
+#'
+#' @return No return value. Test results are printed to the console.
+#'
+#' @examples
+#' \dontrun{
+#' test_fs_correlation()
+#' }
 test_fs_correlation <- function() {
   cat("Running UAT for fs_correlation...\n")
   
   # Test 1: Basic Functionality with Default Parameters
-  test_that("fs_correlation works with default parameters", {
+  testthat::test_that("fs_correlation works with default parameters", {
     data <- mtcars
     threshold <- 0.7
     result <- fs_correlation(data, threshold)
-    expect_true(is.matrix(result$corr_matrix) || is.data.frame(result$corr_matrix))
-    expect_type(result$selected_vars, "character")
-    expect_true(length(result$selected_vars) > 0)
+    testthat::expect_true(is.matrix(result$corr_matrix) || is.data.frame(result$corr_matrix))
+    testthat::expect_type(result$selected_vars, "character")
+    testthat::expect_true(length(result$selected_vars) > 0)
   })
   
   # Test 2: Different Correlation Methods with Appropriate Data
-  test_that("fs_correlation works with different correlation methods", {
+  testthat::test_that("fs_correlation works with different correlation methods", {
     data <- mtcars
     threshold <- 0.7
     
-    # Pearson correlation with numeric data
+    # Pearson
     result_pearson <- fs_correlation(data, threshold, method = "pearson")
-    expect_true(is.matrix(result_pearson$corr_matrix) || is.data.frame(result_pearson$corr_matrix))
-    expect_type(result_pearson$selected_vars, "character")
+    testthat::expect_true(is.matrix(result_pearson$corr_matrix) || is.data.frame(result_pearson$corr_matrix))
+    testthat::expect_type(result_pearson$selected_vars, "character")
     
-    # Spearman correlation with numeric data
+    # Spearman
     result_spearman <- fs_correlation(data, threshold, method = "spearman")
-    expect_true(is.matrix(result_spearman$corr_matrix) || is.data.frame(result_spearman$corr_matrix))
-    expect_type(result_spearman$selected_vars, "character")
+    testthat::expect_true(is.matrix(result_spearman$corr_matrix) || is.data.frame(result_spearman$corr_matrix))
+    testthat::expect_type(result_spearman$selected_vars, "character")
     
-    # Kendall correlation with numeric data
+    # Kendall
     result_kendall <- fs_correlation(data, threshold, method = "kendall")
-    expect_true(is.matrix(result_kendall$corr_matrix) || is.data.frame(result_kendall$corr_matrix))
-    expect_type(result_kendall$selected_vars, "character")
+    testthat::expect_true(is.matrix(result_kendall$corr_matrix) || is.data.frame(result_kendall$corr_matrix))
+    testthat::expect_type(result_kendall$selected_vars, "character")
   })
   
   # Test 3: Point-Biserial Correlation with Mixed Data
-  test_that("fs_correlation works with point-biserial correlation", {
-    # Generate data with known correlation
+  testthat::test_that("fs_correlation works with point-biserial correlation", {
     set.seed(123)
     continuous_var <- rnorm(100)
     dichotomous_var <- ifelse(continuous_var > 0, 1, 0)
-    data_pb <- data.frame(
-      continuous_var = continuous_var,
-      dichotomous_var = dichotomous_var
-    )
-    result_pointbiserial <- fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial")
-    expect_true(is.matrix(result_pointbiserial$corr_matrix) || is.data.frame(result_pointbiserial$corr_matrix))
-    expect_type(result_pointbiserial$selected_vars, "character")
-    expect_true(length(result_pointbiserial$selected_vars) > 0)
+    data_pb <- data.frame(continuous_var = continuous_var,
+                          dichotomous_var = dichotomous_var)
+    result_pb <- fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial")
+    testthat::expect_true(is.matrix(result_pb$corr_matrix) || is.data.frame(result_pb$corr_matrix))
+    testthat::expect_type(result_pb$selected_vars, "character")
+    testthat::expect_true(length(result_pb$selected_vars) > 0)
   })
   
   # Test 4: Polychoric Correlation with Ordered Factors
-  test_that("fs_correlation works with polychoric correlation", {
-    # Generate data with known correlation
+  testthat::test_that("fs_correlation works with polychoric correlation", {
     set.seed(123)
     ordinal_values <- sample(1:5, 100, replace = TRUE)
     ordinal_var1 <- factor(ordinal_values, ordered = TRUE)
-    ordinal_var2 <- factor(ordinal_values + sample(c(-1, 0, 1), 100, replace = TRUE), levels = 1:5, ordered = TRUE)
-    data_poly <- data.frame(
-      ordinal_var1 = ordinal_var1,
-      ordinal_var2 = ordinal_var2
-    )
-    result_polychoric <- fs_correlation(data_poly, threshold = 0.1, method = "polychoric")
-    expect_true(is.matrix(result_polychoric$corr_matrix) || is.data.frame(result_polychoric$corr_matrix))
-    expect_type(result_polychoric$selected_vars, "character")
-    expect_true(length(result_polychoric$selected_vars) > 0)
+    ordinal_var2 <- factor(ordinal_values + sample(c(-1, 0, 1), 100, replace = TRUE),
+                           levels = 1:5, ordered = TRUE)
+    data_poly <- data.frame(ordinal_var1 = ordinal_var1,
+                            ordinal_var2 = ordinal_var2)
+    result_poly <- fs_correlation(data_poly, threshold = 0.1, method = "polychoric")
+    testthat::expect_true(is.matrix(result_poly$corr_matrix) || is.data.frame(result_poly$corr_matrix))
+    testthat::expect_type(result_poly$selected_vars, "character")
+    testthat::expect_true(length(result_poly$selected_vars) > 0)
   })
   
   # Test 5: Handling Missing Values
-  test_that("fs_correlation handles missing values", {
-    data_with_na <- mtcars
-    data_with_na[1:5, 1] <- NA
-    result_na <- fs_correlation(data_with_na, threshold = 0.7, na.rm = TRUE)
-    expect_true(is.matrix(result_na$corr_matrix) || is.data.frame(result_na$corr_matrix))
-    expect_type(result_na$selected_vars, "character")
+  testthat::test_that("fs_correlation handles missing values", {
+    data_na <- mtcars
+    data_na[1:5, 1] <- NA
+    result_na <- fs_correlation(data_na, threshold = 0.7, na.rm = TRUE)
+    testthat::expect_true(is.matrix(result_na$corr_matrix) || is.data.frame(result_na$corr_matrix))
+    testthat::expect_type(result_na$selected_vars, "character")
   })
   
   # Test 6: Parallel Processing
-  test_that("fs_correlation works with parallel processing", {
-    # Generate data with known correlation
+  testthat::test_that("fs_correlation works with parallel processing", {
     set.seed(123)
     continuous_var <- rnorm(100)
     dichotomous_var <- ifelse(continuous_var > 0, 1, 0)
-    data_pb <- data.frame(
-      continuous_var = continuous_var,
-      dichotomous_var = dichotomous_var
-    )
-    result_parallel <- fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial", parallel = TRUE, n_cores = 2, verbose = TRUE)
-    expect_true(is.matrix(result_parallel$corr_matrix) || is.data.frame(result_parallel$corr_matrix))
-    expect_type(result_parallel$selected_vars, "character")
-    expect_true(length(result_parallel$selected_vars) > 0)
+    data_pb <- data.frame(continuous_var = continuous_var,
+                          dichotomous_var = dichotomous_var)
+    result_parallel <- fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial",
+                                      parallel = TRUE, n_cores = 2, verbose = TRUE)
+    testthat::expect_true(is.matrix(result_parallel$corr_matrix) || is.data.frame(result_parallel$corr_matrix))
+    testthat::expect_type(result_parallel$selected_vars, "character")
+    testthat::expect_true(length(result_parallel$selected_vars) > 0)
   })
   
   # Test 7: Data Sampling
-  test_that("fs_correlation works with data sampling", {
+  testthat::test_that("fs_correlation works with data sampling", {
     data <- mtcars
     result_sampling <- fs_correlation(data, threshold = 0.7, sample_frac = 0.5, seed = 42)
-    expect_true(is.matrix(result_sampling$corr_matrix) || is.data.frame(result_sampling$corr_matrix))
-    expect_type(result_sampling$selected_vars, "character")
+    testthat::expect_true(is.matrix(result_sampling$corr_matrix) || is.data.frame(result_sampling$corr_matrix))
+    testthat::expect_type(result_sampling$selected_vars, "character")
   })
   
-  # Test 8: Output Format
-  test_that("fs_correlation returns data.frame when output_format is 'data.frame'", {
+  # Test 8: Output Format as Data Frame
+  testthat::test_that("fs_correlation returns data.frame when output_format is 'data.frame'", {
     data <- mtcars
     result_df <- fs_correlation(data, threshold = 0.7, output_format = "data.frame")
-    expect_true(is.data.frame(result_df$corr_matrix))
-    expect_type(result_df$selected_vars, "character")
+    testthat::expect_true(is.data.frame(result_df$corr_matrix))
+    testthat::expect_type(result_df$selected_vars, "character")
   })
   
   # Test 9: Custom Diagonal Value
-  test_that("fs_correlation sets custom diagonal value", {
+  testthat::test_that("fs_correlation sets custom diagonal value", {
     data <- mtcars
     result_diag <- fs_correlation(data, threshold = 0.7, diag_value = NA)
-    expect_true(all(is.na(diag(result_diag$corr_matrix))))
+    testthat::expect_true(all(is.na(diag(result_diag$corr_matrix))))
   })
   
   # Test 10: Custom No Variables Message
-  test_that("fs_correlation uses custom no variables message", {
+  testthat::test_that("fs_correlation uses custom no variables message", {
     data <- mtcars
-    custom_message <- "Custom message: No variables selected."
-    expect_message(fs_correlation(data, 0.95, no_vars_message = custom_message), custom_message)
+    custom_msg <- "Custom message: No variables selected."
+    testthat::expect_message(fs_correlation(data, 0.95, no_vars_message = custom_msg), custom_msg)
   })
   
   # Test 11: Invalid Inputs
-  test_that("fs_correlation handles invalid inputs", {
-    expect_error(fs_correlation("not a data frame", 0.7), "The 'data' argument must be a data frame or a matrix.")
-    expect_error(fs_correlation(mtcars, 1.5), "The 'threshold' argument must be a single numeric value between 0 and 1.")
-    expect_error(fs_correlation(mtcars, 0.7, method = "invalid_method"), "Invalid correlation method.")
+  testthat::test_that("fs_correlation handles invalid inputs", {
+    testthat::expect_error(fs_correlation("not a data frame", 0.7),
+                           "The 'data' argument must be a data frame or a matrix.")
+    testthat::expect_error(fs_correlation(mtcars, 1.5),
+                           "The 'threshold' argument must be a single numeric value between 0 and 1.")
+    testthat::expect_error(fs_correlation(mtcars, 0.7, method = "invalid_method"),
+                           "Invalid correlation method.")
   })
   
   # Test 12: Verbose Output
-  test_that("fs_correlation provides verbose output when verbose = TRUE", {
-    # Generate data with known correlation
+  testthat::test_that("fs_correlation provides verbose output when verbose = TRUE", {
     set.seed(123)
     continuous_var <- rnorm(100)
     dichotomous_var <- ifelse(continuous_var > 0, 1, 0)
-    data_pb <- data.frame(
-      continuous_var = continuous_var,
-      dichotomous_var = dichotomous_var
-    )
-    expect_message(
-      fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial", verbose = TRUE),
-      "Calculating point-biserial correlation for columns"
-    )
+    data_pb <- data.frame(continuous_var = continuous_var,
+                          dichotomous_var = dichotomous_var)
+    testthat::expect_message(fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial", verbose = TRUE),
+                             "Calculating point-biserial correlation between:")
   })
   
   cat("UAT for fs_correlation completed.\n")
 }
 
-# Run the UAT function
-test_fs_correlation()
+# Run tests
+# test_fs_correlation()

@@ -73,30 +73,50 @@ compute_feature_variances <- function(dt, log_progress = FALSE) {
 
 #' Variance Thresholding for Feature Selection
 #'
-#' Applies variance thresholding to a numeric dataset by removing features whose
-#' variances do not exceed the specified threshold.
+#' Applies variance thresholding to a numeric dataset with additional flexibility:
+#' you can specify whether to keep or remove features with variances either above or below
+#' a specified threshold.
 #'
 #' @param data A numeric matrix, data frame, or data.table containing the input data.
 #'             For data frames and data.tables, all columns must be numeric.
-#' @param threshold A single, non-negative, finite numeric value. Only features with
-#'                  variance strictly greater than this threshold will be retained.
+#' @param threshold A single, non-negative, finite numeric value. Depending on the
+#'                  `threshold_direction` and `action` parameters, features with variances
+#'                  either above or below this threshold will be kept or removed.
 #'                  Default is 0.5.
 #' @param log_progress Logical indicating whether progress messages should be printed.
 #'                     Default is FALSE.
-#' @return A numeric matrix containing the filtered data. If no features have variance
-#'         above the threshold, returns NULL.
+#' @param action A string specifying the action to take on features meeting the threshold
+#'               condition. Valid options are "keep" (to retain features that meet the condition)
+#'               or "remove" (to drop features that meet the condition). Default is "keep".
+#' @param threshold_direction A string specifying whether the threshold applies to features
+#'                            with variance "above" or "below" the threshold.
+#'                            Default is "above".
+#' @return A numeric matrix containing the filtered data. If no features meet the criteria,
+#'         returns NULL.
 #' @examples
 #' set.seed(123)
 #' data <- matrix(rnorm(1000), ncol = 10)
+#'
+#' # Default: keep features with variance > 0.5
 #' thresholded_data <- fs_variance(data, threshold = 0.5, log_progress = TRUE)
-#' if (!is.null(thresholded_data)) {
-#'   dim(thresholded_data)
-#' }
-fs_variance <- function(data, threshold = 0.5, log_progress = FALSE) {
+#'
+#' # Alternatively, remove features with variance > 0.5 (i.e. keep features with variance <= 0.5)
+#' filtered_data <- fs_variance(data, threshold = 0.5, action = "remove", threshold_direction = "above")
+fs_variance <- function(data, threshold = 0.5, log_progress = FALSE,
+                        action = "keep", threshold_direction = "above") {
   # Validate threshold input
   if (!is.numeric(threshold) || length(threshold) != 1 ||
       threshold < 0 || !is.finite(threshold)) {
     stop("Threshold must be a single non-negative, finite numeric value.")
+  }
+  
+  # Validate action and threshold_direction arguments
+  if (!action %in% c("keep", "remove")) {
+    stop("Argument 'action' must be either 'keep' or 'remove'.")
+  }
+  
+  if (!threshold_direction %in% c("above", "below")) {
+    stop("Argument 'threshold_direction' must be either 'above' or 'below'.")
   }
   
   # Convert data to a data.table for efficient processing
@@ -105,18 +125,42 @@ fs_variance <- function(data, threshold = 0.5, log_progress = FALSE) {
   # Compute variances for each feature
   variances <- compute_feature_variances(dt, log_progress = log_progress)
   
-  # Identify features with variance strictly greater than the threshold
-  keep_features <- names(variances)[variances > threshold]
+  # Determine which features meet the condition based on the specified parameters
+  if (threshold_direction == "above") {
+    if (action == "keep") {
+      selected <- variances > threshold
+    } else {  # action == "remove"
+      selected <- variances > threshold
+    }
+  } else {  # threshold_direction == "below"
+    if (action == "keep") {
+      selected <- variances < threshold
+    } else {  # action == "remove"
+      selected <- variances < threshold
+    }
+  }
   
-  # Warn and return NULL if no features meet the threshold criteria
+  # For "keep" action, we select features meeting the condition;
+  # for "remove", we select features NOT meeting the condition.
+  if (action == "keep") {
+    keep_features <- names(variances)[selected]
+  } else {
+    keep_features <- names(variances)[!selected]
+  }
+  
+  # Warn and return NULL if no features meet the criteria
   if (length(keep_features) == 0) {
-    warning("No features have variance above the specified threshold.")
+    warning("No features meet the specified variance criteria.")
     return(NULL)
   }
   
-  if (log_progress) message(sprintf("Retaining features with variance > %s", threshold))
+  if (log_progress) {
+    condition <- if (threshold_direction == "above") ">" else "<"
+    verb <- if (action == "keep") "Retaining" else "Removing"
+    message(sprintf("%s features with variance %s %s", verb, condition, threshold))
+  }
   
-  # Subset the data.table to retain only the selected features
+  # Subset the data.table to include only the appropriate features
   filtered_dt <- dt[, ..keep_features]
   
   if (log_progress) message("Variance thresholding completed.")
@@ -140,7 +184,7 @@ test_fs_variance <- function() {
   
   cat("Running unit tests for fs_variance...\n")
   
-  test_that("Numeric matrix input works", {
+  test_that("Numeric matrix input works with default parameters", {
     set.seed(123)
     data_mat <- matrix(rnorm(1000), ncol = 10)
     result <- fs_variance(data_mat, threshold = 0.5)
@@ -148,7 +192,7 @@ test_fs_variance <- function() {
     expect_true(ncol(result) <= ncol(data_mat))
   })
   
-  test_that("Numeric data frame input works", {
+  test_that("Numeric data frame input works with default parameters", {
     set.seed(123)
     df <- data.frame(matrix(rnorm(1000), ncol = 10))
     result <- fs_variance(df, threshold = 0.5)
@@ -156,7 +200,7 @@ test_fs_variance <- function() {
     expect_true(ncol(result) <= ncol(df))
   })
   
-  test_that("Data.table input works", {
+  test_that("Data.table input works with default parameters", {
     set.seed(123)
     dt_input <- data.table::as.data.table(matrix(rnorm(1000), ncol = 10))
     result <- fs_variance(dt_input, threshold = 0.5)
@@ -164,14 +208,14 @@ test_fs_variance <- function() {
     expect_true(ncol(result) <= ncol(dt_input))
   })
   
-  test_that("Returns NULL when no feature exceeds threshold", {
+  test_that("Returns NULL when no feature meets threshold with default keep/above", {
     set.seed(123)
     df_low_var <- data.frame(matrix(rnorm(1000, mean = 0, sd = 0.1), ncol = 10))
     result <- fs_variance(df_low_var, threshold = 0.5)
     expect_null(result)
   })
   
-  test_that("Works with mixed variances", {
+  test_that("Works with mixed variances using default parameters", {
     set.seed(123)
     df_mixed <- data.frame(matrix(0, ncol = 10, nrow = 100))
     for (i in 1:10) {
@@ -200,7 +244,6 @@ test_fs_variance <- function() {
   
   test_that("Handles missing values gracefully", {
     set.seed(123)
-    # Create a column with near-zero variance by using a constant value and some NAs.
     df_missing <- data.frame(
       x1 = rnorm(100),
       x2 = rnorm(100),
@@ -211,7 +254,7 @@ test_fs_variance <- function() {
     expect_true(ncol(result) < ncol(df_missing))
   })
   
-  test_that("Matrix with low variance returns NULL", {
+  test_that("Matrix with low variance returns NULL using default parameters", {
     set.seed(123)
     data_low_var <- matrix(rnorm(1000, mean = 0, sd = 0.1), ncol = 10)
     result <- fs_variance(data_low_var, threshold = 1)
@@ -228,6 +271,26 @@ test_fs_variance <- function() {
     df <- data.frame(matrix(rnorm(1000), ncol = 10))
     expect_error(fs_variance(df, threshold = -1),
                  "Threshold must be a single non-negative, finite numeric value.")
+  })
+  
+  # New tests for the additional parameters:
+  test_that("Works with action = 'remove' and threshold_direction = 'above'", {
+    set.seed(123)
+    data_mat <- matrix(rnorm(1000), ncol = 10)
+    result <- fs_variance(data_mat, threshold = 0.5, action = "remove", threshold_direction = "above")
+    original_variances <- apply(data_mat, 2, var)
+    # All columns in the result should have variance <= 0.5.
+    kept_cols <- colnames(result)
+    expect_true(all(original_variances[kept_cols] <= 0.5))
+  })
+  
+  test_that("Works with action = 'keep' and threshold_direction = 'below'", {
+    set.seed(123)
+    data_mat <- matrix(rnorm(1000, mean = 0, sd = 0.5), ncol = 10)
+    result <- fs_variance(data_mat, threshold = 0.1, action = "keep", threshold_direction = "below")
+    original_variances <- apply(data_mat, 2, var)
+    kept_cols <- colnames(result)
+    expect_true(all(original_variances[kept_cols] < 0.1))
   })
   
   cat("All unit tests completed successfully.\n")

@@ -1,13 +1,15 @@
 #' Ensure a Package is Installed and Loaded
 #'
-#' Checks if a package is installed; if not, it installs the package, then loads it.
+#' Checks if a package is installed; if not, installs the package, then loads it.
 #'
 #' @param pkg A character string specifying the package name.
 #' @return Invisibly returns TRUE if the package was loaded successfully.
 ensure_package <- function(pkg) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
+    message(sprintf("Package '%s' not found. Installing...", pkg))
     install.packages(pkg, dependencies = TRUE)
   }
+  # Try loading the package and check if successful
   if (!suppressPackageStartupMessages(require(pkg, character.only = TRUE, quietly = TRUE))) {
     stop(sprintf("Package '%s' failed to load.", pkg))
   }
@@ -16,14 +18,24 @@ ensure_package <- function(pkg) {
 
 #' Convert Input Data to data.table
 #'
-#' Converts a numeric data frame or matrix into a data.table for efficient processing.
+#' Converts a numeric matrix, data frame, or data.table into a data.table for efficient processing.
 #'
-#' @param data A numeric matrix or data frame.
+#' @param data A numeric matrix, data frame, or data.table.
 #' @param log_progress Logical indicating whether progress messages should be printed.
 #' @return A data.table version of the input data.
 convert_to_datatable <- function(data, log_progress = FALSE) {
   ensure_package("data.table")
   
+  # If already a data.table, just check for numeric columns and return
+  if (data.table::is.data.table(data)) {
+    if (!all(vapply(data, is.numeric, logical(1)))) {
+      stop("All columns of the data.table must be numeric.")
+    }
+    if (log_progress) message("Input is already a data.table.")
+    return(data)
+  }
+  
+  # Handle data.frame (but not data.table, since that's already handled above)
   if (is.data.frame(data)) {
     if (!all(vapply(data, is.numeric, logical(1)))) {
       stop("All columns of the data frame must be numeric.")
@@ -35,9 +47,11 @@ convert_to_datatable <- function(data, log_progress = FALSE) {
       stop("Matrix data must be numeric.")
     }
     if (log_progress) message("Converting matrix to data.table...")
+    # Converting a matrix directly to data.table can lead to unexpected behavior;
+    # hence converting via data.frame to preserve column structure.
     dt <- data.table::as.data.table(as.data.frame(data))
   } else {
-    stop("Data must be either a numeric matrix or a data frame.")
+    stop("Data must be a numeric matrix, data frame, or data.table.")
   }
   
   dt
@@ -52,6 +66,7 @@ convert_to_datatable <- function(data, log_progress = FALSE) {
 #' @return A named numeric vector of variances.
 compute_feature_variances <- function(dt, log_progress = FALSE) {
   if (log_progress) message("Calculating feature variances...")
+  # Compute variance for each column; na.rm = TRUE ensures missing values are handled.
   variance_list <- dt[, lapply(.SD, stats::var, na.rm = TRUE)]
   unlist(variance_list)
 }
@@ -61,8 +76,8 @@ compute_feature_variances <- function(dt, log_progress = FALSE) {
 #' Applies variance thresholding to a numeric dataset by removing features whose
 #' variances do not exceed the specified threshold.
 #'
-#' @param data A numeric matrix or data frame containing the input data.
-#'             For data frames, all columns must be numeric.
+#' @param data A numeric matrix, data frame, or data.table containing the input data.
+#'             For data frames and data.tables, all columns must be numeric.
 #' @param threshold A single, non-negative, finite numeric value. Only features with
 #'                  variance strictly greater than this threshold will be retained.
 #'                  Default is 0.5.
@@ -90,7 +105,7 @@ fs_variance <- function(data, threshold = 0.5, log_progress = FALSE) {
   # Compute variances for each feature
   variances <- compute_feature_variances(dt, log_progress = log_progress)
   
-  # Identify features with variance above the threshold
+  # Identify features with variance strictly greater than the threshold
   keep_features <- names(variances)[variances > threshold]
   
   # Warn and return NULL if no features meet the threshold criteria
@@ -99,11 +114,13 @@ fs_variance <- function(data, threshold = 0.5, log_progress = FALSE) {
     return(NULL)
   }
   
-  if (log_progress) message("Retaining features with variance > ", threshold)
+  if (log_progress) message(sprintf("Retaining features with variance > %s", threshold))
+  
   # Subset the data.table to retain only the selected features
   filtered_dt <- dt[, ..keep_features]
   
   if (log_progress) message("Variance thresholding completed.")
+  
   # Return the result as a numeric matrix
   as.matrix(filtered_dt)
 }
@@ -119,6 +136,7 @@ fs_variance <- function(data, threshold = 0.5, log_progress = FALSE) {
 test_fs_variance <- function() {
   ensure_package("testthat")
   suppressPackageStartupMessages(library(testthat))
+  ensure_package("data.table")
   
   cat("Running unit tests for fs_variance...\n")
   
@@ -136,6 +154,14 @@ test_fs_variance <- function() {
     result <- fs_variance(df, threshold = 0.5)
     expect_true(is.matrix(result))
     expect_true(ncol(result) <= ncol(df))
+  })
+  
+  test_that("Data.table input works", {
+    set.seed(123)
+    dt_input <- data.table::as.data.table(matrix(rnorm(1000), ncol = 10))
+    result <- fs_variance(dt_input, threshold = 0.5)
+    expect_true(is.matrix(result))
+    expect_true(ncol(result) <= ncol(dt_input))
   })
   
   test_that("Returns NULL when no feature exceeds threshold", {
@@ -207,5 +233,5 @@ test_fs_variance <- function() {
   cat("All unit tests completed successfully.\n")
 }
 
-# Run tests
+# Uncomment the line below to run the tests
 # test_fs_variance()

@@ -2,7 +2,7 @@
 
 This repository contains a collection of R functions to assist with feature selection and dimensionality reduction. Each script is thoroughly documented with its purpose, key assumptions, usage examples, and expected outputs to help you select the most appropriate method for your data analysis and predictive modeling tasks.
 
-The functions are organized into four main categories:
+The functions can be organized into four main categories:
 
 - **1. Statistical & Filter Methods**
 - **2. Regularization Methods**

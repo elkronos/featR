@@ -1,120 +1,184 @@
 ###############################################################################
-# Testing Infrastructure - Elastic Net
+# Testing Infrastructure - Elastic Net (for the refactored code)
 ###############################################################################
 
+# Dependencies are assumed loaded by your main script:
+# caret, glmnet, Matrix, doParallel, foreach, irlba
+
+##########################################
+# Minimal Test Harness Utilities
+##########################################
+test_results <- data.frame(
+  Test   = character(),
+  Result = character(),
+  Note   = character(),
+  stringsAsFactors = FALSE
+)
+
+print_and_store_result <- function(name, valid, note = "") {
+  status <- if (isTRUE(valid)) "PASS" else "FAIL"
+  cat(sprintf("[%s] %s%s\n",
+              status,
+              name,
+              if (nzchar(note)) paste0(" — ", note) else ""))
+  assign(
+    "test_results",
+    rbind(test_results, data.frame(Test = name, Result = status, Note = note, stringsAsFactors = FALSE)),
+    envir = .GlobalEnv
+  )
+}
+
+##########################################
+# Unit Test: extract_variables
+##########################################
+#' Unit Test for extract_variables
+#'
+#' Ensures response and predictors are extracted with correct dimensions.
+#' @return None.
+test_extract_variables <- function() {
+  set.seed(123)
+  df <- data.frame(
+    y = rnorm(50),
+    x1 = rnorm(50),
+    x2 = rnorm(50)
+  )
+  vars <- extract_variables(df, y ~ x1 + x2)
+  ok <- is.numeric(vars$y) &&
+    is.matrix(vars$x) &&
+    nrow(vars$x) == length(vars$y) &&
+    ncol(vars$x) == 2
+  print_and_store_result("extract_variables: basic extraction", ok)
+}
+
+##########################################
+# Unit Test: handle_missing_values
+##########################################
 #' Unit Test for handle_missing_values
 #'
-#' Tests the \code{handle_missing_values} function to ensure missing values are removed.
-#'
+#' Tests that missing values are removed in y and (sparse) x.
 #' @return None.
 test_handle_missing_values <- function() {
   set.seed(123)
   y <- rnorm(100)
-  x <- Matrix(rnorm(200), ncol = 2, sparse = TRUE)
+  x <- Matrix::Matrix(rnorm(200), ncol = 2, sparse = TRUE)
   x[1, 1] <- NA
   x[5, 2] <- NA
+  y[10]   <- NA
   
   result <- handle_missing_values(x, y)
-  valid <- !anyNA(result$x) && length(result$y) == nrow(result$x)
-  print_and_store_result("handle_missing_values: Missing values handled", valid)
+  ok <- !anyNA(result$y) &&
+    (inherits(result$x, "sparseMatrix") || is.matrix(result$x)) &&
+    nrow(result$x) == length(result$y) &&
+    !anyNA(result$x@x)
+  print_and_store_result("handle_missing_values: NA removal (sparse-safe)", ok)
 }
 
 ##########################################
-# Unit Test: Perform PCA
+# Unit Test: perform_pca
 ##########################################
 #' Unit Test for perform_pca
 #'
-#' Tests the \code{perform_pca} function to ensure correct dimensionality.
-#'
+#' Ensures PCA runs and returns the requested number of components.
 #' @return None.
 test_perform_pca <- function() {
   set.seed(123)
-  x <- Matrix(rnorm(200), ncol = 2, sparse = TRUE)
-  
-  result <- perform_pca(x, use_pca = TRUE, nPCs = 1)
-  valid <- ncol(result) == 1
-  print_and_store_result("perform_pca: PCA dimensionality", valid)
+  x <- Matrix::Matrix(rnorm(400), ncol = 4, sparse = TRUE)
+  pcs <- 2L
+  z <- perform_pca(x, use_pca = TRUE, nPCs = pcs)
+  ok <- is.matrix(z) && ncol(z) == pcs && nrow(z) == nrow(x)
+  print_and_store_result("perform_pca: correct dimensionality", ok)
 }
 
 ##########################################
-# Unit Test: Train Models
+# Unit Test: train_models
 ##########################################
 #' Unit Test for train_models
 #'
-#' Tests the \code{train_models} function to ensure parallel training runs without errors.
-#'
+#' Verifies caret training completes without error (glmnet).
 #' @return None.
 test_train_models <- function() {
   set.seed(123)
-  y <- rnorm(100)
-  x <- Matrix(rnorm(200), ncol = 2, sparse = TRUE)
+  y <- rnorm(120)
+  x <- Matrix::Matrix(rnorm(240), ncol = 2, sparse = TRUE)
   colnames(x) <- c("predictor1", "predictor2")
   
-  tuneGrid <- expand.grid(alpha = c(0, 1), lambda = c(0.1, 1))
-  trControl <- trainControl(method = "cv", number = 3, summaryFunction = safe_summary)
+  tuneGrid  <- expand.grid(alpha = c(0, 1), lambda = c(0.05, 0.5))
+  trControl <- caret::trainControl(method = "cv", number = 3, summaryFunction = safe_summary)
   
-  result <- tryCatch({
-    train_models(x, y, tuneGrid, trControl)
-    TRUE
+  ok <- FALSE
+  note <- ""
+  tryCatch({
+    fit <- train_models(x, y, tuneGrid, trControl, cores = 1) # keep tests light
+    ok <- inherits(fit, "train") &&
+      identical(fit$method, "glmnet") &&
+      all(c("alpha", "lambda") %in% names(fit$bestTune))
   }, error = function(e) {
-    print_and_store_result("train_models: Parallel training", FALSE, e$message)
-    FALSE
+    note <<- e$message
   })
-  
-  if (result) print_and_store_result("train_models: Parallel training", TRUE)
+  print_and_store_result("train_models: caret+glmnet training", ok, note)
 }
 
 ##########################################
-# Unit Test: Select Best Model
+# Unit Test: select_best_model
 ##########################################
 #' Unit Test for select_best_model
 #'
-#' Tests the \code{select_best_model} function to ensure the best model is selected.
-#'
+#' Uses a mocked caret-like object to ensure best params and RMSE extraction.
 #' @return None.
 test_select_best_model <- function() {
-  # Create dummy model objects with dummy bestTune parameters
-  model1 <- list(finalModel = list(), bestTune = data.frame(alpha = 0, lambda = 0.1))
-  model2 <- list(finalModel = list(), bestTune = data.frame(alpha = 1, lambda = 1))
-  
-  cv_results <- data.frame(
-    RMSE = c(1.0, 0.5),
-    alpha = c(0, 1),
-    lambda = c(0.1, 1),
-    model = I(list(model1, model2))
+  # mock caret::train-like object
+  fit_mock <- list(
+    finalModel = list(dummy = TRUE),
+    bestTune   = data.frame(alpha = 1, lambda = 0.1),
+    results    = data.frame(RMSE = c(0.72, 0.51, 0.66))
   )
+  class(fit_mock) <- "train"
   
-  result <- select_best_model(cv_results)
-  valid <- !is.null(result$model) && (result$RMSE == 0.5)
-  print_and_store_result("select_best_model: Best model selection", valid)
+  res <- select_best_model(fit_mock)
+  ok <- is.list(res) &&
+    isTRUE(res$model$dummy) &&
+    identical(res$alpha, 1) &&
+    identical(res$lambda, 0.1) &&
+    isTRUE(all.equal(res$RMSE, 0.51))
+  print_and_store_result("select_best_model: best extraction from train", ok)
 }
 
 ##########################################
-# Unit Test: Full Elastic Net Function
+# Unit Test: fs_elastic (end-to-end)
 ##########################################
 #' Unit Test for fs_elastic
 #'
-#' Tests the full \code{fs_elastic} function.
-#'
+#' Trains an elastic net model end-to-end on synthetic data.
 #' @return None.
 test_fs_elastic <- function() {
   set.seed(123)
-  data <- data.frame(
-    response = rnorm(100),
-    predictor1 = rnorm(100),
-    predictor2 = rnorm(100)
+  n <- 150
+  dat <- data.frame(
+    response   = rnorm(n),
+    predictor1 = rnorm(n),
+    predictor2 = rnorm(n)
   )
-  formula <- response ~ predictor1 + predictor2
+  form <- response ~ predictor1 + predictor2
   
-  result <- tryCatch({
-    fs_elastic(data, formula, verbose = FALSE)
-    TRUE
+  ok <- FALSE
+  note <- ""
+  tryCatch({
+    ans <- fs_elastic(
+      data     = dat,
+      formula  = form,
+      alpha_seq  = c(0, 0.5, 1),
+      lambda_seq = 10^seq(-2, 0, length = 5),
+      use_pca    = FALSE,
+      cores      = 1,
+      verbose    = FALSE
+    )
+    ok <- is.list(ans) &&
+      all(c("coef", "best_alpha", "best_lambda", "RMSE", "full_model") %in% names(ans)) &&
+      inherits(ans$full_model, "train")
   }, error = function(e) {
-    print_and_store_result("fs_elastic: Full function test", FALSE, e$message)
-    FALSE
+    note <<- e$message
   })
-  
-  if (result) print_and_store_result("fs_elastic: Full function test", TRUE)
+  print_and_store_result("fs_elastic: end-to-end training", ok, note)
 }
 
 ##########################################
@@ -122,8 +186,7 @@ test_fs_elastic <- function() {
 ##########################################
 #' Run All Unit Tests
 #'
-#' Executes all defined unit tests and prints a summary of the results.
-#'
+#' Executes all defined unit tests and prints a summary.
 #' @return None.
 run_all_tests <- function() {
   cat("Running Comprehensive Unit Tests\n")
@@ -137,7 +200,6 @@ run_all_tests <- function() {
   cat("==================================\n")
   cat("Unit Testing completed\n\n")
   
-  # Print summary of test results
   cat("Test Summary:\n")
   print(table(test_results$Result))
   cat("\nDetailed Results:\n")
@@ -147,7 +209,7 @@ run_all_tests <- function() {
 ##########################################
 # Execute Unit Tests (Do Not Run by Default)
 ##########################################
-## To run the tests, uncomment the block below.
+## To run the tests immediately, uncomment:
 ## if (sys.nframe() == 0) {
 ##   run_all_tests()
 ## }

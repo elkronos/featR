@@ -1,3 +1,7 @@
+# ============================
+# MARS Utilities
+# ============================
+
 # Required Packages
 library(earth)
 library(caret)
@@ -10,28 +14,25 @@ library(testthat)
 
 #' Check Required Libraries
 #'
-#' Verifies that all required libraries are loaded.
-#'
-#' @return invisible(NULL) if all required libraries are loaded.
+#' @return invisible(NULL)
 #' @export
 check_libraries <- function() {
   required_libs <- c("earth", "caret", "data.table")
+  opt_libs <- c("doParallel", "pROC", "PRROC")
   for (lib in required_libs) {
     if (!requireNamespace(lib, quietly = TRUE)) {
       stop(sprintf("Package '%s' is not installed. Please install it before proceeding.", lib))
+    }
+  }
+  for (lib in opt_libs) {
+    if (!requireNamespace(lib, quietly = TRUE)) {
+      message(sprintf("Note: optional package '%s' not found. Some features may be disabled.", lib))
     }
   }
   invisible(NULL)
 }
 
 #' Check Response Column
-#'
-#' Validates that the specified response column exists in the dataset.
-#'
-#' @param data A data.table or data.frame.
-#' @param responseName Character. The name of the response column.
-#'
-#' @return invisible(NULL) if the response column is found.
 #' @export
 check_response_column <- function(data, responseName) {
   if (!(responseName %in% colnames(data))) {
@@ -40,13 +41,22 @@ check_response_column <- function(data, responseName) {
   invisible(NULL)
 }
 
+#' Coerce Response
+#' Converts character response to factor; warns on unsupported types.
+#' @export
+coerce_response <- function(data, responseName) {
+  y <- data[[responseName]]
+  if (is.character(y)) {
+    message(sprintf("Coercing character response '%s' to factor.", responseName))
+    data[[responseName]] <- factor(y)
+  }
+  if (!is.factor(data[[responseName]]) && !is.numeric(data[[responseName]])) {
+    stop("Response must be numeric (regression) or factor (classification).")
+  }
+  data
+}
+
 #' Handle Missing Values
-#'
-#' Removes rows with missing values.
-#'
-#' @param data A data.table.
-#'
-#' @return data.table. The dataset with missing rows removed.
 #' @export
 handle_missing_values <- function(data) {
   initial_rows <- nrow(data)
@@ -56,14 +66,6 @@ handle_missing_values <- function(data) {
 }
 
 #' Check Class Balance
-#'
-#' Checks whether each class in a factor response variable meets minimum counts.
-#'
-#' @param data A data.table.
-#' @param responseName Character. The name of the response column.
-#' @param show_warnings Logical. If TRUE, issues warnings for classes with low counts.
-#'
-#' @return invisible(NULL) if class balance conditions are met.
 #' @export
 check_class_balance <- function(data, responseName, show_warnings = TRUE) {
   if (is.factor(data[[responseName]])) {
@@ -79,14 +81,6 @@ check_class_balance <- function(data, responseName, show_warnings = TRUE) {
 }
 
 #' Sample Data
-#'
-#' Samples the data down to a specified sample size.
-#'
-#' @param data A data.table.
-#' @param sampleSize Integer. Maximum number of rows to retain.
-#' @param seed Integer. Random seed.
-#'
-#' @return data.table. The sampled dataset.
 #' @export
 sample_data <- function(data, sampleSize, seed) {
   if (nrow(data) > sampleSize) {
@@ -94,38 +88,18 @@ sample_data <- function(data, sampleSize, seed) {
     data <- data[sample(.N, sampleSize)]
     message(sprintf("Data sampled down to %d rows.", sampleSize))
   }
-  return(data)
+  data
 }
 
-#' Split Data
-#'
-#' Splits data into training and test sets.
-#'
-#' @param data A data.table.
-#' @param responseName Character. The name of the response column.
-#' @param train_prop Numeric. Proportion of data for training.
-#' @param seed Integer. Random seed.
-#'
-#' @return A list with components \code{train} and \code{test}.
+#' Split Data (stratified for both regression & classification)
 #' @export
 split_data <- function(data, responseName, train_prop, seed) {
   set.seed(seed)
-  if (is.factor(data[[responseName]])) {
-    train_idx <- caret::createDataPartition(data[[responseName]], p = train_prop, list = FALSE)
-  } else {
-    train_idx <- sample(seq_len(nrow(data)), size = floor(train_prop * nrow(data)))
-  }
-  list(train = data[train_idx, ], test = data[-train_idx, ])
+  idx <- caret::createDataPartition(y = data[[responseName]], p = train_prop, list = FALSE)
+  list(train = data[idx, ], test = data[-idx, ])
 }
 
-#' Balance Classes
-#'
-#' Balances classes by oversampling minority classes.
-#'
-#' @param train A data.table representing the training set.
-#' @param responseName Character. The name of the response column.
-#'
-#' @return data.table. The balanced training set.
+#' Balance Classes (simple upsampling)
 #' @export
 balance_classes <- function(train, responseName) {
   if (is.factor(train[[responseName]])) {
@@ -135,51 +109,100 @@ balance_classes <- function(train, responseName) {
       subset_data <- train[train[[responseName]] == cl]
       if (nrow(subset_data) < max_count) {
         subset_data[sample(1:.N, max_count, replace = TRUE)]
-      } else {
-        subset_data
-      }
+      } else subset_data
     })
-    train_balanced <- rbindlist(balanced_list)
-    # Shuffle the rows
+    train_balanced <- data.table::rbindlist(balanced_list)
     train_balanced <- train_balanced[sample(.N)]
     message(sprintf("Balanced training set size: %d rows.", nrow(train_balanced)))
     return(train_balanced)
   }
-  return(train)
+  train
 }
 
 #' Define Hyperparameter Grid
-#'
-#' Creates a grid of hyperparameters for tuning.
-#'
-#' @param degree Integer vector. Degrees of interaction.
-#' @param nprune Integer vector. Number of terms to prune.
-#'
-#' @return data.frame. The hyperparameter grid.
 #' @export
 define_hyperparameter_grid <- function(degree, nprune) {
-  expand.grid(nprune = nprune, degree = degree)
+  expand.grid(nprune = unique(sort(nprune)), degree = unique(sort(degree)))
+}
+
+#' Preprocessing: remove NZV and high-correlation predictors
+#' @param corr_cut numeric correlation cutoff (0 disables)
+#' @export
+preprocess_predictors <- function(train, test, responseName, corr_cut = 0.95, remove_nzv = TRUE) {
+  pred_cols <- setdiff(colnames(train), responseName)
+  nzv_removed <- character()
+  corr_removed <- character()
+  
+  if (remove_nzv) {
+    nzv <- caret::nearZeroVar(train[, ..pred_cols], saveMetrics = TRUE)
+    # remove if near-zero-variance OR zero-variance
+    rm_idx <- which(nzv$nzv | nzv$zeroVar)
+    if (length(rm_idx)) {
+      nzv_removed <- rownames(nzv)[rm_idx]
+      keep <- setdiff(pred_cols, nzv_removed)
+      cols <- c(keep, responseName)
+      train <- train[, ..cols]
+      test  <- test[, ..cols]
+      pred_cols <- keep
+      message(sprintf("Removed %d near/zero-variance predictors.", length(nzv_removed)))
+    }
+  }
+  
+  if (is.numeric(corr_cut) && corr_cut > 0 && length(pred_cols) > 1) {
+    num_cols <- pred_cols[vapply(train[, ..pred_cols], is.numeric, logical(1))]
+    if (length(num_cols) > 1) {
+      cmat <- stats::cor(train[, ..num_cols], use = "pairwise.complete.obs")
+      high <- caret::findCorrelation(cmat, cutoff = corr_cut, verbose = FALSE)
+      if (length(high)) {
+        corr_removed <- num_cols[high]
+        keep <- setdiff(pred_cols, corr_removed)
+        cols <- c(keep, responseName)
+        train <- train[, ..cols]
+        test  <- test[, ..cols]
+        message(sprintf("Removed %d highly correlated numeric predictors (cutoff=%.2f).",
+                        length(corr_removed), corr_cut))
+      }
+    }
+  }
+  
+  list(train = train, test = test,
+       removed = list(nzv = nzv_removed, corr = corr_removed))
 }
 
 #' Define Training Control
 #'
-#' Sets up the caret training control parameters.
-#'
-#' @param number Integer. Number of cross-validation folds.
-#' @param repeats Integer. Number of repeats for cross-validation.
-#' @param search Character. Hyperparameter search method (e.g., "grid").
-#' @param train A data.table. The training dataset.
-#' @param responseName Character. The response column.
-#'
-#' @return A \code{trainControl} object.
+#' @param number integer. CV folds.
+#' @param repeats integer. CV repeats.
+#' @param search character. "grid" or "random".
+#' @param train data.table. Training data.
+#' @param responseName character. Response column.
+#' @param seed integer. RNG seed.
+#' @param tune_grid_n integer or NULL. Number of tuning parameter combinations; if NULL, seeds are not set.
+#' @param verbose_iter logical. If TRUE, caret prints fold progress.
 #' @export
-define_train_control <- function(number, repeats, search, train, responseName) {
-  custom_summary <- caret::defaultSummary
-  function_with_na_rm <- function(data, lev = NULL, model = NULL) {
-    # Remove NA values in performance measures if any
-    metrics <- custom_summary(data, lev, model)
-    metrics <- lapply(metrics, function(x) if (is.numeric(x)) mean(x, na.rm = TRUE) else x)
-    unlist(metrics)
+define_train_control <- function(number, repeats, search, train, responseName, seed,
+                                 tune_grid_n = NULL, verbose_iter = FALSE) {
+  y <- train[[responseName]]
+  is_class <- is.factor(y)
+  is_binary <- is_class && length(levels(y)) == 2
+  
+  # select summary
+  if (is_binary && requireNamespace("pROC", quietly = TRUE)) {
+    summary_fun <- caret::twoClassSummary
+  } else if (is_class && !is_binary && "multiClassSummary" %in% getNamespaceExports("caret")) {
+    summary_fun <- caret::multiClassSummary
+  } else {
+    summary_fun <- caret::defaultSummary
+  }
+  
+  # seeds only if we know grid size (to avoid caret seed mismatch warnings)
+  seeds <- NULL
+  if (!is.null(tune_grid_n) && is.finite(tune_grid_n) && tune_grid_n > 0) {
+    total_resamples <- number * repeats
+    set.seed(seed)
+    seeds <- vector(mode = "list", length = total_resamples + 1)
+    for (i in seq_len(total_resamples)) seeds[[i]] <- sample.int(1e6, tune_grid_n)
+    seeds[[total_resamples + 1]] <- sample.int(1e6, 1)
   }
   
   ctrl <- caret::trainControl(
@@ -189,41 +212,50 @@ define_train_control <- function(number, repeats, search, train, responseName) {
     search = search,
     allowParallel = TRUE,
     savePredictions = "final",
-    classProbs = is.factor(train[[responseName]]),
+    classProbs = is_class,
     returnResamp = "all",
-    summaryFunction = function_with_na_rm,
-    verboseIter = TRUE
+    summaryFunction = summary_fun,
+    verboseIter = verbose_iter,
+    seeds = seeds
   )
   
-  if (!inherits(ctrl, "trainControl")) {
-    class(ctrl) <- c("trainControl", class(ctrl))
-  }
-  
-  return(ctrl)
+  if (!inherits(ctrl, "trainControl")) class(ctrl) <- c("trainControl", class(ctrl))
+  ctrl
 }
 
 #' Train Model
-#'
-#' Trains a model using caret with the specified parameters.
-#'
-#' @param train A data.table. The training dataset.
-#' @param responseName Character. The name of the response column.
-#' @param method Character. The model method (e.g., "earth").
-#' @param ctrl A trainControl object.
-#' @param hyperParameters data.frame. The hyperparameter grid.
-#' @param seed Integer. Random seed.
-#'
-#' @return A trained model object.
 #' @export
-train_model <- function(train, responseName, method, ctrl, hyperParameters, seed) {
+train_model <- function(train, responseName, method, ctrl, hyperParameters, seed, metric = NULL) {
   set.seed(seed)
+  
+  if (is.factor(train[[responseName]]) && length(levels(train[[responseName]])) == 2) {
+    lev <- levels(train[[responseName]])
+    pos <- lev[2]
+    levels(train[[responseName]]) <- make.names(lev)
+  }
+  
+  if (is.null(metric)) {
+    if (is.factor(train[[responseName]]) && length(levels(train[[responseName]])) == 2 &&
+        identical(ctrl$summaryFunction, caret::twoClassSummary)) {
+      metric <- "ROC"
+    } else if (is.factor(train[[responseName]])) {
+      metric <- "Accuracy"
+    } else {
+      metric <- "RMSE"
+    }
+  }
+  
+  fmla <- stats::as.formula(sprintf("`%s` ~ .", responseName))
+  
   model <- tryCatch({
     caret::train(
-      as.formula(sprintf("%s ~ .", responseName)),
+      fmla,
       data = train,
       method = method,
       trControl = ctrl,
-      tuneGrid = hyperParameters
+      tuneGrid = hyperParameters,
+      metric = metric,
+      preProcess = c("center", "scale")
     )
   }, error = function(e) {
     stop(sprintf("Error during model training: %s", conditionMessage(e)))
@@ -232,116 +264,165 @@ train_model <- function(train, responseName, method, ctrl, hyperParameters, seed
 }
 
 #' Evaluate Model
-#'
-#' Evaluates a trained model on the test set.
-#'
-#' @param model The trained model.
-#' @param test A data.table. The test dataset.
-#' @param responseName Character. The response column.
-#'
-#' @return A list of performance metrics and the model.
 #' @export
 evaluate_model <- function(model, test, responseName) {
   pred <- predict(model, newdata = test)
+  out <- list(model = model, predictions = pred)
+  
   if (is.numeric(test[[responseName]])) {
-    rmse_val <- sqrt(mean((test[[responseName]] - pred)^2))
-    list(model = model, rmse = rmse_val)
+    obs <- test[[responseName]]
+    rmse_val <- sqrt(mean((obs - pred)^2))
+    mae_val  <- mean(abs(obs - pred))
+    r2_val   <- caret::R2(pred, obs)
+    out$metrics <- list(RMSE = rmse_val, MAE = mae_val, R2 = r2_val)
   } else if (is.factor(test[[responseName]])) {
     pred <- factor(pred, levels = levels(test[[responseName]]))
     cm <- caret::confusionMatrix(pred, test[[responseName]])
-    list(model = model, accuracy = cm$overall["Accuracy"], confusion_matrix = cm)
+    out$metrics <- list(Accuracy = unname(cm$overall["Accuracy"]),
+                        Kappa    = unname(cm$overall["Kappa"]))
+    out$confusion_matrix <- cm$table
+    
+    if (length(levels(test[[responseName]])) == 2) {
+      if (any("twoClassSummary" == deparse(body(model$control$summaryFunction)) |
+              identical(model$control$summaryFunction, caret::twoClassSummary))) {
+        probs <- predict(model, newdata = test, type = "prob")
+        pos_level <- colnames(probs)[2]
+        if (requireNamespace("pROC", quietly = TRUE)) {
+          roc_obj <- pROC::roc(response = test[[responseName]], predictor = probs[[pos_level]], quiet = TRUE)
+          out$metrics$ROC_AUC <- as.numeric(pROC::auc(roc_obj))
+        }
+        if (requireNamespace("PRROC", quietly = TRUE)) {
+          labs01 <- as.integer(test[[responseName]] == levels(test[[responseName]])[2])
+          pr <- PRROC::pr.curve(scores.class0 = probs[[pos_level]][labs01 == 1],
+                                scores.class1 = probs[[pos_level]][labs01 == 0], curve = FALSE)
+          out$metrics$PR_AUC <- unname(pr$auc.integral)
+        }
+      }
+    }
   } else {
     stop("Unsupported response variable type.")
   }
+  
+  vi_ok <- tryCatch({
+    vi <- caret::varImp(model)
+    out$varimp <- vi
+    TRUE
+  }, error = function(e) FALSE)
+  out
 }
 
-# ---------------------------
-# Main Function: fs_mars
-# ---------------------------
+#' Start/Stop Parallel (optional)
+#' @export
+maybe_register_parallel <- function(verbose = TRUE) {
+  if (requireNamespace("doParallel", quietly = TRUE)) {
+    cores <- max(1L, parallel::detectCores() - 1L)
+    cl <- parallel::makeCluster(cores)
+    doParallel::registerDoParallel(cl)
+    if (verbose) message(sprintf("Parallel backend registered with %d workers.", cores))
+    return(cl)
+  } else {
+    if (verbose) message("doParallel not installed; running single-threaded.")
+    return(NULL)
+  }
+}
+
+#' Stop Parallel
+#' @export
+stop_parallel <- function(cl) {
+  if (!is.null(cl)) {
+    parallel::stopCluster(cl)
+    foreach::registerDoSEQ()
+  }
+  invisible(NULL)
+}
 
 #' MARS Feature Selection and Model Training
 #'
-#' Orchestrates feature selection and model training using MARS (Multivariate Adaptive Regression Splines).
+#' @param data data.frame or data.table.
+#' @param responseName character. Response column name.
+#' @param p numeric. Train proportion (default 0.8).
+#' @param degree integer vector. Interaction degrees (default 1:3).
+#' @param nprune integer vector. Terms to prune (default c(5,10,15)).
+#' @param method character. Model method (default "earth").
+#' @param search character. Hyperparameter search method (default "grid").
+#' @param number integer. CV folds (default 5).
+#' @param repeats integer. CV repeats (default 3).
+#' @param seed integer. Random seed (default 123).
+#' @param sampleSize integer. Max samples (default 10000).
+#' @param show_warnings logical. Warn on imbalance (default TRUE).
+#' @param verbose logical. Messages (default TRUE).
+#' @param corr_cut numeric. Correlation cutoff (default 0.95; 0 disables).
+#' @param remove_nzv logical. Remove near-zero-variance predictors (default TRUE).
+#' @param verbose_iter logical. If TRUE, caret prints fold progress.
 #'
-#' @param data A data.frame or data.table.
-#' @param responseName Character. The name of the response column.
-#' @param p Numeric. Proportion of data for training (default 0.8).
-#' @param degree Integer vector. Degrees of interaction (default 1:3).
-#' @param nprune Integer vector. Number of terms to prune (default c(5, 10, 15)).
-#' @param method Character. Modeling method (default "earth").
-#' @param search Character. Hyperparameter search method (default "grid").
-#' @param number Integer. Number of CV folds (default 5).
-#' @param repeats Integer. Number of CV repeats (default 3).
-#' @param seed Integer. Random seed (default 123).
-#' @param sampleSize Integer. Maximum number of samples to use (default 10000).
-#' @param show_warnings Logical. Whether to show warnings for class imbalance (default TRUE).
-#' @param verbose Logical. If TRUE, prints progress messages (default TRUE).
-#'
-#' @return A list containing the trained model and evaluation metrics.
+#' @return list with model, metrics, predictions, varimp, and preprocessing report.
 #' @export
-fs_mars <- function(data, responseName, 
-                    p = 0.8, 
-                    degree = 1:3, 
-                    nprune = c(5, 10, 15), 
-                    method = "earth", 
-                    search = "grid", 
-                    number = 5, 
-                    repeats = 3, 
-                    seed = 123, 
+fs_mars <- function(data, responseName,
+                    p = 0.8,
+                    degree = 1:3,
+                    nprune = c(5, 10, 15),
+                    method = "earth",
+                    search = "grid",
+                    number = 5,
+                    repeats = 3,
+                    seed = 123,
                     sampleSize = 10000,
                     show_warnings = TRUE,
-                    verbose = TRUE) {
+                    verbose = TRUE,
+                    corr_cut = 0.95,
+                    remove_nzv = TRUE,
+                    verbose_iter = FALSE) {
   
-  # Check required libraries and response column
   if (verbose) message("Verifying required libraries...")
   check_libraries()
   
-  if (verbose) message("Checking response column existence...")
-  check_response_column(data, responseName)
-  
-  # Convert data to data.table if not already
   if (!is.data.table(data)) {
     data <- as.data.table(data)
     if (verbose) message("Converted input data to data.table.")
   }
   
-  # Handle missing values
+  if (verbose) message("Checking response column existence...")
+  check_response_column(data, responseName)
+  
+  data <- coerce_response(data, responseName)
   data <- handle_missing_values(data)
-  
-  # Check class balance (only applies for factor responses)
   check_class_balance(data, responseName, show_warnings)
-  
-  # Sample data if necessary (useful for very large datasets)
   data <- sample_data(data, sampleSize, seed)
   
-  # Split data into training and test sets
   if (verbose) message("Splitting data into training and test sets...")
   splits <- split_data(data, responseName, p, seed)
   train <- splits$train
-  test <- splits$test
-  if (verbose) {
-    message(sprintf("Training set: %d rows; Test set: %d rows.", nrow(train), nrow(test)))
-  }
+  test  <- splits$test
+  if (verbose) message(sprintf("Training set: %d rows; Test set: %d rows.", nrow(train), nrow(test)))
   
-  # Balance classes in training data if necessary
   train <- balance_classes(train, responseName)
   
-  # Define hyperparameter grid and training control
-  hyperParameters <- define_hyperparameter_grid(degree, nprune)
-  ctrl <- define_train_control(number, repeats, search, train, responseName)
+  pp <- preprocess_predictors(train, test, responseName, corr_cut = corr_cut, remove_nzv = remove_nzv)
+  train <- pp$train; test <- pp$test
   
-  # Train the model
-  if (verbose) message("Training the model...")
-  model <- train_model(train, responseName, method, ctrl, hyperParameters, seed)
-  
-  # Ensure factor levels are consistent between train and test
   if (is.factor(train[[responseName]])) {
     test[[responseName]] <- factor(test[[responseName]], levels = levels(train[[responseName]]))
   }
   
-  # Evaluate the model
+  hyperParameters <- define_hyperparameter_grid(degree, nprune)
+  ctrl <- define_train_control(number, repeats, search, train, responseName, seed,
+                               tune_grid_n = nrow(hyperParameters),
+                               verbose_iter = verbose_iter)
+  
+  cl <- maybe_register_parallel(verbose)
+  
+  if (verbose) message("Training the model...")
+  t_train <- system.time({
+    model <- train_model(train, responseName, method, ctrl, hyperParameters, seed, metric = NULL)
+  })
+  
+  if (!is.null(cl)) stop_parallel(cl)
+  
+  if (verbose) message(sprintf("Training completed in %.2f seconds.", t_train[["elapsed"]]))
+  
   if (verbose) message("Evaluating model performance...")
   eval_metrics <- evaluate_model(model, test, responseName)
+  eval_metrics$preprocessing <- list(removed_predictors = pp$removed)
   
   if (verbose) message("Model training and evaluation complete.")
   return(eval_metrics)

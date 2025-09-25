@@ -1,27 +1,81 @@
 ###############################################################################
+# Packages
+###############################################################################
+suppressPackageStartupMessages({
+  library(caret)
+  library(parallel)
+  library(doParallel)
+  library(dplyr)
+  library(randomForest)
+  library(foreach)
+  library(kernlab)   # caret's svmLinear/svmRadial backend (ksvm)
+})
+
+###############################################################################
 # Testing Infrastructure - SVM
 ###############################################################################
 
-# Global data frame to store test results
-test_results <- data.frame(Test = character(), Result = character(), stringsAsFactors = FALSE)
-
-#' Print and Store a Test Result
+#' Initialize Test Results Container
 #'
-#' @param test_name Name of the test.
-#' @param passed Logical indicating if the test passed.
-#' @param message Optional message.
+#' Creates or resets the global results data frame used to record test outcomes.
 #'
-#' @return Invisibly returns TRUE.
-print_and_store_result <- function(test_name, passed, message = NULL) {
-  result <- if (passed) "PASS" else "FAIL"
-  cat(sprintf("%-60s [%s]\n", test_name, result))
-  if (!is.null(message)) cat("  ", message, "\n")
-  test_results <<- rbind(test_results,
-                         data.frame(Test = test_name, Result = result, stringsAsFactors = FALSE))
+#' @return Invisibly returns \code{TRUE}.
+#' @export
+init_test_results <- function() {
+  df <- data.frame(
+    Test = character(),
+    Result = factor(levels = c("PASS", "FAIL")),
+    Message = character(),
+    stringsAsFactors = FALSE
+  )
+  assign("test_results", df, envir = .GlobalEnv)
   invisible(TRUE)
 }
 
-# Test for validate_inputs
+#' Print and Store a Test Result
+#'
+#' Records a single test outcome and prints a formatted line.
+#'
+#' @param test_name Character scalar name of the test.
+#' @param passed Logical indicating if the test passed.
+#' @param message Optional character message for additional context.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
+print_and_store_result <- function(test_name, passed, message = NULL) {
+  if (!exists("test_results", envir = .GlobalEnv)) init_test_results()
+  result <- if (isTRUE(passed)) "PASS" else "FAIL"
+  cat(sprintf("%-64s [%s]\n", test_name, result))
+  if (!is.null(message) && nzchar(message)) cat("  ", message, "\n", sep = "")
+  new_row <- data.frame(
+    Test = test_name,
+    Result = factor(result, levels = c("PASS", "FAIL")),
+    Message = ifelse(is.null(message), "", message),
+    stringsAsFactors = FALSE
+  )
+  test_results <<- dplyr::bind_rows(test_results, new_row)
+  invisible(TRUE)
+}
+
+#' Retrieve Test Results
+#'
+#' @return A data frame with recorded test outcomes.
+#' @export
+get_test_results <- function() {
+  if (!exists("test_results", envir = .GlobalEnv)) init_test_results()
+  test_results
+}
+
+###############################################################################
+# Unit Tests
+###############################################################################
+
+#' Test: validate_inputs
+#'
+#' Executes validation scenarios for \code{validate_inputs()}.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_validate_inputs <- function() {
   valid_test <- tryCatch({
     validate_inputs(iris, "Species", "classification", 0.7, 5)
@@ -39,12 +93,12 @@ test_validate_inputs <- function() {
   }, error = function(e) TRUE)
   
   invalid_task <- tryCatch({
-    validate_inputs(iris, "Species", "invalid_task", 0.7, 5)
+    validate_inputs(iris, "Species", "not_a_task", 0.7, 5)
     FALSE
   }, error = function(e) TRUE)
   
   invalid_train_ratio <- tryCatch({
-    validate_inputs(iris, "Species", "classification", 1.2, 5)
+    validate_inputs(iris, "Species",  "classification", 1.2, 5)
     FALSE
   }, error = function(e) TRUE)
   
@@ -53,89 +107,160 @@ test_validate_inputs <- function() {
     FALSE
   }, error = function(e) TRUE)
   
-  print_and_store_result("validate_inputs: Valid input", valid_test)
-  print_and_store_result("validate_inputs: Invalid data", invalid_data)
-  print_and_store_result("validate_inputs: Invalid target", invalid_target)
-  print_and_store_result("validate_inputs: Invalid task", invalid_task)
-  print_and_store_result("validate_inputs: Invalid train_ratio", invalid_train_ratio)
-  print_and_store_result("validate_inputs: Invalid nfolds", invalid_nfolds)
+  print_and_store_result("validate_inputs: valid input", valid_test)
+  print_and_store_result("validate_inputs: invalid data", invalid_data)
+  print_and_store_result("validate_inputs: invalid target", invalid_target)
+  print_and_store_result("validate_inputs: invalid task", invalid_task)
+  print_and_store_result("validate_inputs: invalid train_ratio", invalid_train_ratio)
+  print_and_store_result("validate_inputs: invalid nfolds", invalid_nfolds)
+  invisible(TRUE)
 }
 
-# Test for split_data
+#' Test: split_data
+#'
+#' Validates split sizes and partition integrity.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_split_data <- function() {
-  splits <- split_data(iris, "Species", 0.7, seed = 123)
+  splits <- split_data(iris, "Species", 0.7, seed = 123, task = "classification")
   train_set <- splits$train_set
-  test_set <- splits$test_set
+  test_set  <- splits$test_set
   correct_split <- (nrow(train_set) == round(0.7 * nrow(iris))) &&
     (nrow(test_set) == nrow(iris) - nrow(train_set))
-  print_and_store_result("split_data: Correct split", correct_split)
+  print_and_store_result("split_data: correct split sizes", correct_split)
+  invisible(TRUE)
 }
 
-# Test for perform_feature_selection
+#' Test: perform_feature_selection
+#'
+#' Checks that known informative \code{iris} predictors are selected.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_perform_feature_selection <- function() {
-  selected_features <- perform_feature_selection(iris, "Species", seed = 123)
-  # In iris, Petal.Length and Petal.Width are typically important
-  expected_features <- c("Petal.Length", "Petal.Width")
-  correct_features <- all(expected_features %in% selected_features)
-  print_and_store_result("perform_feature_selection: Correct features", correct_features)
+  selected <- tryCatch({
+    perform_feature_selection(iris, "Species", seed = 123, rfe_folds = 5)
+  }, error = function(e) character())
+  
+  expected <- c("Petal.Length", "Petal.Width")
+  correct <- length(selected) > 0 && all(expected %in% selected)
+  msg <- if (!length(selected)) "No features selected" else paste("Selected:", paste(head(selected, 10), collapse = ", "))
+  print_and_store_result("perform_feature_selection: expected features present", correct, msg)
+  invisible(TRUE)
 }
 
-# Test for handle_class_imbalance
+#' Test: handle_class_imbalance
+#'
+#' Ensures up-sampling balances class counts.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_handle_class_imbalance <- function() {
-  balanced_data <- handle_class_imbalance(iris, "Species")
-  counts <- table(balanced_data$Species)
-  correct_balance <- length(unique(counts)) == 1
-  print_and_store_result("handle_class_imbalance: Correct balance", correct_balance)
+  iris2 <- iris
+  iris2$Species <- as.factor(iris2$Species)
+  balanced <- handle_class_imbalance(iris2, "Species")
+  counts <- table(balanced$Species)
+  correct <- length(unique(counts)) == 1
+  print_and_store_result("handle_class_imbalance: balanced classes", correct, paste("Counts:", paste(counts, collapse = ", ")))
+  invisible(TRUE)
 }
 
-# Test for default_tune_grid
+#' Test: default_tune_grid
+#'
+#' Validates default grids for supported kernels.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_default_tune_grid <- function() {
-  grid_class <- default_tune_grid("classification", "linear")
-  grid_reg <- default_tune_grid("regression", "radial")
-  correct_class_grid <- all(names(grid_class) == "C")
-  correct_reg_grid <- all(names(grid_reg) %in% c("C", "sigma"))
-  print_and_store_result("default_tune_grid: Classification grid", correct_class_grid)
-  print_and_store_result("default_tune_grid: Regression grid", correct_reg_grid)
+  g_lin  <- default_tune_grid("linear")
+  g_rad  <- default_tune_grid("radial")
+  g_poly <- default_tune_grid("polynomial")
+  
+  ok_lin  <- identical(sort(names(g_lin)),  c("C"))
+  ok_rad  <- identical(sort(names(g_rad)),  sort(c("C", "sigma")))
+  ok_poly <- identical(sort(names(g_poly)), sort(c("C", "degree", "scale")))
+  
+  print_and_store_result("default_tune_grid: linear", ok_lin)
+  print_and_store_result("default_tune_grid: radial", ok_rad)
+  print_and_store_result("default_tune_grid: polynomial", ok_poly)
+  invisible(TRUE)
 }
 
-# Test for calculate_performance
+#' Test: calculate_performance
+#'
+#' Verifies structures for classification and regression metrics.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_calculate_performance <- function() {
   set.seed(123)
-  # Classification test
-  actuals <- factor(sample(c("A", "B"), 100, replace = TRUE))
-  predictions <- factor(sample(c("A", "B"), 100, replace = TRUE), levels = levels(actuals))
-  class_perf <- calculate_performance(predictions, actuals, "classification")
-  correct_class_perf <- inherits(class_perf, "confusionMatrix")
+  # Classification
+  actuals_c <- factor(sample(c("A", "B"), 120, replace = TRUE))
+  preds_c   <- factor(sample(c("A", "B"), 120, replace = TRUE), levels = levels(actuals_c))
+  perf_c    <- calculate_performance(preds_c, actuals_c, "classification")
+  ok_c      <- inherits(perf_c, "confusionMatrix")
   
-  # Regression test
-  actuals_reg <- rnorm(100)
-  predictions_reg <- rnorm(100)
-  reg_perf <- calculate_performance(predictions_reg, actuals_reg, "regression")
-  correct_reg_perf <- all(c("R_squared", "RMSE", "MAE") %in% names(reg_perf))
+  # Regression
+  actuals_r <- rnorm(120)
+  preds_r   <- rnorm(120)
+  perf_r    <- calculate_performance(preds_r, actuals_r, "regression")
+  ok_r      <- is.numeric(perf_r) && all(c("RMSE", "Rsquared", "MAE") %in% names(perf_r))
   
-  print_and_store_result("calculate_performance: Classification metrics", correct_class_perf)
-  print_and_store_result("calculate_performance: Regression metrics", correct_reg_perf)
+  print_and_store_result("calculate_performance: classification object", ok_c)
+  print_and_store_result("calculate_performance: regression metrics", ok_r,
+                         paste0("Metrics: RMSE=", round(perf_r["RMSE"], 3),
+                                ", R2=", round(perf_r["Rsquared"], 3),
+                                ", MAE=", round(perf_r["MAE"], 3)))
+  invisible(TRUE)
 }
 
-# Test for parallel processing functions
+#' Test: setup_parallel_processing / stop_parallel_processing
+#'
+#' Confirms cluster creation and cleanup behavior.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_parallel_processing <- function() {
   cl <- setup_parallel_processing()
-  correct_setup <- inherits(cl, "cluster")
+  ok_setup <- inherits(cl, "cluster")
   stop_parallel_processing(cl)
   
-  # Trying to use the cluster after stopping should error
-  correct_stop <- tryCatch({
+  ok_stop <- tryCatch({
     parallel::parLapply(cl, 1:2, function(x) x)
     FALSE
   }, error = function(e) TRUE)
   
-  print_and_store_result("setup_parallel_processing: Setup", correct_setup)
-  print_and_store_result("stop_parallel_processing: Stop", correct_stop)
+  print_and_store_result("parallel: setup cluster", ok_setup)
+  print_and_store_result("parallel: stop cluster", ok_stop)
+  invisible(TRUE)
 }
 
-# Test for fs_svm
+#' Test: fs_svm End-to-End (with debugging)
+#'
+#' Runs classification and regression examples; on error, prints diagnostics.
+#'
+#' @return Invisibly returns \code{TRUE}.
+#' @export
 test_fs_svm <- function() {
-  # Classification Example
+  debug_dump <- function(tag, err_msg, kernel, task, grid = NULL, preproc = NULL) {
+    grid_head <- tryCatch(capture.output(print(utils::head(grid))), error = function(e) "NA")
+    sess <- tryCatch({
+      si <- sessionInfo()
+      paste0("R ", getRversion(), " | ",
+             paste0(c(names(si$basePkgs), names(si$otherPkgs)), collapse = ", "))
+    }, error = function(e) "sessionInfo() unavailable")
+    paste0(
+      "[", tag, "] ", err_msg, "\n",
+      "task=", task, " | kernel=", kernel, "\n",
+      "preProcess=", if (is.null(preproc)) "NULL" else paste(preproc, collapse = ","), "\n",
+      "tuneGrid(head)=\n", paste(grid_head, collapse = "\n"), "\n",
+      "session=", sess
+    )
+  }
+  
+  # Classification
+  class_err <- NULL
   class_out <- tryCatch({
     fs_svm(
       data = iris,
@@ -148,13 +273,25 @@ test_fs_svm <- function() {
       class_imbalance = TRUE,
       kernel = "radial"
     )
-  }, error = function(e) NULL)
+  }, error = function(e) { 
+    dbg <- debug_dump(
+      tag = "classification",
+      err_msg = conditionMessage(e),
+      kernel = "radial",
+      task = "classification",
+      grid = try(default_tune_grid("radial"), silent = TRUE),
+      preproc = c("center","scale")
+    )
+    class_err <<- dbg
+    NULL
+  })
   
-  correct_class <- !is.null(class_out) &&
+  ok_class <- !is.null(class_out) &&
     all(c("model", "test_set", "predictions", "performance") %in% names(class_out))
-  print_and_store_result("fs_svm: Classification output", correct_class)
+  print_and_store_result("fs_svm: classification pipeline", ok_class, ifelse(is.null(class_err), "", class_err))
   
-  # Regression Example
+  # Regression
+  reg_err <- NULL
   reg_out <- tryCatch({
     fs_svm(
       data = mtcars,
@@ -166,21 +303,68 @@ test_fs_svm <- function() {
       feature_select = TRUE,
       kernel = "linear"
     )
-  }, error = function(e) NULL)
+  }, error = function(e) { 
+    dbg <- debug_dump(
+      tag = "regression",
+      err_msg = conditionMessage(e),
+      kernel = "linear",
+      task = "regression",
+      grid = try(default_tune_grid("linear"), silent = TRUE),
+      preproc = c("center","scale")
+    )
+    reg_err <<- dbg
+    NULL
+  })
   
-  correct_reg <- !is.null(reg_out) &&
+  ok_reg <- !is.null(reg_out) &&
     all(c("model", "test_set", "predictions", "performance") %in% names(reg_out))
-  print_and_store_result("fs_svm: Regression output", correct_reg)
+  print_and_store_result("fs_svm: regression pipeline", ok_reg, ifelse(is.null(reg_err), "", reg_err))
+  invisible(TRUE)
 }
+
+###############################################################################
+# Parallel Backend Helpers
+###############################################################################
+
+#' Start Parallel Backend
+#'
+#' Uses \code{detectCores() - 1} workers (minimum 1).
+#'
+#' @return A cluster object.
+#' @export
+setup_parallel_processing <- function() {
+  cores <- max(parallel::detectCores() - 1, 1)
+  cl <- parallel::makeCluster(cores)
+  doParallel::registerDoParallel(cl)
+  cl
+}
+
+#' Stop Parallel Backend
+#'
+#' @param cl A cluster object returned by \code{setup_parallel_processing()}.
+#' @export
+stop_parallel_processing <- function(cl) {
+  if (!is.null(cl)) {
+    parallel::stopCluster(cl)
+    foreach::registerDoSEQ()
+    doParallel::stopImplicitCluster()
+  }
+}
+
+###############################################################################
+# Runner
+###############################################################################
 
 #' Run All Tests
 #'
-#' Executes all test functions and prints a summary.
+#' Executes the full test suite and prints a summary and detailed results.
 #'
+#' @return Invisibly returns the test results data frame.
 #' @export
 run_all_tests <- function() {
+  init_test_results()
   cat("Running Comprehensive Unit and Acceptance Tests\n")
-  cat("====================================================\n")
+  cat("========================================================\n")
   test_validate_inputs()
   test_split_data()
   test_perform_feature_selection()
@@ -189,13 +373,15 @@ run_all_tests <- function() {
   test_calculate_performance()
   test_parallel_processing()
   test_fs_svm()
-  cat("====================================================\n")
+  cat("========================================================\n")
   cat("UAT Completed\n\n")
+  res <- get_test_results()
   cat("Test Summary:\n")
-  print(table(test_results$Result))
+  print(table(res$Result))
   cat("\nDetailed Results:\n")
-  print(test_results)
+  print(res)
+  invisible(res)
 }
 
-# Run tests
+# To execute the suite:
 # run_all_tests()

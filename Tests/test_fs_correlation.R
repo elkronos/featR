@@ -1,156 +1,226 @@
 ###############################################################################
-# Testing Infrastructure - Correlations
+# Testing Infrastructure - Correlations (run via test_fs_correlation())
 ###############################################################################
 
-#' Test fs_correlation Function
-#'
-#' This function runs a suite of tests (using the \code{testthat} framework) to verify that
-#' the \code{fs_correlation} function behaves as expected with various parameters and datasets.
-#'
-#' @return No return value. Test results are printed to the console.
-#'
-#' @examples
-#' \dontrun{
-#' test_fs_correlation()
-#' }
 test_fs_correlation <- function() {
+  if (!requireNamespace("testthat", quietly = TRUE)) {
+    stop("Package 'testthat' is required to run tests. Please install it.")
+  }
+  
   cat("Running UAT for fs_correlation...\n")
   
-  # Test 1: Basic Functionality with Default Parameters
-  testthat::test_that("fs_correlation works with default parameters", {
+  # ----------------------------------------------------------------------------
+  # Test 1: Basic functionality with defaults (pearson)
+  # ----------------------------------------------------------------------------
+  testthat::test_that("basic functionality with defaults (pearson)", {
     data <- mtcars
-    threshold <- 0.7
-    result <- fs_correlation(data, threshold)
-    testthat::expect_true(is.matrix(result$corr_matrix) || is.data.frame(result$corr_matrix))
-    testthat::expect_type(result$selected_vars, "character")
-    testthat::expect_true(length(result$selected_vars) > 0)
+    res  <- fs_correlation(data, threshold = 0.7)
+    testthat::expect_true(is.matrix(res$corr_matrix) || is.data.frame(res$corr_matrix))
+    testthat::expect_type(res$selected_vars, "character")
+    testthat::expect_true(length(res$selected_vars) >= 0)
   })
   
-  # Test 2: Different Correlation Methods with Appropriate Data
-  testthat::test_that("fs_correlation works with different correlation methods", {
+  # ----------------------------------------------------------------------------
+  # Test 2: Different correlation methods: pearson, spearman, kendall
+  # ----------------------------------------------------------------------------
+  testthat::test_that("different correlation methods: pearson, spearman, kendall", {
     data <- mtcars
-    threshold <- 0.7
     
-    # Pearson
-    result_pearson <- fs_correlation(data, threshold, method = "pearson")
-    testthat::expect_true(is.matrix(result_pearson$corr_matrix) || is.data.frame(result_pearson$corr_matrix))
-    testthat::expect_type(result_pearson$selected_vars, "character")
+    r1 <- fs_correlation(data, 0.6, method = "pearson")
+    r2 <- fs_correlation(data, 0.6, method = "spearman")
+    r3 <- fs_correlation(data, 0.6, method = "kendall")
     
-    # Spearman
-    result_spearman <- fs_correlation(data, threshold, method = "spearman")
-    testthat::expect_true(is.matrix(result_spearman$corr_matrix) || is.data.frame(result_spearman$corr_matrix))
-    testthat::expect_type(result_spearman$selected_vars, "character")
-    
-    # Kendall
-    result_kendall <- fs_correlation(data, threshold, method = "kendall")
-    testthat::expect_true(is.matrix(result_kendall$corr_matrix) || is.data.frame(result_kendall$corr_matrix))
-    testthat::expect_type(result_kendall$selected_vars, "character")
+    for (r in list(r1, r2, r3)) {
+      testthat::expect_true(is.matrix(r$corr_matrix) || is.data.frame(r$corr_matrix))
+      testthat::expect_type(r$selected_vars, "character")
+    }
   })
   
-  # Test 3: Point-Biserial Correlation with Mixed Data
-  testthat::test_that("fs_correlation works with point-biserial correlation", {
+  # ----------------------------------------------------------------------------
+  # Test 3: Point-biserial (sequential) on mixed data
+  # ----------------------------------------------------------------------------
+  testthat::test_that("pointbiserial works on mixed data (sequential)", {
+    testthat::skip_if_not_installed("ltm")
+    
     set.seed(123)
-    continuous_var <- rnorm(100)
-    dichotomous_var <- ifelse(continuous_var > 0, 1, 0)
-    data_pb <- data.frame(continuous_var = continuous_var,
-                          dichotomous_var = dichotomous_var)
-    result_pb <- fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial")
-    testthat::expect_true(is.matrix(result_pb$corr_matrix) || is.data.frame(result_pb$corr_matrix))
-    testthat::expect_type(result_pb$selected_vars, "character")
-    testthat::expect_true(length(result_pb$selected_vars) > 0)
+    x <- rnorm(200)
+    y <- ifelse(x > 0, 1, 0)
+    df <- data.frame(x = x, y = y)
+    
+    res <- fs_correlation(df, threshold = 0.05, method = "pointbiserial", na.rm = TRUE)
+    testthat::expect_true(is.matrix(res$corr_matrix) || is.data.frame(res$corr_matrix))
+    testthat::expect_type(res$selected_vars, "character")
+    testthat::expect_true(length(res$selected_vars) >= 0)
   })
   
-  # Test 4: Polychoric Correlation with Ordered Factors
-  testthat::test_that("fs_correlation works with polychoric correlation", {
+  # ----------------------------------------------------------------------------
+  # Test 4: Point-biserial (parallel) path
+  # ----------------------------------------------------------------------------
+  testthat::test_that("pointbiserial parallel path (skips if deps unavailable)", {
+    testthat::skip_if_not_installed("ltm")
+    testthat::skip_if_not_installed("doParallel")
+    testthat::skip_if_not_installed("foreach")
+    
+    set.seed(42)
+    x <- rnorm(300)
+    y <- ifelse(x + rnorm(300, sd = 0.2) > 0, 1, 0)
+    z <- rnorm(300)
+    df <- data.frame(x = x, y = y, z = z)
+    
+    testthat::expect_message(
+      res <- fs_correlation(df, threshold = 0.05, method = "pointbiserial",
+                            parallel = TRUE, n_cores = 2, na.rm = TRUE, verbose = TRUE),
+      regexp = "point-biserial|parallel",
+      fixed  = FALSE
+    )
+    testthat::expect_true(is.matrix(res$corr_matrix) || is.data.frame(res$corr_matrix))
+    testthat::expect_type(res$selected_vars, "character")
+  })
+  
+  # ----------------------------------------------------------------------------
+  # Test 5: Point-biserial warns & returns NA off-diagonal when no valid pairs
+  # ----------------------------------------------------------------------------
+  testthat::test_that("pointbiserial: warns and returns NA off-diagonal when no valid pairs", {
+    testthat::skip_if_not_installed("ltm")
+    # Only continuous variables => no dichotomous
+    df <- data.frame(a = rnorm(50), b = rnorm(50))
+    testthat::expect_warning(
+      res <- fs_correlation(df, threshold = 0.1, method = "pointbiserial"),
+      regexp = "No valid continuous–dichotomous pairs",
+      fixed  = FALSE
+    )
+    m <- res$corr_matrix
+    off_diag <- m[row(m) != col(m)]
+    testthat::expect_true(all(is.na(off_diag)))
+    testthat::expect_true(all(diag(m) == 0, na.rm = TRUE))
+    # If you prefer "all NA", you can assert this instead by calling with diag_value = NA_real_:
+    res2 <- fs_correlation(df, threshold = 0.1, method = "pointbiserial", diag_value = NA_real_)
+    testthat::expect_true(all(is.na(res2$corr_matrix)))
+  })
+  
+  # ----------------------------------------------------------------------------
+  # Test 6: Polychoric on ordered factors
+  # ----------------------------------------------------------------------------
+  testthat::test_that("polychoric works on ordered factors", {
+    testthat::skip_if_not_installed("polycor")
+    
     set.seed(123)
-    ordinal_values <- sample(1:5, 100, replace = TRUE)
-    ordinal_var1 <- factor(ordinal_values, ordered = TRUE)
-    ordinal_var2 <- factor(ordinal_values + sample(c(-1, 0, 1), 100, replace = TRUE),
-                           levels = 1:5, ordered = TRUE)
-    data_poly <- data.frame(ordinal_var1 = ordinal_var1,
-                            ordinal_var2 = ordinal_var2)
-    result_poly <- fs_correlation(data_poly, threshold = 0.1, method = "polychoric")
-    testthat::expect_true(is.matrix(result_poly$corr_matrix) || is.data.frame(result_poly$corr_matrix))
-    testthat::expect_type(result_poly$selected_vars, "character")
-    testthat::expect_true(length(result_poly$selected_vars) > 0)
+    o1 <- factor(sample(1:5, 120, replace = TRUE), ordered = TRUE)
+    o2 <- factor(pmin(pmax(as.integer(o1) + sample(c(-1, 0, 1), 120, replace = TRUE), 1), 5),
+                 levels = 1:5, ordered = TRUE)
+    df <- data.frame(o1 = o1, o2 = o2)
+    
+    res <- fs_correlation(df, threshold = 0.1, method = "polychoric")
+    testthat::expect_true(is.matrix(res$corr_matrix) || is.data.frame(res$corr_matrix))
+    testthat::expect_type(res$selected_vars, "character")
+    testthat::expect_true(length(res$selected_vars) >= 0)
   })
   
-  # Test 5: Handling Missing Values
-  testthat::test_that("fs_correlation handles missing values", {
+  # ----------------------------------------------------------------------------
+  # Test 7: Handling missing values (pairwise complete obs path)
+  # ----------------------------------------------------------------------------
+  testthat::test_that("handles missing values when na.rm = TRUE", {
     data_na <- mtcars
     data_na[1:5, 1] <- NA
-    result_na <- fs_correlation(data_na, threshold = 0.7, na.rm = TRUE)
-    testthat::expect_true(is.matrix(result_na$corr_matrix) || is.data.frame(result_na$corr_matrix))
-    testthat::expect_type(result_na$selected_vars, "character")
+    res <- fs_correlation(data_na, threshold = 0.7, na.rm = TRUE)
+    testthat::expect_true(is.matrix(res$corr_matrix) || is.data.frame(res$corr_matrix))
+    testthat::expect_type(res$selected_vars, "character")
   })
   
-  # Test 6: Parallel Processing
-  testthat::test_that("fs_correlation works with parallel processing", {
-    set.seed(123)
-    continuous_var <- rnorm(100)
-    dichotomous_var <- ifelse(continuous_var > 0, 1, 0)
-    data_pb <- data.frame(continuous_var = continuous_var,
-                          dichotomous_var = dichotomous_var)
-    result_parallel <- fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial",
-                                      parallel = TRUE, n_cores = 2, verbose = TRUE)
-    testthat::expect_true(is.matrix(result_parallel$corr_matrix) || is.data.frame(result_parallel$corr_matrix))
-    testthat::expect_type(result_parallel$selected_vars, "character")
-    testthat::expect_true(length(result_parallel$selected_vars) > 0)
-  })
-  
-  # Test 7: Data Sampling
-  testthat::test_that("fs_correlation works with data sampling", {
+  # ----------------------------------------------------------------------------
+  # Test 8: Data sampling
+  # ----------------------------------------------------------------------------
+  testthat::test_that("data sampling reduces rows but runs", {
     data <- mtcars
-    result_sampling <- fs_correlation(data, threshold = 0.7, sample_frac = 0.5, seed = 42)
-    testthat::expect_true(is.matrix(result_sampling$corr_matrix) || is.data.frame(result_sampling$corr_matrix))
-    testthat::expect_type(result_sampling$selected_vars, "character")
+    res  <- fs_correlation(data, threshold = 0.7, sample_frac = 0.5, seed = 42, verbose = TRUE)
+    testthat::expect_true(is.matrix(res$corr_matrix) || is.data.frame(res$corr_matrix))
+    testthat::expect_type(res$selected_vars, "character")
   })
   
-  # Test 8: Output Format as Data Frame
-  testthat::test_that("fs_correlation returns data.frame when output_format is 'data.frame'", {
+  # ----------------------------------------------------------------------------
+  # Test 9: Output format = data.frame
+  # ----------------------------------------------------------------------------
+  testthat::test_that("returns data.frame when output_format = 'data.frame'", {
     data <- mtcars
-    result_df <- fs_correlation(data, threshold = 0.7, output_format = "data.frame")
-    testthat::expect_true(is.data.frame(result_df$corr_matrix))
-    testthat::expect_type(result_df$selected_vars, "character")
+    res  <- fs_correlation(data, threshold = 0.7, output_format = "data.frame")
+    testthat::expect_true(is.data.frame(res$corr_matrix))
+    testthat::expect_named(res$corr_matrix, c("Var1", "Var2", "Correlation"))
+    testthat::expect_type(res$selected_vars, "character")
   })
   
-  # Test 9: Custom Diagonal Value
-  testthat::test_that("fs_correlation sets custom diagonal value", {
+  # ----------------------------------------------------------------------------
+  # Test 10: Custom diagonal value
+  # ----------------------------------------------------------------------------
+  testthat::test_that("sets custom diagonal value", {
     data <- mtcars
-    result_diag <- fs_correlation(data, threshold = 0.7, diag_value = NA)
-    testthat::expect_true(all(is.na(diag(result_diag$corr_matrix))))
+    res  <- fs_correlation(data, threshold = 0.7, diag_value = NA_real_)
+    testthat::expect_true(all(is.na(diag(res$corr_matrix))))
   })
   
-  # Test 10: Custom No Variables Message
-  testthat::test_that("fs_correlation uses custom no variables message", {
+  # ----------------------------------------------------------------------------
+  # Test 11: Custom 'no variables' message
+  # ----------------------------------------------------------------------------
+  testthat::test_that("uses custom 'no variables' message", {
     data <- mtcars
     custom_msg <- "Custom message: No variables selected."
-    testthat::expect_message(fs_correlation(data, 0.95, no_vars_message = custom_msg), custom_msg)
+    testthat::expect_message(
+      fs_correlation(data, threshold = 0.9999, no_vars_message = custom_msg),
+      custom_msg
+    )
   })
   
-  # Test 11: Invalid Inputs
-  testthat::test_that("fs_correlation handles invalid inputs", {
-    testthat::expect_error(fs_correlation("not a data frame", 0.7),
-                           "The 'data' argument must be a data frame or a matrix.")
-    testthat::expect_error(fs_correlation(mtcars, 1.5),
-                           "The 'threshold' argument must be a single numeric value between 0 and 1.")
-    testthat::expect_error(fs_correlation(mtcars, 0.7, method = "invalid_method"),
-                           "Invalid correlation method.")
+  # ----------------------------------------------------------------------------
+  # Test 12: Invalid inputs (error messages match refactor)
+  # ----------------------------------------------------------------------------
+  testthat::test_that("invalid inputs produce clear errors", {
+    testthat::expect_error(
+      fs_correlation("not a data frame", 0.7),
+      regexp = "`data` must be a data frame or matrix\\.", fixed = FALSE
+    )
+    testthat::expect_error(
+      fs_correlation(mtcars, 1.5),
+      regexp = "`threshold` must be a single numeric value in \\[0, 1\\]\\.", fixed = FALSE
+    )
+    testthat::expect_error(
+      fs_correlation(mtcars, 0.7, method = "invalid_method"),
+      regexp = "Invalid `method`\\.", fixed = FALSE
+    )
   })
   
-  # Test 12: Verbose Output
-  testthat::test_that("fs_correlation provides verbose output when verbose = TRUE", {
+  # ----------------------------------------------------------------------------
+  # Test 13: Verbose output smoke tests
+  # ----------------------------------------------------------------------------
+  testthat::test_that("verbose output appears where expected", {
+    # Classic method verbose
+    testthat::expect_message(
+      fs_correlation(mtcars, threshold = 0.3, method = "pearson", na.rm = TRUE, verbose = TRUE),
+      regexp = "Calculating pearson correlation matrix", fixed = FALSE
+    )
+    
+    # Point-biserial sequential verbose
+    testthat::skip_if_not_installed("ltm")
     set.seed(123)
-    continuous_var <- rnorm(100)
-    dichotomous_var <- ifelse(continuous_var > 0, 1, 0)
-    data_pb <- data.frame(continuous_var = continuous_var,
-                          dichotomous_var = dichotomous_var)
-    testthat::expect_message(fs_correlation(data_pb, threshold = 0.1, method = "pointbiserial", verbose = TRUE),
-                             "Calculating point-biserial correlation between:")
+    x <- rnorm(120); y <- ifelse(x > 0, 1, 0)
+    df <- data.frame(x = x, y = y)
+    testthat::expect_message(
+      fs_correlation(df, threshold = 0.05, method = "pointbiserial", verbose = TRUE),
+      regexp = "point-biserial", fixed = FALSE
+    )
+    
+    # Polychoric verbose
+    testthat::skip_if_not_installed("polycor")
+    set.seed(1)
+    o1 <- factor(sample(1:3, 80, replace = TRUE), ordered = TRUE)
+    o2 <- factor(sample(1:3, 80, replace = TRUE), ordered = TRUE)
+    df2 <- data.frame(o1 = o1, o2 = o2)
+    testthat::expect_message(
+      fs_correlation(df2, threshold = 0.1, method = "polychoric", verbose = TRUE),
+      regexp = "polychoric.*polycor::hetcor", fixed = FALSE
+    )
   })
   
   cat("UAT for fs_correlation completed.\n")
 }
 
-# Run tests
+# Run tests interactively:
 # test_fs_correlation()

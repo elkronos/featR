@@ -1,116 +1,124 @@
 # Install RSpectra if needed:
 # install.packages("RSpectra")
 
-library(memoise)
-library(RSpectra)
+suppressPackageStartupMessages({
+  library(memoise)
+  library(RSpectra)
+})
 
-#' Validate the Input Matrix
+###############################################################################
+# Debug utilities (toggle DEBUG to enable/disable)
+###############################################################################
+DEBUG <- FALSE  # <- set TRUE to see detailed logs
+
+ts_now <- function() format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+
+dbg <- function(..., .prefix = "[DEBUG]") {
+  if (isTRUE(DEBUG)) cat(sprintf("%s %s ", .prefix, ts_now()), sprintf(...), "\n")
+}
+
+###############################################################################
+# Core helpers
+###############################################################################
+
+#' Validate & Coerce the Input to a Numeric Matrix
 #'
-#' Ensures the input is a valid matrix without missing values.
+#' Accepts a matrix or data.frame and returns a numeric matrix without missing values.
 #'
-#' @param mat The input matrix.
-#' @return Returns TRUE if valid; otherwise, stops with an error.
-validate_matrix <- function(mat) {
-  if (!is.matrix(mat)) {
-    stop("Input must be a matrix.")
+#' @param x A matrix or data frame.
+#' @return A numeric matrix (no NAs).
+validate_and_coerce_matrix <- function(x) {
+  dbg("validate_and_coerce_matrix(): type=%s", paste(class(x), collapse=","))
+  if (is.data.frame(x)) {
+    non_num <- !vapply(x, is.numeric, logical(1))
+    if (any(non_num)) {
+      bad <- paste(names(x)[non_num], collapse=", ")
+      stop(sprintf("All columns in the data.frame must be numeric to convert to a matrix. Non-numeric: %s", bad))
+    }
+    x <- as.matrix(x)
+  } else if (!is.matrix(x)) {
+    stop("Input must be a matrix or a data.frame.")
   }
-  if (any(is.na(mat))) {
-    stop("Input matrix contains missing values.")
-  }
-  return(TRUE)
+  if (any(is.na(x))) stop("Input contains missing values (NAs).")
+  storage.mode(x) <- "double"
+  dbg("validate_and_coerce_matrix(): dim=[%d x %d], storage.mode=%s", nrow(x), ncol(x), storage.mode(x))
+  x
 }
 
 #' Scale the Matrix
 #'
-#' Scales the input matrix based on the specified option.
+#' Scales/centers the input matrix per the chosen option.
 #'
-#' @param mat The input matrix.
-#' @param scale_input Specifies the type of scaling:
-#'   \itemize{
-#'     \item \code{TRUE}: Centering and scaling.
-#'     \item \code{"center"}: Centering only.
-#'     \item \code{"scale"}: Scaling only.
-#'     \item \code{FALSE}: No scaling.
-#'   }
+#' @param mat Numeric matrix.
+#' @param scale_input TRUE (center & scale), "center", "scale", or FALSE.
 #' @param verbose Logical; if TRUE, prints a message about the scaling.
-#' @return The scaled matrix.
+#' @return The transformed matrix (same dimension as input).
 scale_matrix <- function(mat, scale_input = TRUE, verbose = FALSE) {
+  dbg("scale_matrix(): incoming dim=[%d x %d], scale_input=%s", nrow(mat), ncol(mat), deparse(substitute(scale_input)))
   if (isTRUE(scale_input)) {
     if (verbose) cat("Applying centering and scaling...\n")
     mat <- scale(mat, center = TRUE, scale = TRUE)
   } else if (is.character(scale_input)) {
-    if (scale_input == "center") {
+    if (identical(scale_input, "center")) {
       if (verbose) cat("Applying centering only...\n")
       mat <- scale(mat, center = TRUE, scale = FALSE)
-    } else if (scale_input == "scale") {
+    } else if (identical(scale_input, "scale")) {
       if (verbose) cat("Applying scaling only...\n")
       mat <- scale(mat, center = FALSE, scale = TRUE)
     } else {
-      stop("Invalid scale_input value. Valid options are TRUE, FALSE, 'center', or 'scale'.")
+      stop("Invalid 'scale_input'. Use TRUE, FALSE, 'center', or 'scale'.")
     }
   } else if (isFALSE(scale_input)) {
     if (verbose) cat("No scaling applied.\n")
-    ## Do nothing
+    # no-op
   } else {
-    stop("Invalid scale_input value. Valid options are TRUE, FALSE, 'center', or 'scale'.")
+    stop("Invalid 'scale_input'. Use TRUE, FALSE, 'center', or 'scale'.")
   }
-  return(mat)
+  dbg("scale_matrix(): outgoing dim=[%d x %d]", nrow(mat), ncol(mat))
+  mat
 }
 
 #' Truncate SVD Results
 #'
-#' Truncates the SVD output to the desired number of singular values/vectors.
-#'
-#' @param svd_result A list containing components \code{u}, \code{d}, and \code{v}.
-#' @param n_keep The number of singular values/vectors to keep.
-#' @return A list with truncated \code{singular_values}, \code{left_singular_vectors}, and \code{right_singular_vectors}.
-truncate_svd <- function(svd_result, n_keep) {
-  if (!is.numeric(n_keep) || n_keep <= 0 || n_keep %% 1 != 0) {
-    stop("n_singular_values must be a positive integer.")
+#' @param svd_result A list with components u, d, v (as in base::svd()).
+#' @param n_singular_values Positive integer number of singular values/vectors to keep.
+#' @return A list with singular_values, left_singular_vectors, right_singular_vectors.
+truncate_svd <- function(svd_result, n_singular_values) {
+  dbg("truncate_svd(): requested n=%s, available=%d",
+      as.character(n_singular_values), length(svd_result$d))
+  if (!is.numeric(n_singular_values) || n_singular_values <= 0 || n_singular_values %% 1 != 0) {
+    stop("'n_singular_values' must be a positive integer.")
   }
-  if (n_keep > length(svd_result$d)) {
-    stop("n_singular_values exceeds the available singular values.")
+  if (n_singular_values > length(svd_result$d)) {
+    stop("'n_singular_values' exceeds the available singular values.")
   }
-  
-  return(list(
-    singular_values = svd_result$d[1:n_keep],
-    left_singular_vectors = svd_result$u[, 1:n_keep, drop = FALSE],
-    right_singular_vectors = svd_result$v[, 1:n_keep, drop = FALSE]
-  ))
+  out <- list(
+    singular_values = svd_result$d[1:n_singular_values],
+    left_singular_vectors  = svd_result$u[, 1:n_singular_values, drop = FALSE],
+    right_singular_vectors = svd_result$v[, 1:n_singular_values, drop = FALSE]
+  )
+  dbg("truncate_svd(): U=[%d x %d], V=[%d x %d]",
+      nrow(out$left_singular_vectors), ncol(out$left_singular_vectors),
+      nrow(out$right_singular_vectors), ncol(out$right_singular_vectors))
+  out
 }
 
-#' Perform Singular Value Decomposition (SVD) on a Matrix Internally
+###############################################################################
+# SVD engine
+###############################################################################
+
+#' Internal: Perform SVD
 #'
-#' This internal function computes the SVD of a matrix with options for scaling,
-#' truncating the number of components, and using an approximate SVD
-#' algorithm for large matrices.
+#' Computes exact or approximate SVD with optional scaling and truncation.
 #'
-#' @param matrix_data The input matrix.
-#' @param scale_input Specifies the type of scaling; valid options are:
-#'   \itemize{
-#'     \item \code{TRUE} (default): Centering and scaling.
-#'     \item \code{"center"}: Centering only.
-#'     \item \code{"scale"}: Scaling only.
-#'     \item \code{FALSE}: No scaling.
-#'   }
-#' @param n_singular_values An integer indicating the number of singular values to keep.
-#'   Default is \code{min(dim(matrix_data))}.
-#' @param svd_method SVD computation method. Options:
-#'   \itemize{
-#'     \item \code{"auto"} (default): Automatically choose between exact and approximate SVD.
-#'     \item \code{"exact"}: Use base R's \code{svd} function.
-#'     \item \code{"approx"}: Use \code{RSpectra::svds} for approximate SVD.
-#'   }
-#' @param svd_threshold A numeric value; if the smallest dimension of the matrix exceeds this threshold,
-#'   approximate SVD will be considered when \code{svd_method} is "auto". Default is 100.
-#' @param approx_args A list of additional arguments to pass to \code{RSpectra::svds} when using approximate SVD.
-#' @param verbose Logical; if TRUE, prints informative messages during computation.
-#' @return A named list containing:
-#'   \itemize{
-#'     \item \code{singular_values} - The singular values.
-#'     \item \code{left_singular_vectors} - The left singular vectors.
-#'     \item \code{right_singular_vectors} - The right singular vectors.
-#'   }
+#' @param matrix_data Numeric matrix or numeric data.frame.
+#' @param scale_input TRUE, FALSE, "center", or "scale".
+#' @param n_singular_values Integer; default min(dim(matrix_data)).
+#' @param svd_method "auto", "exact", or "approx".
+#' @param svd_threshold If min(nrow, ncol) > threshold and svd_method=="auto", use "approx".
+#' @param approx_args List of extra args for RSpectra::svds (e.g., tol=..., opts=list(...)).
+#' @param verbose Logical; emit progress messages if TRUE.
+#' @return List with singular_values, left_singular_vectors, right_singular_vectors.
 perform_svd_internal <- function(matrix_data,
                                  scale_input = TRUE,
                                  n_singular_values = min(dim(matrix_data)),
@@ -118,121 +126,132 @@ perform_svd_internal <- function(matrix_data,
                                  svd_threshold = 100,
                                  approx_args = list(),
                                  verbose = FALSE) {
-  # Validate the matrix input.
-  validate_matrix(matrix_data)
+  dbg("perform_svd_internal(): START")
   
-  # Apply scaling.
-  matrix_scaled <- scale_matrix(matrix_data, scale_input, verbose = verbose)
+  # Validate & coerce
+  X <- validate_and_coerce_matrix(matrix_data)
   
-  # Decide on SVD method.
+  # n_singular_values default/repair
+  if (is.null(n_singular_values) || !is.numeric(n_singular_values) || n_singular_values <= 0) {
+    dbg("n_singular_values invalid (%s) -> reset to min(dim(X))", as.character(n_singular_values))
+    n_singular_values <- min(dim(X))
+  }
+  n_singular_values <- as.integer(n_singular_values)
+  dbg("n_singular_values=%d, X dim=[%d x %d]", n_singular_values, nrow(X), ncol(X))
+  
+  # Apply scaling if requested
+  Xs <- scale_matrix(X, scale_input, verbose = verbose)
+  dbg("After scaling: dim(Xs)=[%d x %d]", nrow(Xs), ncol(Xs))
+  
+  # Choose method
   svd_method <- match.arg(svd_method)
-  n_keep <- n_singular_values
+  if (identical(svd_method, "auto")) {
+    svd_method <- if (min(dim(Xs)) > svd_threshold) "approx" else "exact"
+    if (verbose) cat(sprintf("Auto-selected SVD method: %s\n", svd_method))
+  }
+  dbg("SVD method selected: %s (threshold=%d, min_dim=%d)", svd_method, as.integer(svd_threshold), min(dim(Xs)))
   
-  if (svd_method == "auto") {
-    if (min(dim(matrix_scaled)) > svd_threshold) {
-      if (verbose) cat("Matrix dimensions exceed threshold; switching to approximate SVD.\n")
-      svd_method <- "approx"
-    } else {
-      svd_method <- "exact"
-    }
+  # Compute SVD
+  if (identical(svd_method, "exact")) {
+    if (verbose) cat("Computing exact SVD via base::svd()...\n")
+    s <- svd(Xs)
+    dbg("Exact SVD done: length(d)=%d, U=[%d x %d], V=[%d x %d]",
+        length(s$d), nrow(s$u), ncol(s$u), nrow(s$v), ncol(s$v))
+    res <- truncate_svd(s, min(n_singular_values, length(s$d)))
+    dbg("perform_svd_internal(): END (exact)")
+    return(res)
   }
   
-  # Compute SVD based on chosen method.
-  if (svd_method == "exact") {
-    if (verbose) cat("Computing exact SVD using base::svd...\n")
-    svd_result <- svd(matrix_scaled)
-  } else if (svd_method == "approx") {
-    if (n_keep >= min(dim(matrix_scaled))) {
-      if (verbose) cat("Requested n_singular_values is too high for approximate SVD; falling back to exact SVD.\n")
-      svd_result <- svd(matrix_scaled)
-    } else {
-      if (verbose) cat("Computing approximate SVD using RSpectra::svds...\n")
-      # RSpectra::svds expects the matrix to be provided as 'A'
-      args_list <- c(list(A = matrix_scaled, k = n_keep), approx_args)
-      svd_result <- do.call(RSpectra::svds, args_list)
-      
-      # Ensure the singular values and vectors are sorted in decreasing order.
-      ord <- order(svd_result$d, decreasing = TRUE)
-      svd_result$u <- svd_result$u[, ord, drop = FALSE]
-      svd_result$d <- svd_result$d[ord]
-      svd_result$v <- svd_result$v[, ord, drop = FALSE]
-      
-      # Return the approximate result immediately.
-      return(list(
-        singular_values = svd_result$d,
-        left_singular_vectors = svd_result$u,
-        right_singular_vectors = svd_result$v
-      ))
+  if (identical(svd_method, "approx")) {
+    k <- n_singular_values
+    if (k >= min(dim(Xs))) {
+      if (verbose) cat("Requested components >= min(dim); falling back to exact SVD.\n")
+      dbg("Approx requested with k=%d >= min_dim=%d -> fallback to exact", k, min(dim(Xs)))
+      s <- svd(Xs)
+      res <- truncate_svd(s, min(k, length(s$d)))
+      dbg("perform_svd_internal(): END (approx->exact fallback)")
+      return(res)
     }
-  } else {
-    stop("Unknown SVD method specified.")
+    if (verbose) cat("Computing approximate SVD via RSpectra::svds()...\n")
+    dbg("Calling RSpectra::svds() with k=%d and args: %s", k, paste(names(approx_args), collapse=","))
+    args_list <- c(list(A = Xs, k = k), approx_args)
+    s <- do.call(RSpectra::svds, args_list)
+    
+    # Ensure descending order
+    ord <- order(s$d, decreasing = TRUE)
+    s$u <- s$u[, ord, drop = FALSE]
+    s$d <- s$d[ord]
+    s$v <- s$v[, ord, drop = FALSE]
+    dbg("Approx SVD done: length(d)=%d, U=[%d x %d], V=[%d x %d]",
+        length(s$d), nrow(s$u), ncol(s$u), nrow(s$v), ncol(s$v))
+    
+    res <- list(
+      singular_values = s$d,
+      left_singular_vectors  = s$u,
+      right_singular_vectors = s$v
+    )
+    dbg("perform_svd_internal(): END (approx)")
+    return(res)
   }
   
-  # Truncate the SVD output if needed.
-  return(truncate_svd(svd_result, n_keep))
+  stop("Unknown 'svd_method'.")
 }
+
+# Create a persistent memoised wrapper ONCE (so the cache isn't recreated every call).
+.perform_svd_internal_memo <- memoise(perform_svd_internal)
+
+###############################################################################
+# Public API
+###############################################################################
 
 #' Main Function: fs_svd
 #'
-#' This is the main SVD function that computes the singular value decomposition
-#' of a matrix with options for scaling, truncation, and approximate computations.
+#' Computes the SVD of a matrix with options for scaling, truncation,
+#' approximate computation, and optional memoisation of results.
 #'
-#' @param matrix_data The input matrix.
-#' @param scale_input Specifies the type of scaling; valid options are:
+#' @param matrix_data Matrix or data.frame (numeric).
+#' @param scale_input TRUE, FALSE, "center", or "scale".
+#' @param n_singular_values Integer; default min(dim(matrix_data)).
+#' @param svd_method "auto" (default), "exact", or "approx".
+#' @param svd_threshold Numeric; if min(dim) > threshold and auto, use approx (default 100).
+#' @param approx_args List of extra args for RSpectra::svds.
+#' @param verbose Logical; print progress messages.
+#' @param memoise_result Logical; if TRUE (default), use a persistent memoised wrapper.
+#' @return A list with:
 #'   \itemize{
-#'     \item \code{TRUE} (default): Centering and scaling.
-#'     \item \code{"center"}: Centering only.
-#'     \item \code{"scale"}: Scaling only.
-#'     \item \code{FALSE}: No scaling.
-#'   }
-#' @param n_singular_values An integer indicating the number of singular values to keep.
-#'   Default is \code{min(dim(matrix_data))}.
-#' @param svd_method SVD computation method. Options:
-#'   \itemize{
-#'     \item \code{"auto"} (default): Automatically choose between exact and approximate SVD.
-#'     \item \code{"exact"}: Use base R's \code{svd} function.
-#'     \item \code{"approx"}: Use \code{RSpectra::svds} for approximate SVD.
-#'   }
-#' @param svd_threshold A numeric value; if the smallest dimension of the matrix exceeds this threshold,
-#'   approximate SVD will be considered when \code{svd_method} is "auto". Default is 100.
-#' @param approx_args A list of additional arguments to pass to \code{RSpectra::svds} when using approximate SVD.
-#' @param verbose Logical; if TRUE, prints informative messages during computation.
-#' @param memoise_result Logical; if TRUE (default), the result is memoised.
-#' @return A named list containing:
-#'   \itemize{
-#'     \item \code{singular_values} - The singular values.
-#'     \item \code{left_singular_vectors} - The left singular vectors.
-#'     \item \code{right_singular_vectors} - The right singular vectors.
+#'     \item \code{singular_values}
+#'     \item \code{left_singular_vectors}
+#'     \item \code{right_singular_vectors}
 #'   }
 #' @examples
 #' set.seed(123)
 #' matrix_data <- matrix(rnorm(9), nrow = 3)
-#' result_list <- fs_svd(matrix_data, scale_input = TRUE, n_singular_values = 2)
-#' cat("Singular values: ", result_list$singular_values, "\n")
-#' print(result_list$left_singular_vectors)
-#' print(result_list$right_singular_vectors)
+#' res <- fs_svd(matrix_data, scale_input = TRUE, n_singular_values = 2)
+#' cat("Singular values:", res$singular_values, "\n")
+#' print(res$left_singular_vectors)
+#' print(res$right_singular_vectors)
 fs_svd <- function(matrix_data,
                    scale_input = TRUE,
-                   n_singular_values = min(dim(matrix_data)),
+                   n_singular_values = min(dim(as.matrix(matrix_data))),
                    svd_method = c("auto", "exact", "approx"),
                    svd_threshold = 100,
                    approx_args = list(),
                    verbose = FALSE,
                    memoise_result = TRUE) {
+  dbg("fs_svd(): memoise_result=%s", as.character(memoise_result))
+  fun <- if (isTRUE(memoise_result)) .perform_svd_internal_memo else perform_svd_internal
   
-  # Create a unique key based on the function arguments if needed.
-  internal_fun <- perform_svd_internal
-  if (memoise_result) {
-    internal_fun <- memoise(perform_svd_internal)
-  }
+  res <- fun(matrix_data = matrix_data,
+             scale_input = scale_input,
+             n_singular_values = n_singular_values,
+             svd_method = svd_method,
+             svd_threshold = svd_threshold,
+             approx_args = approx_args,
+             verbose = verbose)
   
-  # Call the (possibly memoised) internal function.
-  internal_fun(matrix_data = matrix_data,
-               scale_input = scale_input,
-               n_singular_values = n_singular_values,
-               svd_method = svd_method,
-               svd_threshold = svd_threshold,
-               approx_args = approx_args,
-               verbose = verbose)
+  dbg("fs_svd(): RETURN sv.len=%d, U=[%d x %d], V=[%d x %d]",
+      length(res$singular_values),
+      nrow(res$left_singular_vectors),  ncol(res$left_singular_vectors),
+      nrow(res$right_singular_vectors), ncol(res$right_singular_vectors))
+  res
 }
-

@@ -4,7 +4,7 @@
 #' Utilities to validate inputs, prepare predictors, fit a glmnet cv model
 #' (lasso / elastic net), and extract variable importance.
 #'
-#' Requires the packages: Matrix, glmnet, stats, parallel, doParallel
+#' Requires the packages: Matrix, glmnet, stats, parallel, doParallel, foreach
 #' -----------------------------------------------------------------------------
 
 #' Validate Input Parameters
@@ -30,6 +30,11 @@ validate_parameters <- function(x, y, alpha, nfolds, standardize,
   # x must be data.frame or matrix
   if (!inherits(x, c("data.frame", "matrix"))) {
     stop("Error: 'x' should be a data frame or matrix.")
+  }
+  
+  # x must have at least one column
+  if (NCOL(x) == 0L) {
+    stop("Error: 'x' must have at least one predictor (one column).")
   }
   
   # y must be numeric vector with length matching nrow(x)
@@ -78,11 +83,20 @@ validate_parameters <- function(x, y, alpha, nfolds, standardize,
     if (any(!is.finite(custom_folds))) {
       stop("Error: 'custom_folds' contains non-finite values.")
     }
-    if (any(custom_folds < 1 | custom_folds > nfolds)) {
-      stop("Error: 'custom_folds' contains invalid IDs (must be in 1..nfolds).")
+    if (any(custom_folds < 1)) {
+      stop("Error: 'custom_folds' contains invalid IDs (must be >= 1).")
     }
-    # optional: ensure every fold appears at least once
-    missing_folds <- setdiff(seq_len(nfolds), as.integer(unique(custom_folds)))
+    
+    # Allow arbitrary fold labels, but relate them to nfolds
+    unique_folds <- sort(unique(as.integer(custom_folds)))
+    if (length(unique_folds) > nfolds) {
+      stop("Error: 'custom_folds' defines more unique folds than 'nfolds'.")
+    }
+    if (max(unique_folds) > nfolds) {
+      stop("Error: 'custom_folds' contains fold IDs greater than 'nfolds'.")
+    }
+    
+    missing_folds <- setdiff(seq_len(nfolds), unique_folds)
     if (length(missing_folds) > 0) {
       warning("Some folds in 1..nfolds are not represented in 'custom_folds': ",
               paste(missing_folds, collapse = ", "))
@@ -90,52 +104,6 @@ validate_parameters <- function(x, y, alpha, nfolds, standardize,
   }
   
   invisible(TRUE)
-}
-
-#' Prepare Predictors
-#'
-#' Ensures predictors are numeric, handles factors/characters via model.matrix,
-#' applies column-mean imputation for missing values, and assigns default names if needed.
-#'
-#' @param x A data frame or matrix of predictors.
-#'
-#' @return A purely numeric dense matrix with no missing values.
-#' @keywords internal
-prepare_predictors <- function(x) {
-  # If data.frame, build a numeric design matrix (no intercept)
-  if (is.data.frame(x)) {
-    # model.matrix handles factors/characters with dummy encoding
-    mm <- stats::model.matrix(~ . - 1, data = x)  # creates numeric matrix
-  } else if (is.matrix(x)) {
-    # If matrix and not numeric, try to coerce to numeric safely
-    if (!is.numeric(x)) {
-      suppressWarnings({
-        mm <- apply(x, 2, function(col) {
-          if (is.numeric(col)) return(col)
-          as.numeric(as.character(col))
-        })
-      })
-      mm <- as.matrix(mm)
-    } else {
-      mm <- x
-    }
-  } else {
-    stop("Internal error: 'x' must be a data.frame or matrix.")
-  }
-  
-  # Ensure column names
-  if (is.null(colnames(mm))) {
-    colnames(mm) <- paste0("V", seq_len(ncol(mm)))
-  }
-  
-  # Impute missing values with column means
-  mm <- handle_missing_values(mm)
-  
-  # Final sanity checks
-  if (!is.numeric(mm)) stop("Internal error: predictors are not numeric after preparation.")
-  if (any(!is.finite(mm))) stop("Internal error: predictors contain non-finite values after imputation.")
-  
-  mm
 }
 
 #' Handle Missing Values in a Numeric Matrix
@@ -162,6 +130,50 @@ handle_missing_values <- function(x) {
     }
   }
   x
+}
+
+#' Prepare Predictors
+#'
+#' Ensures predictors are numeric, handles factors/characters via model.matrix,
+#' applies column-mean imputation for missing values, and assigns default names if needed.
+#'
+#' @param x A data frame or matrix of predictors.
+#'
+#' @return A purely numeric dense matrix with no missing values.
+#' @keywords internal
+prepare_predictors <- function(x) {
+  # If data.frame, build a numeric design matrix (no intercept)
+  if (is.data.frame(x)) {
+    # Preserve NA so they can be imputed later
+    mm <- stats::model.matrix(~ . - 1, data = x, na.action = stats::na.pass)
+  } else if (is.matrix(x)) {
+    # If matrix and not numeric, be strict: require numeric predictors
+    if (!is.numeric(x)) {
+      stop("Error: Non-numeric matrices are not supported; please supply a data.frame so factors/characters can be handled via model.matrix.")
+    } else {
+      mm <- x
+    }
+  } else {
+    stop("Internal error: 'x' must be a data.frame or matrix.")
+  }
+  
+  # Ensure column names
+  if (is.null(colnames(mm))) {
+    colnames(mm) <- paste0("V", seq_len(ncol(mm)))
+  }
+  
+  # Impute missing values with column means
+  mm <- handle_missing_values(mm)
+  
+  # Final sanity checks
+  if (!is.numeric(mm)) {
+    stop("Internal error: predictors are not numeric after preparation.")
+  }
+  if (any(!is.finite(mm))) {
+    stop("Internal error: predictors contain non-finite values after imputation.")
+  }
+  
+  mm
 }
 
 #' Convert Predictors to a Sparse Matrix
@@ -204,17 +216,38 @@ manage_parallel_cluster <- function(enable_parallel, verbose) {
   
   if (!have_parallel || !have_doPar || !have_foreach) {
     if (verbose) {
-      message("Parallel packages not available (need 'parallel', 'doParallel', and 'foreach'); continuing sequentially.")
+      message("Parallel packages not fully available (need 'parallel', 'doParallel', and 'foreach'); continuing sequentially.")
     }
     if (have_foreach) foreach::registerDoSEQ()
     return(info)
   }
   
+  # Determine usable cores
+  total_cores <- parallel::detectCores()
+  if (!is.finite(total_cores) || total_cores <= 1L) {
+    if (verbose) {
+      message("Only one core detected; parallel processing disabled.")
+    }
+    foreach::registerDoSEQ()
+    return(info)
+  }
+  
+  # Use up to (total_cores - 1) cores, but at least 1
+  n_cores <- max(1L, total_cores - 1L)
+  if (n_cores <= 1L) {
+    if (verbose) {
+      message("Insufficient cores for parallel processing; running sequentially.")
+    }
+    foreach::registerDoSEQ()
+    return(info)
+  }
+  
   # Start a cluster and register it
-  n_cores <- max(1L, parallel::detectCores() - 1L)
   cl <- parallel::makeCluster(n_cores)
   doParallel::registerDoParallel(cl)
-  if (verbose) message("Parallel processing enabled using ", n_cores, " cores.")
+  if (verbose) {
+    message("Parallel processing enabled using ", n_cores, " cores out of ", total_cores, " available.")
+  }
   
   info$cluster <- cl
   info$registered <- TRUE
@@ -237,10 +270,18 @@ manage_parallel_cluster <- function(enable_parallel, verbose) {
 #' @keywords internal
 fit_lasso_model <- function(x_sparse, y, alpha, nfolds, standardize,
                             use_parallel, custom_folds, seed, verbose) {
-  if (!is.null(seed)) set.seed(seed)
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
   
   # Setup parallel backend (and guarantee teardown)
   par_info <- manage_parallel_cluster(enable_parallel = use_parallel, verbose = verbose)
+  
+  # If a cluster is active and a seed is provided, set RNG streams for reproducibility
+  if (!is.null(seed) && !is.null(par_info$cluster)) {
+    parallel::clusterSetRNGStream(par_info$cluster, iseed = seed)
+  }
+  
   on.exit({
     # Teardown cluster if started
     if (!is.null(par_info$cluster)) {
@@ -255,7 +296,7 @@ fit_lasso_model <- function(x_sparse, y, alpha, nfolds, standardize,
   # Only pass parallel=TRUE to cv.glmnet if a parallel backend is actually active
   parallel_flag <- isTRUE(use_parallel) &&
     requireNamespace("foreach", quietly = TRUE) &&
-    foreach::getDoParWorkers() > 1
+    foreach::getDoParWorkers() > 1L
   
   # Build argument list
   args <- list(
@@ -270,7 +311,7 @@ fit_lasso_model <- function(x_sparse, y, alpha, nfolds, standardize,
   
   if (!is.null(custom_folds)) {
     args$foldid <- as.integer(custom_folds)
-    args$nfolds <- NULL
+    args$nfolds <- NULL  # cv.glmnet will use length(unique(foldid))
   }
   
   do.call(glmnet::cv.glmnet, args)
@@ -290,9 +331,14 @@ extract_importance <- function(lasso_model, feature_names = NULL) {
   cf <- stats::coef(lasso_model, s = "lambda.min")
   # cf is a sparse matrix; first row is intercept
   cf_vec <- as.vector(cf)[-1]
+  
   if (is.null(feature_names)) {
     all_names <- rownames(cf)
     feature_names <- if (!is.null(all_names)) all_names[-1] else paste0("V", seq_along(cf_vec))
+  }
+  
+  if (length(feature_names) != length(cf_vec)) {
+    stop("Internal error: length of 'feature_names' does not match number of coefficients.")
   }
   
   importance_df <- data.frame(
@@ -302,6 +348,7 @@ extract_importance <- function(lasso_model, feature_names = NULL) {
     stringsAsFactors = FALSE
   )
   
+  # Order by absolute coefficient, descending
   importance_df <- importance_df[order(-importance_df$AbsCoefficient), , drop = FALSE]
   rownames(importance_df) <- NULL
   importance_df
@@ -312,12 +359,14 @@ extract_importance <- function(lasso_model, feature_names = NULL) {
 #' Fit and evaluate a lasso (or elastic-net) model with cross-validation,
 #' returning variable importance and (optionally) the fitted model.
 #'
+#' This function is currently designed for numeric regression (gaussian family).
+#'
 #' @param x A data frame or matrix of predictor variables.
 #' @param y A numeric vector of response values.
 #' @param alpha Numeric in (0, 1]; default 1 (lasso). Use (0,1) for elastic-net.
 #' @param nfolds Integer > 1; default 5.
 #' @param standardize Logical; default TRUE.
-#' @param parallel Logical; default TRUE. Requires 'parallel' + 'doParallel'.
+#' @param parallel Logical; default TRUE. Requires 'parallel' + 'doParallel' + 'foreach'.
 #' @param verbose Logical; default FALSE.
 #' @param seed Optional integer for reproducibility; default NULL.
 #' @param return_model Logical; whether to include the fitted cv.glmnet object in output; default FALSE.
@@ -353,6 +402,11 @@ fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE,
   
   # Prepare predictors -> dense numeric matrix with names, no NA
   x_dense <- prepare_predictors(x)
+  
+  # Sanity check: row alignment
+  if (nrow(x_dense) != length(y)) {
+    stop("Internal error: prepared predictor matrix and response 'y' have different numbers of rows.")
+  }
   
   # Convert to sparse for glmnet
   x_sparse <- convert_to_sparse(x_dense)

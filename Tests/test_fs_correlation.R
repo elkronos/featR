@@ -106,8 +106,13 @@ test_fs_correlation <- function() {
     
     set.seed(123)
     o1 <- factor(sample(1:5, 120, replace = TRUE), ordered = TRUE)
-    o2 <- factor(pmin(pmax(as.integer(o1) + sample(c(-1, 0, 1), 120, replace = TRUE), 1), 5),
-                 levels = 1:5, ordered = TRUE)
+    o2 <- factor(
+      pmin(
+        pmax(as.integer(o1) + sample(c(-1, 0, 1), 120, replace = TRUE), 1),
+        5
+      ),
+      levels = 1:5, ordered = TRUE
+    )
     df <- data.frame(o1 = o1, o2 = o2)
     
     res <- fs_correlation(df, threshold = 0.1, method = "polychoric")
@@ -173,17 +178,68 @@ test_fs_correlation <- function() {
   # Test 12: Invalid inputs (error messages match refactor)
   # ----------------------------------------------------------------------------
   testthat::test_that("invalid inputs produce clear errors", {
+    # Data type
     testthat::expect_error(
       fs_correlation("not a data frame", 0.7),
-      regexp = "`data` must be a data frame or matrix\\.", fixed = FALSE
+      regexp = "`data` must be a data frame or matrix\\.",
+      fixed  = FALSE
     )
+    
+    # Threshold out of range
     testthat::expect_error(
       fs_correlation(mtcars, 1.5),
-      regexp = "`threshold` must be a single numeric value in \\[0, 1\\]\\.", fixed = FALSE
+      regexp = "`threshold` must be a single finite numeric value in \\[0, 1\\]\\.",
+      fixed  = FALSE
     )
+    
+    # Invalid method
     testthat::expect_error(
       fs_correlation(mtcars, 0.7, method = "invalid_method"),
-      regexp = "Invalid `method`\\.", fixed = FALSE
+      regexp = "Invalid `method`\\.",
+      fixed  = FALSE
+    )
+    
+    # Sample fraction out of range
+    testthat::expect_error(
+      fs_correlation(mtcars, 0.7, sample_frac = 0),
+      regexp = "`sample_frac` must be a single finite numeric value in \\(0, 1\\]\\.",
+      fixed  = FALSE
+    )
+    
+    # Sample fraction NA
+    testthat::expect_error(
+      fs_correlation(mtcars, 0.7, sample_frac = NA_real_),
+      regexp = "`sample_frac` must be a single finite numeric value in \\(0, 1\\]\\.",
+      fixed  = FALSE
+    )
+    
+    # n_cores < 1
+    testthat::expect_error(
+      fs_correlation(mtcars, 0.7, n_cores = 0),
+      regexp = "`n_cores` must be a finite numeric value >= 1\\.",
+      fixed  = FALSE
+    )
+    
+    # diag_value invalid type
+    testthat::expect_error(
+      fs_correlation(mtcars, 0.7, diag_value = "x"),
+      regexp = "`diag_value` must be a single numeric value or NA\\.",
+      fixed  = FALSE
+    )
+    
+    # Invalid seed type when sampling
+    testthat::expect_error(
+      fs_correlation(mtcars, 0.7, sample_frac = 0.5, seed = "not_numeric"),
+      regexp = "`seed` must be a single numeric value if provided\\.",
+      fixed  = FALSE
+    )
+    
+    # Zero-row data
+    empty_df <- mtcars[0, ]
+    testthat::expect_error(
+      fs_correlation(empty_df, 0.7),
+      regexp = "`data` must have at least one row\\.",
+      fixed  = FALSE
     )
   })
   
@@ -194,7 +250,8 @@ test_fs_correlation <- function() {
     # Classic method verbose
     testthat::expect_message(
       fs_correlation(mtcars, threshold = 0.3, method = "pearson", na.rm = TRUE, verbose = TRUE),
-      regexp = "Calculating pearson correlation matrix", fixed = FALSE
+      regexp = "Calculating pearson correlation matrix",
+      fixed  = FALSE
     )
     
     # Point-biserial sequential verbose
@@ -204,7 +261,8 @@ test_fs_correlation <- function() {
     df <- data.frame(x = x, y = y)
     testthat::expect_message(
       fs_correlation(df, threshold = 0.05, method = "pointbiserial", verbose = TRUE),
-      regexp = "point-biserial", fixed = FALSE
+      regexp = "point-biserial",
+      fixed  = FALSE
     )
     
     # Polychoric verbose
@@ -215,8 +273,27 @@ test_fs_correlation <- function() {
     df2 <- data.frame(o1 = o1, o2 = o2)
     testthat::expect_message(
       fs_correlation(df2, threshold = 0.1, method = "polychoric", verbose = TRUE),
-      regexp = "polychoric.*polycor::hetcor", fixed = FALSE
+      regexp = "polychoric.*polycor::hetcor",
+      fixed  = FALSE
     )
+  })
+  
+  # ----------------------------------------------------------------------------
+  # Test 14: Polychoric with missing values and na.rm = TRUE
+  # ----------------------------------------------------------------------------
+  testthat::test_that("polychoric handles missing values when na.rm = TRUE", {
+    testthat::skip_if_not_installed("polycor")
+    
+    set.seed(2)
+    o1 <- factor(sample(1:4, 100, replace = TRUE), ordered = TRUE)
+    o2 <- factor(sample(1:4, 100, replace = TRUE), ordered = TRUE)
+    df <- data.frame(o1 = o1, o2 = o2)
+    df$o1[1:10] <- NA
+    df$o2[5:15] <- NA
+    
+    res <- fs_correlation(df, threshold = 0.1, method = "polychoric", na.rm = TRUE)
+    testthat::expect_true(is.matrix(res$corr_matrix) || is.data.frame(res$corr_matrix))
+    testthat::expect_type(res$selected_vars, "character")
   })
   
   cat("UAT for fs_correlation completed.\n")

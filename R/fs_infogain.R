@@ -120,11 +120,16 @@ expand_date_columns <- function(df, exclude = character(), remove_original = TRU
 #'
 #' Information gain assumes a categorical target. If target is numeric,
 #' discretize it into bins (Freedman–Diaconis with Sturges fallback).
+#' Date-like targets are treated as categorical via their date representation.
 #'
 #' @param y target vector
 #' @param numeric_bins optional integer override for numeric target discretization
 #' @return factor/ordered factor target
 as_categorical_target <- function(y, numeric_bins = NULL) {
+  # Date-like targets: treat as categorical via YYYY-MM-DD string
+  if (.is_date_like(y)) {
+    return(factor(as.Date(y)))
+  }
   if (is.numeric(y)) {
     return(discretize_numeric(y, bins = numeric_bins))
   }
@@ -136,10 +141,6 @@ as_categorical_target <- function(y, numeric_bins = NULL) {
   }
   if (is.factor(y)) {
     return(y)
-  }
-  # Date-like targets: treat as categorical via YYYY-MM-DD string
-  if (.is_date_like(y)) {
-    return(factor(as.Date(y)))
   }
   # Fallback: coerce to factor
   factor(y)
@@ -167,15 +168,16 @@ info_gain_one <- function(x, y, numeric_bins = NULL) {
   y <- as_categorical_target(y, numeric_bins = numeric_bins)
   
   # Discretize/normalize predictor to factor
-  if (is.numeric(x)) {
-    x <- discretize_numeric(x, bins = numeric_bins)
-  } else if (.is_date_like(x)) {
+  if (.is_date_like(x)) {
     x <- factor(as.Date(x))
+  } else if (is.numeric(x)) {
+    x <- discretize_numeric(x, bins = numeric_bins)
   } else if (is.logical(x)) {
     x <- factor(x)
   } else if (is.character(x)) {
     x <- factor(x)
   }
+  # factors are left as-is
   
   # If x has one unique value, IG == 0
   if (length(unique(x)) <= 1) return(0)
@@ -185,7 +187,8 @@ info_gain_one <- function(x, y, numeric_bins = NULL) {
   
   # Conditional entropy H(Y|X)
   H_y_given_x <- 0
-  for (lev in unique(x)) {
+  ux <- unique(x)
+  for (lev in ux) {
     idx <- which(x == lev)
     # idx is guaranteed non-empty because lev came from unique(x)
     w <- length(idx) / total
@@ -259,6 +262,7 @@ calculate_information_gain_multiple <- function(dfs_list, target, numeric_bins =
   }
   
   results_list <- vector("list", length(dfs_list))
+  nm <- names(dfs_list)
   
   for (i in seq_along(dfs_list)) {
     df <- dfs_list[[i]]
@@ -270,11 +274,14 @@ calculate_information_gain_multiple <- function(dfs_list, target, numeric_bins =
     }
     
     res <- fs_infogain_single(df, target, numeric_bins = numeric_bins, remove_na = remove_na)
-    origin_name <- if (!is.null(names(dfs_list)) && nzchar(names(dfs_list)[i])) {
-      names(dfs_list)[i]
+    
+    origin_name <- if (!is.null(nm)) {
+      this_name <- nm[i]
+      if (!is.na(this_name) && nzchar(this_name)) this_name else paste0("Data_Frame_", i)
     } else {
       paste0("Data_Frame_", i)
     }
+    
     if (nrow(res)) res$Origin <- origin_name
     results_list[[i]] <- res
   }

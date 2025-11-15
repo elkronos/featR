@@ -1,187 +1,480 @@
 ###############################################################################
-# Testing Infrastructure - Chi-Squared (for modular fs_chi)
+# Testing Infrastructure - Chi-Square (fs_chi)
 ###############################################################################
 
-library(testthat)
+# Optional: if fs_chi is in a separate script/package, load it here, e.g.:
+# source("fs_chi.R")
+# library(yourpackage)
 
-test_fs_chi <- function() {
-  cat("Running UAT for fs_chi...\n")
-  
-  # -------------------------
-  # Test 0: Sanity: fs_chi exists
-  # -------------------------
-  test_that("fs_chi is available", {
-    expect_true(exists("fs_chi"))
-    expect_true(is.function(fs_chi))
+# Global container for test results
+test_results <- data.frame(
+  Test   = character(),
+  Result = character(),
+  stringsAsFactors = FALSE
+)
+
+#' Helper: Print and Store Test Result
+#'
+#' @param test_name Character. Name of the test.
+#' @param passed Logical. Whether the test passed.
+#' @param note Optional character. Additional notes.
+print_and_store_result <- function(test_name, passed, note = NULL) {
+  result <- if (passed) "PASS" else "FAIL"
+  cat(sprintf("%-70s [%s]\n", test_name, result))
+  if (!is.null(note)) cat("  Note: ", note, "\n")
+  test_results <<- rbind(
+    test_results,
+    data.frame(Test = test_name, Result = result, stringsAsFactors = FALSE)
+  )
+}
+
+###############################################################################
+# Tests: Existence and Input Validation
+###############################################################################
+
+test_fs_chi_existence <- function() {
+  err <- NULL
+  passed <- tryCatch({
+    exists("fs_chi") && is.function(fs_chi)
+  }, error = function(e) {
+    err <<- e
+    FALSE
   })
-  
-  # -------------------------
-  # Test 1: Input validation
-  # -------------------------
-  test_that("errors if data is not a data frame", {
-    expect_error(fs_chi("not a data frame", "target"))
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result("fs_chi: Function exists and is callable", passed, note)
+}
+
+test_fs_chi_input_validation <- function() {
+  # Case 1: data not a data.frame
+  err1 <- NULL
+  passed1 <- tryCatch({
+    fs_chi("not a data frame", "target")
+    FALSE
+  }, error = function(e) {
+    err1 <<- e
+    TRUE
   })
+  note1 <- if (!is.null(err1)) conditionMessage(err1) else NULL
+  print_and_store_result("fs_chi: errors if data is not a data.frame", passed1, note1)
   
-  test_that("errors if target column missing", {
-    df <- data.frame(A = factor(c("a", "b")), B = factor(c("x", "y")))
-    expect_error(fs_chi(df, "target"))
+  # Case 2: target column missing
+  df2 <- data.frame(A = factor(c("a", "b")), B = factor(c("x", "y")))
+  err2 <- NULL
+  passed2 <- tryCatch({
+    fs_chi(df2, "target")
+    FALSE
+  }, error = function(e) {
+    err2 <<- e
+    TRUE
   })
+  note2 <- if (!is.null(err2)) conditionMessage(err2) else NULL
+  print_and_store_result("fs_chi: errors if target column missing", passed2, note2)
   
-  test_that("errors if target has < 2 non-NA levels", {
-    df <- data.frame(target = factor(c("Yes", NA, NA)))
-    expect_error(fs_chi(df, "target"))
+  # Case 3: target has < 2 non-NA levels
+  df3 <- data.frame(target = factor(c("Yes", NA, NA)))
+  err3 <- NULL
+  passed3 <- tryCatch({
+    fs_chi(df3, "target")
+    FALSE
+  }, error = function(e) {
+    err3 <<- e
+    TRUE
   })
-  
-  # -------------------------
-  # Test 2: No categorical features
-  # -------------------------
-  test_that("returns empty results when no factor features", {
-    df <- data.frame(target = factor(c("Yes", "No")), X = 1:2, Y = c(3.1, 4.2))
+  note3 <- if (!is.null(err3)) conditionMessage(err3) else NULL
+  print_and_store_result(
+    "fs_chi: errors if target has < 2 non-NA levels",
+    passed3, note3
+  )
+}
+
+###############################################################################
+# Tests: No Categorical Features
+###############################################################################
+
+test_fs_chi_no_categorical_features <- function() {
+  df <- data.frame(
+    target = factor(c("Yes", "No")),
+    X      = 1:2,
+    Y      = c(3.1, 4.2)
+  )
+  err <- NULL
+  passed <- tryCatch({
     res <- fs_chi(df, "target")
-    expect_named(res, c("results", "significant_features"))
-    expect_equal(nrow(res$results), 0)
-    expect_length(res$significant_features, 0)
+    is.list(res) &&
+      all(c("results", "significant_features") %in% names(res)) &&
+      nrow(res$results) == 0L &&
+      length(res$significant_features) == 0L
+  }, error = function(e) {
+    err <<- e
+    FALSE
   })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result("fs_chi: returns empty results when no factor features", passed, note)
+}
+
+###############################################################################
+# Tests: Continuity Correction Behavior (2x2 Tables)
+###############################################################################
+
+test_fs_chi_continuity_correction <- function() {
+  set.seed(1)
+  target  <- factor(rep(c("Yes", "No"), each = 100))
+  feat    <- factor(rep(c("A", "B"), times = 100))
+  df <- data.frame(target = target, feat = feat)
   
-  # -------------------------
-  # Test 3: Basic 2x2 with adequate counts (continuity correction path)
-  # -------------------------
-  test_that("applies continuity correction by default for 2x2 when expected >= 5", {
-    set.seed(1)
-    target  <- factor(rep(c("Yes", "No"), each = 100))
-    feat    <- factor(rep(c("A", "B"), times = 100))
-    df <- data.frame(target = target, feat = feat)
-    
+  # Default (NULL) -> correction applied for 2x2
+  err1 <- NULL
+  passed1 <- tryCatch({
     out <- fs_chi(df, "target", continuity_correction = NULL, p_adjust_method = "none")
-    expect_s3_class(out$results, "data.frame")
-    expect_true("feat" %in% out$results$feature)
+    stopifnot("feat" %in% out$results$feature)
     row <- out$results[out$results$feature == "feat", ]
-    expect_equal(nrow(row), 1)
-    # In a balanced 2x2, correction should be applied when continuity_correction = NULL
-    expect_true(isTRUE(row$correction_applied))
-    expect_equal(row$method, "asymptotic")
-    expect_true(is.finite(row$p_value))
+    nrow(row) == 1L &&
+      isTRUE(row$correction_applied) &&
+      identical(as.character(row$method), "asymptotic") &&
+      is.finite(row$p_value)
+  }, error = function(e) {
+    err1 <<- e
+    FALSE
   })
+  note1 <- if (!is.null(err1)) conditionMessage(err1) else NULL
+  print_and_store_result(
+    "fs_chi: continuity correction applied by default for 2x2 (NULL)",
+    passed1, note1
+  )
   
-  test_that("can disable continuity correction for 2x2", {
-    set.seed(1)
-    target  <- factor(rep(c("Yes", "No"), each = 100))
-    feat    <- factor(rep(c("A", "B"), times = 100))
-    df <- data.frame(target = target, feat = feat)
-    
+  # continuity_correction = FALSE -> no correction
+  err2 <- NULL
+  passed2 <- tryCatch({
     out <- fs_chi(df, "target", continuity_correction = FALSE, p_adjust_method = "none")
     row <- out$results[out$results$feature == "feat", ]
-    expect_false(isTRUE(row$correction_applied))
+    nrow(row) == 1L && !isTRUE(row$correction_applied)
+  }, error = function(e) {
+    err2 <<- e
+    FALSE
   })
+  note2 <- if (!is.null(err2)) conditionMessage(err2) else NULL
+  print_and_store_result(
+    "fs_chi: continuity correction can be disabled for 2x2",
+    passed2, note2
+  )
+}
+
+###############################################################################
+# Tests: Simulation Fallback for Low Expected Counts
+###############################################################################
+
+test_fs_chi_simulation_fallback <- function() {
+  set.seed(123)
+  target <- factor(rep(c("Yes", "No"), each = 250))
+  feature_low <- factor(c(rep("A", 495), rep("B", 5)))
+  df <- data.frame(feature_low = feature_low, target = target)
   
-  # -------------------------
-  # Test 4: Low expected counts -> simulation path (not necessarily significant)
-  # -------------------------
-  test_that("falls back to simulation when expected counts are low", {
-    set.seed(123)
-    target <- factor(rep(c("Yes", "No"), each = 250))
-    feature_low <- factor(c(rep("A", 495), rep("B", 5)))
-    df_low <- data.frame(feature_low = feature_low, target = target)
-    
-    out <- fs_chi(df_low, "target", p_adjust_method = "none")
+  err <- NULL
+  passed <- tryCatch({
+    out <- fs_chi(df, "target", p_adjust_method = "none")
     row <- out$results[out$results$feature == "feature_low", ]
-    expect_equal(nrow(row), 1)
-    expect_equal(row$method, "simulation")
-    expect_true(is.finite(row$p_value) || is.na(row$p_value))
+    nrow(row) == 1L &&
+      identical(as.character(row$method), "simulation") &&
+      (is.finite(row$p_value) || is.na(row$p_value))
+  }, error = function(e) {
+    err <<- e
+    FALSE
   })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: falls back to simulation when expected counts are low",
+    passed, note
+  )
+}
+
+###############################################################################
+# Tests: Significant Association Detection
+###############################################################################
+
+test_fs_chi_significant_association <- function() {
+  set.seed(42)
+  target <- factor(c(rep("Yes", 300), rep("No", 200)))
+  feat <- factor(c(
+    rep("A", 290), rep("B", 10),   # mostly A in Yes
+    rep("A", 50),  rep("B", 150)   # mostly B in No
+  ))
+  df <- data.frame(target = target, feat = feat)
   
-  # -------------------------
-  # Test 5: Detect significant association (clear signal)
-  # -------------------------
-  test_that("detects significant association when present", {
-    set.seed(42)
-    # Make feature highly associated with target
-    target <- factor(c(rep("Yes", 300), rep("No", 200)))
-    feat <- factor(c(rep("A", 290), rep("B", 10),   # mostly A in Yes
-                     rep("A", 50),  rep("B", 150))) # mostly B in No
-    df <- data.frame(target = target, feat = feat)
-    
+  err <- NULL
+  passed <- tryCatch({
     out <- fs_chi(df, "target", p_adjust_method = "bonferroni")
     row <- out$results[out$results$feature == "feat", ]
-    expect_true(row$significant)
-    expect_true("feat" %in% out$significant_features)
+    nrow(row) == 1L &&
+      isTRUE(row$significant) &&
+      "feat" %in% out$significant_features
+  }, error = function(e) {
+    err <<- e
+    FALSE
   })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: detects significant association when present",
+    passed, note
+  )
+}
+
+###############################################################################
+# Tests: p.adjust Methods (bonferroni vs none, case-insensitivity, invalid)
+###############################################################################
+
+test_fs_chi_p_adjust_methods <- function() {
+  set.seed(999)
+  target <- factor(rep(c("Yes", "No"), each = 200))
+  f1 <- factor(sample(c("A","B"), 400, TRUE))
+  f2 <- factor(sample(c("X","Y"), 400, TRUE))
+  df <- data.frame(target, f1, f2)
   
-  # -------------------------
-  # Test 6: p.adjust methods (bonferroni vs none)
-  # -------------------------
-  test_that("respects p.adjust method", {
-    set.seed(999)
-    target <- factor(rep(c("Yes", "No"), each = 200))
-    f1 <- factor(sample(c("A","B"), 400, TRUE))
-    f2 <- factor(sample(c("X","Y"), 400, TRUE))
-    df <- data.frame(target, f1, f2)
-    
+  err <- NULL
+  passed <- tryCatch({
     out_bonf <- fs_chi(df, "target", p_adjust_method = "bonferroni")
     out_none <- fs_chi(df, "target", p_adjust_method = "none")
     
-    # Join rows by feature
     rb <- out_bonf$results[, c("feature", "adj_p_value")]
     rn <- out_none$results[, c("feature", "adj_p_value")]
-    m <- merge(rb, rn, by = "feature", suffixes = c("_bonf", "_none"))
-    expect_true(all(m$adj_p_value_bonf >= m$adj_p_value_none, na.rm = TRUE))
-  })
-  
-  # -------------------------
-  # Test 7: Character coercion to factor (including target)
-  # -------------------------
-  test_that("coerces character columns to factor, including target", {
-    df <- data.frame(
-      target = c("Y","Y","N","N"),
-      f1 = c("A","A","B","B"),
-      f2 = factor(c("X","Y","X","Y")),
-      stringsAsFactors = FALSE
-    )
-    out <- fs_chi(df, "target", p_adjust_method = "none")
-    expect_true(all(out$results$feature %in% c("f1","f2")))
-  })
-  
-  # -------------------------
-  # Test 8: Feature skipped when <2 levels after NA removal
-  # -------------------------
-  test_that("skips features with <2 levels after NA removal", {
-    df <- data.frame(
-      target = factor(c("Y","N","Y","N")),
-      f1 = factor(c(NA, NA, NA, "only_one_non_na")),  # effectively <2 levels
-      f2 = factor(c("A","A","B","B"))
-    )
-    out <- fs_chi(df, "target", p_adjust_method = "none")
-    row1 <- out$results[out$results$feature == "f1", ]
-    row2 <- out$results[out$results$feature == "f2", ]
-    expect_true(is.na(row1$p_value))
-    expect_true(is.finite(row2$p_value))
-  })
-  
-  # -------------------------
-  # Test 9 (optional): Parallel path smoke test
-  # -------------------------
-  test_that("parallel path (multisession) runs without error (smoke test)", {
-    skip_on_cran()
-    skip_on_ci()
-    set.seed(321)
-    target <- factor(rep(c("Yes","No"), each = 150))
-    f1 <- factor(sample(c("A","B","C"), 300, TRUE))
-    f2 <- factor(sample(c("X","Y"), 300, TRUE))
-    df <- data.frame(target, f1, f2)
+    m  <- merge(rb, rn, by = "feature", suffixes = c("_bonf", "_none"))
     
-    expect_silent({
-      out <- fs_chi(
-        df, "target",
-        parallel = TRUE,
-        temp_multisession = TRUE,
-        p_adjust_method = "none"
-      )
-      expect_equal(nrow(out$results), 2)
-    })
+    all(m$adj_p_value_bonf >= m$adj_p_value_none, na.rm = TRUE)
+  }, error = function(e) {
+    err <<- e
+    FALSE
   })
-  
-  cat("All UAT for fs_chi completed.\n")
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: p.adjust('bonferroni') yields adj_p >= 'none'",
+    passed, note
+  )
 }
 
-# To run locally:
-# test_fs_chi()
+test_fs_chi_p_adjust_case_insensitive <- function() {
+  set.seed(101)
+  target <- factor(rep(c("Yes","No"), each = 150))
+  f1 <- factor(sample(c("A","B","C"), 300, TRUE))
+  f2 <- factor(sample(c("X","Y"), 300, TRUE))
+  df <- data.frame(target, f1, f2)
+  
+  err <- NULL
+  passed <- tryCatch({
+    set.seed(101)
+    out_upper <- fs_chi(df, "target", p_adjust_method = "BH", parallel = FALSE)
+    set.seed(101)
+    out_lower <- fs_chi(df, "target", p_adjust_method = "bh", parallel = FALSE)
+    
+    ru <- out_upper$results[, c("feature", "adj_p_value")]
+    rl <- out_lower$results[, c("feature", "adj_p_value")]
+    m  <- merge(ru, rl, by = "feature", suffixes = c("_upper", "_lower"))
+    
+    all.equal(m$adj_p_value_upper, m$adj_p_value_lower) == TRUE
+  }, error = function(e) {
+    err <<- e
+    FALSE
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: p_adjust_method is case-insensitive (BH vs bh)",
+    passed, note
+  )
+}
+
+test_fs_chi_p_adjust_invalid_method <- function() {
+  df <- data.frame(
+    target = factor(c("Y","N","Y","N")),
+    f1     = factor(c("A","A","B","B"))
+  )
+  err <- NULL
+  passed <- tryCatch({
+    fs_chi(df, "target", p_adjust_method = "not_a_method")
+    FALSE
+  }, error = function(e) {
+    err <<- e
+    grepl("Invalid p_adjust_method", conditionMessage(e))
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: invalid p_adjust_method throws clear error",
+    passed, note
+  )
+}
+
+###############################################################################
+# Tests: Character Coercion and Skipped Features
+###############################################################################
+
+test_fs_chi_character_coercion <- function() {
+  df <- data.frame(
+    target = c("Y","Y","N","N"),
+    f1     = c("A","A","B","B"),
+    f2     = factor(c("X","Y","X","Y")),
+    stringsAsFactors = FALSE
+  )
+  err <- NULL
+  passed <- tryCatch({
+    out <- fs_chi(df, "target", p_adjust_method = "none")
+    all(out$results$feature %in% c("f1", "f2"))
+  }, error = function(e) {
+    err <<- e
+    FALSE
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: coerces character columns (including target) to factor",
+    passed, note
+  )
+}
+
+test_fs_chi_skip_features_low_levels <- function() {
+  df <- data.frame(
+    target = factor(c("Y","N","Y","N")),
+    f1     = factor(c(NA, NA, NA, "only_one_non_na")),
+    f2     = factor(c("A","A","B","B"))
+  )
+  err <- NULL
+  passed <- tryCatch({
+    out  <- fs_chi(df, "target", p_adjust_method = "none")
+    row1 <- out$results[out$results$feature == "f1", ]
+    row2 <- out$results[out$results$feature == "f2", ]
+    is.na(row1$p_value) && is.finite(row2$p_value)
+  }, error = function(e) {
+    err <<- e
+    FALSE
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: skips features with <2 levels after NA removal",
+    passed, note
+  )
+}
+
+###############################################################################
+# Tests: n, df, Sequential and Parallel Paths
+###############################################################################
+
+test_fs_chi_n_counts <- function() {
+  df <- data.frame(
+    target = factor(c("Y","N",NA,"Y",NA,"N")),
+    f1     = factor(c("A","A","A",NA,"B","B"))
+  )
+  err <- NULL
+  passed <- tryCatch({
+    out <- fs_chi(df, "target", p_adjust_method = "none")
+    row <- out$results[out$results$feature == "f1", ]
+    as.integer(row$n) == 3L && is.finite(row$p_value)
+  }, error = function(e) {
+    err <<- e
+    FALSE
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: n reflects number of non-NA feature/target pairs",
+    passed, note
+  )
+}
+
+test_fs_chi_multi_level_df <- function() {
+  set.seed(456)
+  target <- factor(sample(c("C1", "C2", "C3"), 600, TRUE))
+  feat   <- factor(sample(c("L1", "L2", "L3", "L4"), 600, TRUE))
+  df <- data.frame(target = target, feat = feat)
+  
+  err <- NULL
+  passed <- tryCatch({
+    out <- fs_chi(df, "target", p_adjust_method = "none")
+    row <- out$results[out$results$feature == "feat", ]
+    expected_df <- (nlevels(target) - 1L) * (nlevels(feat) - 1L)
+    as.integer(row$df) == expected_df &&
+      is.finite(row$p_value) &&
+      identical(as.character(row$method), "asymptotic")
+  }, error = function(e) {
+    err <<- e
+    FALSE
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: handles multi-level features/targets with correct df",
+    passed, note
+  )
+}
+
+test_fs_chi_sequential_path <- function() {
+  df <- data.frame(
+    target = factor(c("Y","N","Y","N")),
+    f1     = factor(c("A","A","B","B")),
+    f2     = factor(c("X","Y","X","Y"))
+  )
+  err <- NULL
+  passed <- tryCatch({
+    out <- fs_chi(df, "target", parallel = FALSE, p_adjust_method = "none")
+    nrow(out$results) == 2L &&
+      all(out$results$feature %in% c("f1","f2"))
+  }, error = function(e) {
+    err <<- e
+    FALSE
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: sequential (parallel = FALSE) path runs without error",
+    passed, note
+  )
+}
+
+test_fs_chi_parallel_smoke <- function() {
+  set.seed(321)
+  target <- factor(rep(c("Yes","No"), each = 150))
+  f1 <- factor(sample(c("A","B","C"), 300, TRUE))
+  f2 <- factor(sample(c("X","Y"), 300, TRUE))
+  df <- data.frame(target, f1, f2)
+  
+  err <- NULL
+  passed <- tryCatch({
+    out <- fs_chi(
+      df, "target",
+      parallel = TRUE,
+      temp_multisession = TRUE,
+      p_adjust_method = "none"
+    )
+    nrow(out$results) == 2L
+  }, error = function(e) {
+    err <<- e
+    FALSE
+  })
+  note <- if (!is.null(err)) conditionMessage(err) else NULL
+  print_and_store_result(
+    "fs_chi: parallel (multisession) path smoke test",
+    passed, note
+  )
+}
+
+###############################################################################
+# Run All fs_chi Tests
+###############################################################################
+
+run_fs_chi_tests <- function() {
+  cat("========== Running fs_chi Tests ==========\n")
+  test_fs_chi_existence()
+  test_fs_chi_input_validation()
+  test_fs_chi_no_categorical_features()
+  test_fs_chi_continuity_correction()
+  test_fs_chi_simulation_fallback()
+  test_fs_chi_significant_association()
+  test_fs_chi_p_adjust_methods()
+  test_fs_chi_p_adjust_case_insensitive()
+  test_fs_chi_p_adjust_invalid_method()
+  test_fs_chi_character_coercion()
+  test_fs_chi_skip_features_low_levels()
+  test_fs_chi_n_counts()
+  test_fs_chi_multi_level_df()
+  test_fs_chi_sequential_path()
+  test_fs_chi_parallel_smoke()
+  cat("========== fs_chi Tests Completed ==========\n\n")
+  cat("Test Summary:\n")
+  print(table(test_results$Result))
+  cat("\nDetailed Results:\n")
+  print(test_results)
+}
+
+# Uncomment the following line to run all tests when this script is executed:
+# run_fs_chi_tests()

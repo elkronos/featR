@@ -3,10 +3,9 @@
 ###############################################################################
 suppressPackageStartupMessages({
   library(brms)
-  library(tidyverse)
+  library(data.table)
   library(parallel)
   library(loo)
-  library(data.table)
   library(pbapply)
 })
 
@@ -17,7 +16,7 @@ suppressPackageStartupMessages({
 #' Validate Data Columns and Types
 #'
 #' Checks that the response, predictor, and (if provided) date columns exist
-#' in the data. Stops execution with informative messages if not.
+#' in the data. Performs minimal family-aware checks on the response.
 #'
 #' @param data A data.frame or data.table.
 #' @param response_col Character. Name of the response column.
@@ -25,7 +24,11 @@ suppressPackageStartupMessages({
 #' @param date_col Character or NULL. Name of the date column.
 #' @param brm_family A brms family (default gaussian()) used for basic type checks.
 #' @return Invisibly TRUE if validation passes.
-validate_data <- function(data, response_col, predictor_cols, date_col = NULL, brm_family = gaussian()) {
+validate_data <- function(data,
+                          response_col,
+                          predictor_cols,
+                          date_col = NULL,
+                          brm_family = gaussian()) {
   if (!is.data.frame(data) && !data.table::is.data.table(data)) {
     stop("Input data must be a data.frame or data.table.")
   }
@@ -46,9 +49,14 @@ validate_data <- function(data, response_col, predictor_cols, date_col = NULL, b
   # Minimal sanity checks re: family/response
   fam <- brm_family$family
   y <- data[[response_col]]
+  
   if (identical(fam, "gaussian") && !is.numeric(y)) {
-    stop("gaussian() family requires a numeric response; got class: ", paste(class(y), collapse = "/"))
+    stop(
+      "gaussian() family requires a numeric response; got class: ",
+      paste(class(y), collapse = "/")
+    )
   }
+  
   if (identical(fam, "bernoulli")) {
     uy <- unique(na.omit(y))
     if (!is.numeric(y) && !is.logical(y)) {
@@ -75,12 +83,27 @@ add_week_feature <- function(data, date_col, predictor_cols) {
   if (!inherits(data[[date_col]], "Date")) {
     data[[date_col]] <- as.Date(data[[date_col]])
   }
-  # ISO year/week; robust across years and boundaries
+  
   iso_year <- as.integer(strftime(data[[date_col]], "%G"))
   iso_week <- as.integer(strftime(data[[date_col]], "%V"))
+  
   data[, iso_week_id := iso_year * 100L + iso_week]
   predictor_cols <- unique(c(predictor_cols, "iso_week_id"))
+  
   list(data = data, predictor_cols = predictor_cols)
+}
+
+#' Robust Detection of Available Cores
+#'
+#' Returns a safe estimate of cores for outer parallelism.
+#'
+#' @return Integer number of cores for outer parallelization.
+detect_outer_cores <- function() {
+  cores_total <- parallel::detectCores()
+  if (is.na(cores_total) || cores_total < 1L) {
+    return(1L)
+  }
+  max(cores_total - 1L, 1L)
 }
 
 ###############################################################################
@@ -89,17 +112,52 @@ add_week_feature <- function(data, date_col, predictor_cols) {
 
 #' Generate Predictor Combinations
 #'
-#' Generates all non-empty combinations up to a maximum size and optionally samples.
-generate_predictor_combinations <- function(predictor_cols, max_comb_size = NULL, sample_combinations = NULL, seed = 123) {
+#' Generates all non-empty combinations up to a maximum size and,
+#' optionally, randomly samples a fixed number of combinations.
+#'
+#' @param predictor_cols Character vector of predictor names.
+#' @param max_comb_size Integer or NULL. Maximum size of combinations.
+#'   If NULL, uses length(predictor_cols). Must be at least 1 if non-NULL.
+#' @param sample_combinations Integer or NULL. If not NULL, randomly sample
+#'   this many combinations (must be >= 1).
+#' @param seed Integer. Seed for the sampling of combinations.
+#' @return A list of character vectors (predictor subsets).
+generate_predictor_combinations <- function(predictor_cols,
+                                            max_comb_size = NULL,
+                                            sample_combinations = NULL,
+                                            seed = 123L) {
   n <- length(predictor_cols)
-  max_comb_size <- if (is.null(max_comb_size)) n else min(max_comb_size, n)
-  comb_list <- lapply(1:max_comb_size, function(i) combn(predictor_cols, i, simplify = FALSE))
+  if (n < 1L) {
+    stop("predictor_cols must contain at least one predictor.")
+  }
+  
+  if (!is.null(max_comb_size)) {
+    max_comb_size <- as.integer(max_comb_size)
+    if (max_comb_size < 1L) {
+      stop("max_comb_size must be at least 1 when provided.")
+    }
+    max_comb_size <- min(max_comb_size, n)
+  } else {
+    max_comb_size <- n
+  }
+  
+  comb_list <- lapply(
+    X = seq_len(max_comb_size),
+    FUN = function(i) combn(predictor_cols, i, simplify = FALSE)
+  )
   combinations <- unlist(comb_list, recursive = FALSE)
   
-  if (!is.null(sample_combinations) && length(combinations) > sample_combinations) {
-    set.seed(seed)
-    combinations <- sample(combinations, sample_combinations)
+  if (!is.null(sample_combinations)) {
+    sample_combinations <- as.integer(sample_combinations)
+    if (sample_combinations < 1L) {
+      stop("sample_combinations must be at least 1 when provided.")
+    }
+    if (length(combinations) > sample_combinations) {
+      set.seed(seed)
+      combinations <- sample(combinations, sample_combinations)
+    }
   }
+  
   combinations
 }
 
@@ -110,50 +168,70 @@ generate_predictor_combinations <- function(predictor_cols, max_comb_size = NULL
 #' @param brm_family A brms family (default gaussian()).
 #' @param prior A brms prior specification (default NULL).
 #' @param brm_args List. Additional arguments for `brm()`.
-#' @param verbose Logical.
+#' @param verbose Logical. Print progress and warnings.
 #' @return A fitted brms model object, or NULL if fitting fails.
-fit_model <- function(data, formula_str, brm_family, prior, brm_args, verbose = TRUE) {
-  if (verbose) message("Fitting model: ", formula_str)
+fit_model <- function(data,
+                      formula_str,
+                      brm_family,
+                      prior,
+                      brm_args,
+                      verbose = TRUE) {
+  if (verbose) {
+    message("Fitting model: ", formula_str)
+  }
   
   default_args <- list(
-    formula   = as.formula(formula_str),
-    data      = data,
-    family    = brm_family,
-    prior     = prior,
-    iter      = 2000,
-    warmup    = 1000,
-    control   = list(adapt_delta = 0.99, max_treedepth = 15),
-    refresh   = 0
+    formula = as.formula(formula_str),
+    data    = data,
+    family  = brm_family,
+    prior   = prior,
+    iter    = 2000,
+    warmup  = 1000,
+    control = list(adapt_delta = 0.99, max_treedepth = 15),
+    refresh = 0
   )
   
   model_args <- modifyList(default_args, brm_args)
   
-  # If using fixed_param, remove control settings
-  if (!is.null(model_args$algorithm) && model_args$algorithm == "fixed_param") {
+  # If using fixed_param, remove control settings, as they are not relevant
+  if (!is.null(model_args$algorithm) && identical(model_args$algorithm, "fixed_param")) {
     model_args$control <- NULL
   }
   
   model <- tryCatch({
-    do.call(brm, model_args)
-  }, warning = function(w) {
-    if (verbose) message("Warning [", formula_str, "]: ", conditionMessage(w))
-    NULL
+    # Capture and log warnings, but do not fail the fit because of them
+    withCallingHandlers(
+      do.call(brm, model_args),
+      warning = function(w) {
+        if (verbose) {
+          message("Warning [", formula_str, "]: ", conditionMessage(w))
+        }
+        invokeRestart("muffleWarning")
+      }
+    )
   }, error = function(e) {
-    if (verbose) message("Error [", formula_str, "]: ", conditionMessage(e))
+    if (verbose) {
+      message("Error [", formula_str, "]: ", conditionMessage(e))
+    }
     NULL
   })
   
   if (!is.null(model) && verbose) {
     message("Successfully fitted: ", formula_str)
   }
+  
   model
 }
 
 #' Append Fitted Metrics to Data
 #'
 #' Adds fitted values and residual-based metrics to the data.table.
+#'
+#' @param data A data.table.
+#' @param model A brmsfit object.
+#' @return The data.table with added columns:
+#'   fitted_values, residuals, abs_residuals, squared_residuals.
 add_metrics_to_data <- function(data, model) {
-  # brms residuals()/fitted() provide "Estimate" column
   fitted_vals <- as.numeric(fitted(model)[, "Estimate"])
   resid_vals  <- as.numeric(residuals(model)[, "Estimate"])
   
@@ -163,34 +241,76 @@ add_metrics_to_data <- function(data, model) {
     abs_residuals     = abs(resid_vals),
     squared_residuals = resid_vals^2
   )]
+  
   data
 }
 
 #' Evaluate a Predictor Combination
 #'
 #' Fits and scores a model (LOO when applicable).
-evaluate_combination <- function(preds, data, response_col, brm_family, prior, brm_args, verbose = TRUE) {
+#'
+#' @param preds Character vector of predictor names for this combination.
+#' @param data A data.table.
+#' @param response_col Name of the response column.
+#' @param brm_family A brms family.
+#' @param prior A brms prior specification (default NULL).
+#' @param brm_args List. Additional arguments for `brm()`.
+#' @param verbose Logical.
+#' @return A list with elements:
+#'   - preds
+#'   - model
+#'   - loo_val
+#'   - formula_str
+evaluate_combination <- function(preds,
+                                 data,
+                                 response_col,
+                                 brm_family,
+                                 prior,
+                                 brm_args,
+                                 verbose = TRUE) {
   formula_str <- paste0(response_col, " ~ ", paste(preds, collapse = " + "))
-  model <- fit_model(data, formula_str, brm_family, prior, brm_args, verbose = verbose)
+  model <- fit_model(
+    data        = data,
+    formula_str = formula_str,
+    brm_family  = brm_family,
+    prior       = prior,
+    brm_args    = brm_args,
+    verbose     = verbose
+  )
   
   loo_val <- NA_real_
+  
   if (!is.null(model)) {
-    if (!is.null(brm_args$algorithm) && brm_args$algorithm == "fixed_param") {
-      if (verbose) message("Skipping LOO for fixed_param algorithm: ", formula_str)
+    if (!is.null(brm_args$algorithm) && identical(brm_args$algorithm, "fixed_param")) {
+      if (verbose) {
+        message("Skipping LOO for fixed_param algorithm: ", formula_str)
+      }
       loo_val <- NA_real_
     } else {
-      loo_obj <- tryCatch(loo(model),
-                          error = function(e) {
-                            if (verbose) message("LOO failed [", formula_str, "]: ", conditionMessage(e))
-                            NULL
-                          })
+      loo_obj <- tryCatch(
+        loo(model),
+        error = function(e) {
+          if (verbose) {
+            message("LOO failed [", formula_str, "]: ", conditionMessage(e))
+          }
+          NULL
+        }
+      )
       if (!is.null(loo_obj)) {
-        loo_val <- tryCatch(loo_obj$estimates["elpd_loo", "Estimate"], error = function(e) NA_real_)
+        loo_val <- tryCatch(
+          loo_obj$estimates["elpd_loo", "Estimate"],
+          error = function(e) NA_real_
+        )
       }
     }
   }
   
-  list(preds = preds, model = model, loo_val = loo_val, formula_str = formula_str)
+  list(
+    preds       = preds,
+    model       = model,
+    loo_val     = loo_val,
+    formula_str = formula_str
+  )
 }
 
 ###############################################################################
@@ -207,82 +327,138 @@ evaluate_combination <- function(preds, data, response_col, brm_family, prior, b
 #' @param date_col Character or NULL. Name of the date column (if provided, an ISO week feature is added).
 #' @param brm_family A brms family. Default gaussian().
 #' @param prior A brms prior specification (default NULL).
-#' @param brm_args List. Extra args for brm(); chains/cores/seed handled below.
-#' @param early_stop_threshold Numeric. Reserved for future use (unused).
+#' @param brm_args List. Extra args for brm(). Chains/cores/seed are adjusted
+#'   internally for stability but user-specified values are respected up to
+#'   available cores when not parallelizing across combinations.
+#' @param early_stop_threshold Numeric. Reserved for future use (currently unused).
 #' @param parallel_combinations Logical. Parallelize across predictor combinations.
 #' @param max_comb_size Integer or NULL. Max predictors in any combination.
 #' @param sample_combinations Integer or NULL. Randomly sample this many combinations.
 #' @param show_progress Logical. Show progress bar when not parallelizing.
-#' @param verbose Logical.
+#' @param verbose Logical. Print progress information.
 #' @return A list with:
-#'   - Model: best brmsfit
-#'   - Data: data.table with appended metrics
-#'   - MAE: mean absolute error
-#'   - RMSE: root mean squared error
+#'   - Model           : best brmsfit
+#'   - Data            : data.table with appended metrics
+#'   - MAE             : mean absolute error
+#'   - RMSE            : root mean squared error
+#'   - SelectedPredictors : character vector of predictors in the best model
+#'   - SelectedFormula : formula string for the best model
+#'   - BestELPD        : elpd_loo for the best model (may be NA)
 fs_bayes <- function(
-    data, response_col, predictor_cols, date_col = NULL,
-    brm_family = gaussian(), prior = NULL, brm_args = list(), early_stop_threshold = 0.01,
-    parallel_combinations = FALSE, max_comb_size = NULL, sample_combinations = NULL,
-    show_progress = TRUE, verbose = TRUE
+    data,
+    response_col,
+    predictor_cols,
+    date_col = NULL,
+    brm_family = gaussian(),
+    prior = NULL,
+    brm_args = list(),
+    early_stop_threshold = 0.01, # reserved for future use
+    parallel_combinations = FALSE,
+    max_comb_size = NULL,
+    sample_combinations = NULL,
+    show_progress = TRUE,
+    verbose = TRUE
 ) {
+  # Decide outer cores once, robustly
+  n_cores_outer <- detect_outer_cores()
+  cores_total   <- if (n_cores_outer == 1L) 1L else n_cores_outer + 1L
   
-  # Decide outer cores once
-  n_cores_outer <- max(parallel::detectCores() - 1, 1)
-  
-  # Normalize data.table and basic cleaning
+  # Normalize to data.table
   data <- as.data.table(data)
   
   # Validate (with family-aware checks)
-  validate_data(data, response_col, predictor_cols, date_col, brm_family = brm_family)
+  validate_data(
+    data          = data,
+    response_col  = response_col,
+    predictor_cols = predictor_cols,
+    date_col      = date_col,
+    brm_family    = brm_family
+  )
   
   # Keep only required columns initially, drop NAs
   req_cols <- unique(c(response_col, predictor_cols, date_col))
   data <- na.omit(data[, ..req_cols])
-  if (nrow(data) == 0) stop("No complete cases in the data after removing missing values.")
+  if (nrow(data) == 0L) {
+    stop("No complete cases in the data after removing missing values.")
+  }
   
-  # Add ISO week feature if requested, then drop any new NAs
+  # Add ISO week feature if requested
   if (!is.null(date_col)) {
     res <- add_week_feature(data, date_col, predictor_cols)
     data <- res$data
     predictor_cols <- res$predictor_cols
     # Drop rows where iso_week_id couldn't be formed (should be rare)
     data <- data[!is.na(iso_week_id)]
+    if (nrow(data) == 0L) {
+      stop("No rows remain after constructing iso_week_id and removing NAs.")
+    }
   }
   
   # Build combinations (optionally sampled, with reproducible seed)
   seed_default <- if (!is.null(brm_args$seed)) brm_args$seed else 1234L
   combinations <- generate_predictor_combinations(
-    predictor_cols, max_comb_size, sample_combinations, seed = seed_default
+    predictor_cols      = predictor_cols,
+    max_comb_size       = max_comb_size,
+    sample_combinations = sample_combinations,
+    seed                = seed_default
   )
-  if (verbose) message("Total combinations to evaluate: ", length(combinations))
+  
+  if (verbose) {
+    message("Total combinations to evaluate: ", length(combinations))
+  }
+  
+  if (length(combinations) == 0L) {
+    stop("No predictor combinations generated. Check predictor_cols/max_comb_size/sample_combinations.")
+  }
   
   # Decide brms cores/chains based on outer parallelism (avoid oversubscription)
   chains_default <- 4L
+  
   if (parallel_combinations) {
-    brms_cores  <- 1L
+    # When parallelizing over combinations, keep each model single-chain/single-core
     brms_chains <- 1L
+    brms_cores  <- 1L
   } else {
-    # Let brms parallelize over chains using available cores
-    brms_chains <- if (!is.null(brm_args$chains)) brm_args$chains else min(chains_default, n_cores_outer)
-    brms_cores  <- if (!is.null(brm_args$cores))  brm_args$cores  else brms_chains
+    # Single-process over combinations: let brms parallelize across chains,
+    # respecting user overrides where reasonable
+    user_chains <- brm_args$chains
+    user_cores  <- brm_args$cores
+    
+    if (!is.null(user_chains)) {
+      brms_chains <- as.integer(user_chains)
+    } else {
+      brms_chains <- min(chains_default, n_cores_outer)
+    }
+    
+    if (!is.null(user_cores)) {
+      brms_cores <- as.integer(user_cores)
+    } else {
+      brms_cores <- brms_chains
+    }
+    
+    # Clamp to available cores (non-negative, at least 1)
+    brms_chains <- max(min(brms_chains, cores_total), 1L)
+    brms_cores  <- max(min(brms_cores,  cores_total), 1L)
   }
   
-  # Finalize brm args with safe defaults (but allow user overrides unless unsafe)
+  # Finalize brm args with safe defaults (user overrides respected within limits)
   safe_brm_args <- brm_args
   safe_brm_args$chains <- brms_chains
   safe_brm_args$cores  <- brms_cores
-  if (is.null(safe_brm_args$seed)) safe_brm_args$seed <- seed_default
+  if (is.null(safe_brm_args$seed)) {
+    safe_brm_args$seed <- seed_default
+  }
   
-  # Evaluation function
+  # Evaluation function for one combination
   eval_func <- function(preds) {
     evaluate_combination(
-      preds = preds,
-      data = data,
+      preds       = preds,
+      data        = data,
       response_col = response_col,
-      brm_family = brm_family,
-      prior = prior,
-      brm_args = safe_brm_args,
-      verbose = verbose
+      brm_family  = brm_family,
+      prior       = prior,
+      brm_args    = safe_brm_args,
+      verbose     = verbose
     )
   }
   
@@ -294,16 +470,22 @@ fs_bayes <- function(
     if (.Platform$OS.type == "windows") {
       cl <- makeCluster(n_cores_outer)
       on.exit(try(stopCluster(cl), silent = TRUE), add = TRUE)
+      
       clusterEvalQ(cl, {
-        library(brms); library(data.table); library(loo); library(tidyverse)
+        library(brms)
+        library(data.table)
+        library(loo)
       })
+      
       clusterExport(
         cl,
-        varlist = c("data", "response_col", "prior", "safe_brm_args",
-                    "brm_family", "verbose", "evaluate_combination",
-                    "fit_model"),
+        varlist = c(
+          "data", "response_col", "prior", "safe_brm_args",
+          "brm_family", "verbose", "evaluate_combination", "fit_model"
+        ),
         envir = environment()
       )
+      
       results_list <- parLapply(cl, combinations, eval_func)
     } else {
       results_list <- mclapply(combinations, eval_func, mc.cores = n_cores_outer)
@@ -317,22 +499,36 @@ fs_bayes <- function(
   
   # End timer
   elapsed_time <- difftime(Sys.time(), start_time, units = "secs")
-  if (verbose) message("Time elapsed for model evaluation: ", round(as.numeric(elapsed_time), 2), " seconds")
+  if (verbose) {
+    message(
+      "Time elapsed for model evaluation: ",
+      round(as.numeric(elapsed_time), 2),
+      " seconds"
+    )
+  }
   
-  # Select best model — require a fitted model and finite LOO
-  valid_results <- Filter(function(x) !is.null(x$model) && is.finite(x$loo_val), results_list)
+  # Select best model — require a fitted model and finite LOO if available
+  valid_results <- Filter(
+    f = function(x) !is.null(x$model) && is.finite(x$loo_val),
+    x = results_list
+  )
   
   if (length(valid_results) == 0L) {
     # If no finite LOO, fall back to any fitted model
-    fallback <- Filter(function(x) !is.null(x$model), results_list)
+    fallback <- Filter(
+      f = function(x) !is.null(x$model),
+      x = results_list
+    )
     if (length(fallback) == 0L) {
       stop("No valid models were fitted. Please check your data and model specifications.")
     } else {
-      if (verbose) message("No finite LOO available; selecting the first successfully fitted model.")
+      if (verbose) {
+        message("No finite LOO available; selecting the first successfully fitted model.")
+      }
       best <- fallback[[1L]]
     }
   } else {
-    ord <- order(vapply(valid_results, function(x) x$loo_val, numeric(1)), decreasing = TRUE)
+    ord <- order(vapply(valid_results, function(x) x$loo_val, numeric(1L)), decreasing = TRUE)
     best <- valid_results[[ord[1L]]]
     if (verbose) {
       message("Best Model Formula: ", best$formula_str)
@@ -345,7 +541,17 @@ fs_bayes <- function(
   mae  <- mean(data_with_metrics$abs_residuals, na.rm = TRUE)
   rmse <- sqrt(mean(data_with_metrics$squared_residuals, na.rm = TRUE))
   
-  if (verbose) message("MAE: ", signif(mae, 6), " | RMSE: ", signif(rmse, 6))
+  if (verbose) {
+    message("MAE: ", signif(mae, 6), " | RMSE: ", signif(rmse, 6))
+  }
   
-  list(Model = best$model, Data = data_with_metrics, MAE = mae, RMSE = rmse)
+  list(
+    Model             = best$model,
+    Data              = data_with_metrics,
+    MAE               = mae,
+    RMSE              = rmse,
+    SelectedPredictors = best$preds,
+    SelectedFormula   = best$formula_str,
+    BestELPD          = best$loo_val
+  )
 }

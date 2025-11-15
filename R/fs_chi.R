@@ -11,17 +11,19 @@ library(future)
 #'
 #' @description
 #' Tests association between each categorical feature and a (categorical) target
-#' via the chi-square test of independence. Handles missing values per-feature,
-#' switches to simulation-based p-values for low expected counts, and supports
-#' multiple-testing correction.
+#' via the chi-square test of independence. Character columns are automatically
+#' coerced to factors, and only factor features (excluding the target) are tested.
+#' Handles missing values per-feature, switches to simulation-based p-values
+#' when any expected cell count is < 5, and supports multiple-testing correction.
 #'
-#' @param data A data.frame or data.table with features and target.
+#' @param data A data.frame or data.table with features and target. Character
+#'   columns are coerced to factor.
 #' @param target_col Character scalar: name of the target column.
 #' @param sig_level Numeric threshold for significance (default 0.05).
 #' @param continuity_correction NULL/TRUE/FALSE: apply Yates correction for 2x2.
 #'   If NULL (default), auto-apply when table is 2x2.
 #' @param p_adjust_method Character: one of \code{p.adjust.methods} (default "bonferroni").
-#'   Set to "none" to disable multiple-testing correction.
+#'   Set to "none" to disable multiple-testing correction. Matching is case-insensitive.
 #' @param simulation_B Integer reps for simulation-based p-values when expected
 #'   counts are low (default 2000).
 #' @param parallel Logical; if TRUE, run features in parallel using furrr.
@@ -100,12 +102,16 @@ fs_chi <- function(
   if (parallel && temp_multisession) {
     old_plan <- future::plan()
     on.exit({ try(future::plan(old_plan), silent = TRUE) }, add = TRUE)
-    future::plan(multisession)
+    future::plan(future::multisession)
   }
   
   # ---- 4) Execute tests ----
   rows <- if (parallel) {
-    furrr::future_map(feature_cols, worker, .options = furrr::furrr_options(seed = TRUE))
+    furrr::future_map(
+      feature_cols,
+      worker,
+      .options = furrr::furrr_options(seed = TRUE)
+    )
   } else {
     lapply(feature_cols, worker)
   }
@@ -265,8 +271,16 @@ fs_chi <- function(
   })))
 }
 
-# Wrapper over p.adjust with guardrails
+# Wrapper over p.adjust with guardrails (case-insensitive, BH/BY safe)
 .fs_adjust_pvalues <- function(pvals, method = "bonferroni") {
-  method <- match.arg(tolower(method), tolower(stats::p.adjust.methods))
+  choices <- stats::p.adjust.methods
+  idx <- match(tolower(method), tolower(choices))
+  if (is.na(idx)) {
+    stop(sprintf(
+      "Invalid p_adjust_method '%s'. Must be one of: %s",
+      method, paste(choices, collapse = ", ")
+    ))
+  }
+  method <- choices[idx]
   stats::p.adjust(pvals, method = method)
 }

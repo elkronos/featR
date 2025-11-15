@@ -1,18 +1,20 @@
 # ============================
-# MARS Utilities
+# MARS Utilities (revised)
 # ============================
 
-# Required Packages
-library(earth)
-library(caret)
-library(data.table)
-library(testthat)
+# NOTE:
+# - Required packages are validated via check_libraries()
+# - This file uses fully-qualified package references where appropriate
+# - For classification, the FIRST factor level is treated as the "positive" class
+#   for ROC/PR AUC calculations and for caret::twoClassSummary.
 
 # ---------------------------
 # Utility Functions
 # ---------------------------
 
 #' Check Required Libraries
+#'
+#' Ensures required and optional packages are installed.
 #'
 #' @return invisible(NULL)
 #' @export
@@ -42,13 +44,24 @@ check_response_column <- function(data, responseName) {
 }
 
 #' Coerce Response
-#' Converts character response to factor; warns on unsupported types.
+#'
+#' Converts character response to factor; ensures supported types.
+#' Optionally sanitizes factor levels with make.names().
+#'
+#' @param data data.frame or data.table.
+#' @param responseName character. Name of response column.
+#' @param make_factor_names logical. If TRUE, factor levels are made syntactically valid.
+#'
 #' @export
-coerce_response <- function(data, responseName) {
+coerce_response <- function(data, responseName, make_factor_names = TRUE) {
   y <- data[[responseName]]
   if (is.character(y)) {
     message(sprintf("Coercing character response '%s' to factor.", responseName))
     data[[responseName]] <- factor(y)
+  }
+  if (is.factor(data[[responseName]]) && make_factor_names) {
+    lev <- levels(data[[responseName]])
+    levels(data[[responseName]]) <- make.names(lev)
   }
   if (!is.factor(data[[responseName]]) && !is.numeric(data[[responseName]])) {
     stop("Response must be numeric (regression) or factor (classification).")
@@ -60,7 +73,7 @@ coerce_response <- function(data, responseName) {
 #' @export
 handle_missing_values <- function(data) {
   initial_rows <- nrow(data)
-  data_clean <- na.omit(data)
+  data_clean <- stats::na.omit(data)
   message(sprintf("Removed %d rows with missing values.", initial_rows - nrow(data_clean)))
   return(data_clean)
 }
@@ -81,8 +94,14 @@ check_class_balance <- function(data, responseName, show_warnings = TRUE) {
 }
 
 #' Sample Data
+#'
+#' Down-samples to at most sampleSize rows (randomly).
+#'
 #' @export
 sample_data <- function(data, sampleSize, seed) {
+  if (!data.table::is.data.table(data)) {
+    data <- data.table::as.data.table(data)
+  }
   if (nrow(data) > sampleSize) {
     set.seed(seed)
     data <- data[sample(.N, sampleSize)]
@@ -102,6 +121,9 @@ split_data <- function(data, responseName, train_prop, seed) {
 #' Balance Classes (simple upsampling)
 #' @export
 balance_classes <- function(train, responseName) {
+  if (!data.table::is.data.table(train)) {
+    train <- data.table::as.data.table(train)
+  }
   if (is.factor(train[[responseName]])) {
     counts <- table(train[[responseName]])
     max_count <- max(counts)
@@ -109,7 +131,9 @@ balance_classes <- function(train, responseName) {
       subset_data <- train[train[[responseName]] == cl]
       if (nrow(subset_data) < max_count) {
         subset_data[sample(1:.N, max_count, replace = TRUE)]
-      } else subset_data
+      } else {
+        subset_data
+      }
     })
     train_balanced <- data.table::rbindlist(balanced_list)
     train_balanced <- train_balanced[sample(.N)]
@@ -122,20 +146,37 @@ balance_classes <- function(train, responseName) {
 #' Define Hyperparameter Grid
 #' @export
 define_hyperparameter_grid <- function(degree, nprune) {
-  expand.grid(nprune = unique(sort(nprune)), degree = unique(sort(degree)))
+  expand.grid(
+    nprune = unique(sort(nprune)),
+    degree = unique(sort(degree))
+  )
 }
 
 #' Preprocessing: remove NZV and high-correlation predictors
-#' @param corr_cut numeric correlation cutoff (0 disables)
+#'
+#' @param train data.table. Training data.
+#' @param test data.table. Test data.
+#' @param responseName character. Response column name.
+#' @param corr_cut numeric correlation cutoff (0 disables).
+#' @param remove_nzv logical. Remove near-zero-variance predictors.
+#'
 #' @export
-preprocess_predictors <- function(train, test, responseName, corr_cut = 0.95, remove_nzv = TRUE) {
+preprocess_predictors <- function(train, test, responseName,
+                                  corr_cut = 0.95,
+                                  remove_nzv = TRUE) {
+  if (!data.table::is.data.table(train)) {
+    train <- data.table::as.data.table(train)
+  }
+  if (!data.table::is.data.table(test)) {
+    test <- data.table::as.data.table(test)
+  }
+  
   pred_cols <- setdiff(colnames(train), responseName)
   nzv_removed <- character()
   corr_removed <- character()
   
-  if (remove_nzv) {
+  if (remove_nzv && length(pred_cols) > 0) {
     nzv <- caret::nearZeroVar(train[, ..pred_cols], saveMetrics = TRUE)
-    # remove if near-zero-variance OR zero-variance
     rm_idx <- which(nzv$nzv | nzv$zeroVar)
     if (length(rm_idx)) {
       nzv_removed <- rownames(nzv)[rm_idx]
@@ -159,49 +200,61 @@ preprocess_predictors <- function(train, test, responseName, corr_cut = 0.95, re
         cols <- c(keep, responseName)
         train <- train[, ..cols]
         test  <- test[, ..cols]
-        message(sprintf("Removed %d highly correlated numeric predictors (cutoff=%.2f).",
-                        length(corr_removed), corr_cut))
+        message(sprintf(
+          "Removed %d highly correlated numeric predictors (cutoff=%.2f).",
+          length(corr_removed), corr_cut
+        ))
       }
     }
   }
   
-  list(train = train, test = test,
-       removed = list(nzv = nzv_removed, corr = corr_removed))
+  list(
+    train = train,
+    test  = test,
+    removed = list(nzv = nzv_removed, corr = corr_removed)
+  )
 }
 
 #' Define Training Control
 #'
 #' @param number integer. CV folds.
 #' @param repeats integer. CV repeats.
-#' @param search character. "grid" or "random".
+#' @param search character. "grid" or "random". (Note: with an explicit tuneGrid,
+#'   caret will effectively do grid search even if search = "random".)
 #' @param train data.table. Training data.
 #' @param responseName character. Response column.
 #' @param seed integer. RNG seed.
-#' @param tune_grid_n integer or NULL. Number of tuning parameter combinations; if NULL, seeds are not set.
+#' @param tune_grid_n integer or NULL. Number of tuning parameter combinations;
+#'   if NULL, seeds are not set.
 #' @param verbose_iter logical. If TRUE, caret prints fold progress.
+#'
 #' @export
 define_train_control <- function(number, repeats, search, train, responseName, seed,
                                  tune_grid_n = NULL, verbose_iter = FALSE) {
   y <- train[[responseName]]
-  is_class <- is.factor(y)
+  is_class  <- is.factor(y)
   is_binary <- is_class && length(levels(y)) == 2
   
-  # select summary
+  # Select summary function
   if (is_binary && requireNamespace("pROC", quietly = TRUE)) {
     summary_fun <- caret::twoClassSummary
-  } else if (is_class && !is_binary && "multiClassSummary" %in% getNamespaceExports("caret")) {
+  } else if (is_class &&
+             !is_binary &&
+             "multiClassSummary" %in% getNamespaceExports("caret")) {
     summary_fun <- caret::multiClassSummary
   } else {
     summary_fun <- caret::defaultSummary
   }
   
-  # seeds only if we know grid size (to avoid caret seed mismatch warnings)
+  # Seeds only if we know grid size (to avoid caret seed mismatch warnings)
   seeds <- NULL
   if (!is.null(tune_grid_n) && is.finite(tune_grid_n) && tune_grid_n > 0) {
     total_resamples <- number * repeats
     set.seed(seed)
     seeds <- vector(mode = "list", length = total_resamples + 1)
-    for (i in seq_len(total_resamples)) seeds[[i]] <- sample.int(1e6, tune_grid_n)
+    for (i in seq_len(total_resamples)) {
+      seeds[[i]] <- sample.int(1e6, tune_grid_n)
+    }
     seeds[[total_resamples + 1]] <- sample.int(1e6, 1)
   }
   
@@ -219,23 +272,25 @@ define_train_control <- function(number, repeats, search, train, responseName, s
     seeds = seeds
   )
   
-  if (!inherits(ctrl, "trainControl")) class(ctrl) <- c("trainControl", class(ctrl))
+  # Defensive: ensure correct class (caret already does this, but safe)
+  if (!inherits(ctrl, "trainControl")) {
+    class(ctrl) <- c("trainControl", class(ctrl))
+  }
+  
   ctrl
 }
 
 #' Train Model
+#'
 #' @export
-train_model <- function(train, responseName, method, ctrl, hyperParameters, seed, metric = NULL) {
+train_model <- function(train, responseName, method, ctrl, hyperParameters,
+                        seed, metric = NULL) {
   set.seed(seed)
   
-  if (is.factor(train[[responseName]]) && length(levels(train[[responseName]])) == 2) {
-    lev <- levels(train[[responseName]])
-    pos <- lev[2]
-    levels(train[[responseName]]) <- make.names(lev)
-  }
-  
+  # Determine metric if not specified
   if (is.null(metric)) {
-    if (is.factor(train[[responseName]]) && length(levels(train[[responseName]])) == 2 &&
+    if (is.factor(train[[responseName]]) &&
+        length(levels(train[[responseName]])) == 2 &&
         identical(ctrl$summaryFunction, caret::twoClassSummary)) {
       metric <- "ROC"
     } else if (is.factor(train[[responseName]])) {
@@ -250,11 +305,11 @@ train_model <- function(train, responseName, method, ctrl, hyperParameters, seed
   model <- tryCatch({
     caret::train(
       fmla,
-      data = train,
-      method = method,
+      data      = train,
+      method    = method,
       trControl = ctrl,
-      tuneGrid = hyperParameters,
-      metric = metric,
+      tuneGrid  = hyperParameters,
+      metric    = metric,
       preProcess = c("center", "scale")
     )
   }, error = function(e) {
@@ -264,61 +319,109 @@ train_model <- function(train, responseName, method, ctrl, hyperParameters, seed
 }
 
 #' Evaluate Model
+#'
+#' Computes predictions and metrics; for binary classification, if the model
+#' was trained with twoClassSummary, the FIRST factor level is treated as the
+#' positive class for ROC and PR AUC.
+#'
 #' @export
 evaluate_model <- function(model, test, responseName) {
-  pred <- predict(model, newdata = test)
-  out <- list(model = model, predictions = pred)
+  pred <- stats::predict(model, newdata = test)
+  out  <- list(model = model, predictions = pred)
   
+  # Regression
   if (is.numeric(test[[responseName]])) {
-    obs <- test[[responseName]]
+    obs      <- test[[responseName]]
     rmse_val <- sqrt(mean((obs - pred)^2))
     mae_val  <- mean(abs(obs - pred))
     r2_val   <- caret::R2(pred, obs)
     out$metrics <- list(RMSE = rmse_val, MAE = mae_val, R2 = r2_val)
+    
+    # Classification
   } else if (is.factor(test[[responseName]])) {
     pred <- factor(pred, levels = levels(test[[responseName]]))
     cm <- caret::confusionMatrix(pred, test[[responseName]])
-    out$metrics <- list(Accuracy = unname(cm$overall["Accuracy"]),
-                        Kappa    = unname(cm$overall["Kappa"]))
+    out$metrics <- list(
+      Accuracy = unname(cm$overall["Accuracy"]),
+      Kappa    = unname(cm$overall["Kappa"])
+    )
     out$confusion_matrix <- cm$table
     
-    if (length(levels(test[[responseName]])) == 2) {
-      if (any("twoClassSummary" == deparse(body(model$control$summaryFunction)) |
-              identical(model$control$summaryFunction, caret::twoClassSummary))) {
-        probs <- predict(model, newdata = test, type = "prob")
-        pos_level <- colnames(probs)[2]
-        if (requireNamespace("pROC", quietly = TRUE)) {
-          roc_obj <- pROC::roc(response = test[[responseName]], predictor = probs[[pos_level]], quiet = TRUE)
-          out$metrics$ROC_AUC <- as.numeric(pROC::auc(roc_obj))
-        }
-        if (requireNamespace("PRROC", quietly = TRUE)) {
-          labs01 <- as.integer(test[[responseName]] == levels(test[[responseName]])[2])
-          pr <- PRROC::pr.curve(scores.class0 = probs[[pos_level]][labs01 == 1],
-                                scores.class1 = probs[[pos_level]][labs01 == 0], curve = FALSE)
-          out$metrics$PR_AUC <- unname(pr$auc.integral)
+    # Binary classification: ROC/PR AUC if twoClassSummary was used
+    if (length(levels(test[[responseName]])) == 2 &&
+        isTRUE(identical(model$control$summaryFunction, caret::twoClassSummary))) {
+      
+      # Probability predictions (required)
+      probs <- tryCatch(
+        stats::predict(model, newdata = test, type = "prob"),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(probs)) {
+        # Positive class = FIRST factor level (consistent with twoClassSummary)
+        pos_level <- levels(test[[responseName]])[1]
+        
+        if (pos_level %in% colnames(probs)) {
+          # ROC AUC via pROC, if available
+          if (requireNamespace("pROC", quietly = TRUE)) {
+            roc_obj <- pROC::roc(
+              response  = test[[responseName]],
+              predictor = probs[[pos_level]],
+              quiet     = TRUE
+            )
+            out$metrics$ROC_AUC <- as.numeric(pROC::auc(roc_obj))
+          }
+          
+          # PR AUC via PRROC, if available
+          if (requireNamespace("PRROC", quietly = TRUE)) {
+            labs_pos <- test[[responseName]] == pos_level
+            scores_pos <- probs[[pos_level]][labs_pos]
+            scores_neg <- probs[[pos_level]][!labs_pos]
+            
+            # Only compute if both classes are present in test
+            if (length(scores_pos) > 0L && length(scores_neg) > 0L) {
+              pr <- PRROC::pr.curve(
+                scores.class0 = scores_pos,
+                scores.class1 = scores_neg,
+                curve = FALSE
+              )
+              out$metrics$PR_AUC <- unname(pr$auc.integral)
+            }
+          }
         }
       }
     }
+    
   } else {
     stop("Unsupported response variable type.")
   }
   
+  # Variable importance (silently ignore if unsupported)
   vi_ok <- tryCatch({
     vi <- caret::varImp(model)
     out$varimp <- vi
     TRUE
   }, error = function(e) FALSE)
+  
   out
 }
 
-#' Start/Stop Parallel (optional)
+#' Start Parallel Backend (optional)
+#'
 #' @export
 maybe_register_parallel <- function(verbose = TRUE) {
   if (requireNamespace("doParallel", quietly = TRUE)) {
-    cores <- max(1L, parallel::detectCores() - 1L)
+    n_cores <- parallel::detectCores()
+    if (is.na(n_cores) || n_cores < 2L) {
+      cores <- 1L
+    } else {
+      cores <- n_cores - 1L
+    }
     cl <- parallel::makeCluster(cores)
     doParallel::registerDoParallel(cl)
-    if (verbose) message(sprintf("Parallel backend registered with %d workers.", cores))
+    if (verbose) {
+      message(sprintf("Parallel backend registered with %d worker(s).", cores))
+    }
     return(cl)
   } else {
     if (verbose) message("doParallel not installed; running single-threaded.")
@@ -326,7 +429,8 @@ maybe_register_parallel <- function(verbose = TRUE) {
   }
 }
 
-#' Stop Parallel
+#' Stop Parallel Backend
+#'
 #' @export
 stop_parallel <- function(cl) {
   if (!is.null(cl)) {
@@ -376,49 +480,88 @@ fs_mars <- function(data, responseName,
   if (verbose) message("Verifying required libraries...")
   check_libraries()
   
-  if (!is.data.table(data)) {
-    data <- as.data.table(data)
+  # Ensure data.table
+  if (!data.table::is.data.table(data)) {
+    data <- data.table::as.data.table(data)
     if (verbose) message("Converted input data to data.table.")
   }
   
   if (verbose) message("Checking response column existence...")
   check_response_column(data, responseName)
   
-  data <- coerce_response(data, responseName)
+  # Coerce response and sanitize factor levels if needed
+  data <- coerce_response(data, responseName, make_factor_names = TRUE)
+  
+  # Remove rows with missing values
   data <- handle_missing_values(data)
-  check_class_balance(data, responseName, show_warnings)
+  
+  # Optional down-sampling BEFORE class-balance checks and splitting
   data <- sample_data(data, sampleSize, seed)
+  
+  # Check global class balance after sampling
+  check_class_balance(data, responseName, show_warnings)
   
   if (verbose) message("Splitting data into training and test sets...")
   splits <- split_data(data, responseName, p, seed)
-  train <- splits$train
-  test  <- splits$test
-  if (verbose) message(sprintf("Training set: %d rows; Test set: %d rows.", nrow(train), nrow(test)))
-  
-  train <- balance_classes(train, responseName)
-  
-  pp <- preprocess_predictors(train, test, responseName, corr_cut = corr_cut, remove_nzv = remove_nzv)
-  train <- pp$train; test <- pp$test
-  
-  if (is.factor(train[[responseName]])) {
-    test[[responseName]] <- factor(test[[responseName]], levels = levels(train[[responseName]]))
+  train  <- splits$train
+  test   <- splits$test
+  if (verbose) {
+    message(sprintf("Training set: %d rows; Test set: %d rows.", nrow(train), nrow(test)))
   }
   
-  hyperParameters <- define_hyperparameter_grid(degree, nprune)
-  ctrl <- define_train_control(number, repeats, search, train, responseName, seed,
-                               tune_grid_n = nrow(hyperParameters),
-                               verbose_iter = verbose_iter)
+  # Check class balance in training set (for classification only)
+  check_class_balance(train, responseName, show_warnings)
   
+  # Simple upsampling for class imbalance
+  train <- balance_classes(train, responseName)
+  
+  # Predictor preprocessing (NZV, correlation)
+  pp <- preprocess_predictors(train, test, responseName,
+                              corr_cut = corr_cut,
+                              remove_nzv = remove_nzv)
+  train <- pp$train
+  test  <- pp$test
+  
+  # Align factor levels between train and test for classification
+  if (is.factor(train[[responseName]])) {
+    test[[responseName]] <- factor(test[[responseName]],
+                                   levels = levels(train[[responseName]]))
+  }
+  
+  # Hyperparameter grid and trainControl
+  hyperParameters <- define_hyperparameter_grid(degree, nprune)
+  ctrl <- define_train_control(
+    number       = number,
+    repeats      = repeats,
+    search       = search,
+    train        = train,
+    responseName = responseName,
+    seed         = seed,
+    tune_grid_n  = nrow(hyperParameters),
+    verbose_iter = verbose_iter
+  )
+  
+  # Parallel backend (optional)
   cl <- maybe_register_parallel(verbose)
   
   if (verbose) message("Training the model...")
   t_train <- system.time({
-    model <- train_model(train, responseName, method, ctrl, hyperParameters, seed, metric = NULL)
+    model <- train_model(
+      train           = train,
+      responseName    = responseName,
+      method          = method,
+      ctrl            = ctrl,
+      hyperParameters = hyperParameters,
+      seed            = seed,
+      metric          = NULL
+    )
   })
   
   if (!is.null(cl)) stop_parallel(cl)
   
-  if (verbose) message(sprintf("Training completed in %.2f seconds.", t_train[["elapsed"]]))
+  if (verbose) {
+    message(sprintf("Training completed in %.2f seconds.", t_train[["elapsed"]]))
+  }
   
   if (verbose) message("Evaluating model performance...")
   eval_metrics <- evaluate_model(model, test, responseName)
@@ -427,4 +570,3 @@ fs_mars <- function(data, responseName,
   if (verbose) message("Model training and evaluation complete.")
   return(eval_metrics)
 }
-

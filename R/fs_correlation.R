@@ -8,8 +8,8 @@
 #' @param threshold Numeric in [0, 1]. Pairs with |correlation| > threshold are selected.
 #' @param method One of \code{"pearson"} (default), \code{"spearman"}, \code{"kendall"},
 #'   \code{"polychoric"}, \code{"pointbiserial"}.
-#' @param na.rm Logical. If \code{TRUE}, correlations are computed with pairwise complete observations
-#'   (or the closest equivalent for the method). Default \code{FALSE}.
+#' @param na.rm Logical. If \code{TRUE}, missing values are handled using pairwise (or casewise,
+#'   where required by the method) deletion. Default \code{FALSE}.
 #' @param parallel Logical. Use parallel processing for point-biserial computations. Default \code{FALSE}.
 #' @param n_cores Integer >= 1. Number of cores if \code{parallel=TRUE}. Default \code{2}.
 #' @param sample_frac Numeric in (0, 1]. Fraction of rows to sample before computing correlations.
@@ -35,7 +35,15 @@ fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
                            no_vars_message = "No variables meet the correlation threshold.",
                            seed = NULL, verbose = FALSE) {
   # Validate inputs
-  validate_inputs(data, threshold, method, output_format, sample_frac, n_cores)
+  validate_inputs(
+    data         = data,
+    threshold    = threshold,
+    method       = method,
+    output_format = output_format,
+    sample_frac  = sample_frac,
+    n_cores      = n_cores,
+    diag_value   = diag_value
+  )
   
   # Sample rows if requested (guarantee at least 1 row when possible)
   data <- sample_data(data, sample_frac, seed, verbose)
@@ -45,12 +53,12 @@ fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
   
   # Calculate the correlation matrix
   corr_matrix <- calculate_correlation(
-    data        = data,
-    method      = method,
-    na.rm       = na.rm,
-    parallel    = parallel,
-    n_cores     = n_cores,
-    verbose     = verbose
+    data     = data,
+    method   = method,
+    na.rm    = na.rm,
+    parallel = parallel,
+    n_cores  = n_cores,
+    verbose  = verbose
   )
   
   # Ensure square named matrix
@@ -67,7 +75,7 @@ fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
   # Find high-correlation pairs
   high_corr_idx <- find_high_correlation(corr_matrix, threshold)
   
-  if (nrow(high_corr_idx) == 0) {
+  if (nrow(high_corr_idx) == 0L) {
     message(no_vars_message)
     selected_vars <- character(0)
   } else {
@@ -91,10 +99,15 @@ fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
 
 #' Validate Function Inputs
 #' @noRd
-validate_inputs <- function(data, threshold, method, output_format, sample_frac, n_cores) {
+validate_inputs <- function(data, threshold, method, output_format, sample_frac, n_cores, diag_value) {
   if (!is.data.frame(data) && !is.matrix(data)) {
     stop("`data` must be a data frame or matrix.")
   }
+  
+  if (is.null(nrow(data)) || nrow(data) < 1L) {
+    stop("`data` must have at least one row.")
+  }
+  
   if (ncol(data) < 2L) {
     stop("`data` must have at least 2 columns to compute correlations.")
   }
@@ -104,39 +117,51 @@ validate_inputs <- function(data, threshold, method, output_format, sample_frac,
     stop("Invalid `method`. Choose one of: ", paste(valid_methods, collapse = ", "), ".")
   }
   
-  if (!(is.numeric(threshold) && length(threshold) == 1L && threshold >= 0 && threshold <= 1)) {
-    stop("`threshold` must be a single numeric value in [0, 1].")
+  if (!(is.numeric(threshold) && length(threshold) == 1L &&
+        is.finite(threshold) && threshold >= 0 && threshold <= 1)) {
+    stop("`threshold` must be a single finite numeric value in [0, 1].")
   }
   
   if (!(output_format %in% c("matrix", "data.frame"))) {
     stop("`output_format` must be 'matrix' or 'data.frame'.")
   }
   
-  if (!(is.numeric(sample_frac) && length(sample_frac) == 1L && sample_frac > 0 && sample_frac <= 1)) {
-    stop("`sample_frac` must be a single numeric value in (0, 1].")
+  if (!(is.numeric(sample_frac) && length(sample_frac) == 1L &&
+        is.finite(sample_frac) && sample_frac > 0 && sample_frac <= 1)) {
+    stop("`sample_frac` must be a single finite numeric value in (0, 1].")
   }
   
-  if (!(is.numeric(n_cores) && length(n_cores) == 1L && n_cores >= 1)) {
-    stop("`n_cores` must be a numeric value >= 1.")
+  if (!(is.numeric(n_cores) && length(n_cores) == 1L &&
+        is.finite(n_cores) && n_cores >= 1)) {
+    stop("`n_cores` must be a finite numeric value >= 1.")
   }
+  
+  # diag_value: allow numeric scalar or any single NA
+  if (!(length(diag_value) == 1L &&
+        (is.numeric(diag_value) || is.na(diag_value)))) {
+    stop("`diag_value` must be a single numeric value or NA.")
+  }
+  
+  df <- as.data.frame(data)
   
   # Column-type checks per method
   if (method %in% c("pearson", "spearman", "kendall")) {
-    if (!all(vapply(as.data.frame(data), is.numeric, logical(1)))) {
+    if (!all(vapply(df, is.numeric, logical(1)))) {
       stop("All columns must be numeric for method '", method, "'.")
     }
   } else if (identical(method, "pointbiserial")) {
-    ok <- vapply(as.data.frame(data), function(x) is.numeric(x) || is_dichotomous(x), logical(1))
+    ok <- vapply(df, function(x) is.numeric(x) || is_dichotomous(x), logical(1))
     if (!all(ok)) {
       stop("For 'pointbiserial', all columns must be numeric or dichotomous (exactly 2 unique non-NA values).")
     }
     # Require at least one continuous and one dichotomous variable; otherwise no valid pairs exist
-    if (!any(vapply(as.data.frame(data), is_continuous, logical(1))) ||
-        !any(vapply(as.data.frame(data), is_dichotomous, logical(1)))) {
+    has_cont <- any(vapply(df, is_continuous, logical(1)))
+    has_dich <- any(vapply(df, is_dichotomous, logical(1)))
+    if (!has_cont || !has_dich) {
       warning("No valid continuous–dichotomous pairs found for 'pointbiserial'. Result will be an NA matrix.")
     }
   } else if (identical(method, "polychoric")) {
-    if (!all(vapply(as.data.frame(data), is.ordered, logical(1)))) {
+    if (!all(vapply(df, is.ordered, logical(1)))) {
       stop("All columns must be ordered factors for method 'polychoric'.")
     }
   }
@@ -167,19 +192,27 @@ load_required_packages <- function(method, parallel) {
 #' Sample Data (row-wise)
 #' @noRd
 sample_data <- function(data, sample_frac, seed = NULL, verbose = FALSE) {
-  # Early exit
-  if (identical(sample_frac, 1)) return(data)
+  # Early exit: no sampling if sample_frac is effectively 1
+  if (sample_frac == 1) return(data)
   
   n_rows <- nrow(data)
   if (is.null(n_rows) || n_rows < 1L) {
     stop("`data` must have at least one row.")
   }
   
-  if (!is.null(seed)) set.seed(as.integer(seed))
+  if (!is.null(seed)) {
+    if (!is.numeric(seed) || length(seed) != 1L || is.na(seed)) {
+      stop("`seed` must be a single numeric value if provided.")
+    }
+    set.seed(as.integer(seed))
+  }
+  
   size <- max(1L, min(n_rows, ceiling(sample_frac * n_rows)))
   idx  <- sample.int(n_rows, size = size, replace = FALSE)
   
-  if (isTRUE(verbose)) message(sprintf("Sampling %d/%d rows (%.1f%%).", size, n_rows, 100 * size / n_rows))
+  if (isTRUE(verbose)) {
+    message(sprintf("Sampling %d/%d rows (%.1f%%).", size, n_rows, 100 * size / n_rows))
+  }
   
   data[idx, , drop = FALSE]
 }
@@ -190,10 +223,12 @@ calculate_correlation <- function(data, method, na.rm, parallel, n_cores, verbos
   if (identical(method, "pointbiserial")) {
     return(calculate_pointbiserial_correlation(data, na.rm, parallel, n_cores, verbose))
   } else if (identical(method, "polychoric")) {
-    return(calculate_polychoric_correlation(data, verbose))
+    return(calculate_polychoric_correlation(data, na.rm, verbose))
   } else {
     use_opt <- if (isTRUE(na.rm)) "pairwise.complete.obs" else "everything"
-    if (isTRUE(verbose)) message("Calculating ", method, " correlation matrix (use = '", use_opt, "').")
+    if (isTRUE(verbose)) {
+      message("Calculating ", method, " correlation matrix (use = '", use_opt, "').")
+    }
     data <- as.data.frame(data)
     return(stats::cor(data, method = method, use = use_opt))
   }
@@ -214,24 +249,34 @@ calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_cores, 
   dich_idx <- which(vapply(data, is_dichotomous, logical(1)))
   
   if (length(cont_idx) == 0L || length(dich_idx) == 0L) {
-    if (isTRUE(verbose)) message("No continuous–dichotomous pairs available; returning NA matrix.")
+    if (isTRUE(verbose)) {
+      message("No continuous–dichotomous pairs available; returning NA matrix.")
+    }
     return(cm)
   }
   
   # Build all i (continuous) x j (dichotomous) pairs (exclude i==j just in case)
-  pairs <- expand.grid(i = cont_idx, j = dich_idx, KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
+  pairs <- expand.grid(i = cont_idx, j = dich_idx,
+                       KEEP.OUT.ATTRS = FALSE, stringsAsFactors = FALSE)
   pairs <- pairs[pairs$i != pairs$j, , drop = FALSE]
   
   if (nrow(pairs) == 0L) {
-    if (isTRUE(verbose)) message("No valid distinct pairs; returning NA matrix.")
+    if (isTRUE(verbose)) {
+      message("No valid distinct pairs; returning NA matrix.")
+    }
     return(cm)
   }
   
   # Compute with or without parallelism
   if (isTRUE(parallel)) {
     n_cores <- max(1L, as.integer(n_cores))
-    n_cores <- min(n_cores, parallel::detectCores(logical = TRUE))
-    if (isTRUE(verbose)) message("Running point-biserial in parallel on ", n_cores, " cores.")
+    max_cores <- parallel::detectCores(logical = TRUE)
+    if (is.finite(max_cores)) {
+      n_cores <- min(n_cores, max_cores)
+    }
+    if (isTRUE(verbose)) {
+      message("Running point-biserial in parallel on ", n_cores, " cores.")
+    }
     
     cl <- parallel::makeCluster(n_cores)
     doParallel::registerDoParallel(cl)
@@ -242,14 +287,19 @@ calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_cores, 
     
     `%dopar%` <- foreach::`%dopar%`
     
-    res <- foreach::foreach(k = seq_len(nrow(pairs)), .combine = rbind, .packages = "ltm") %dopar% {
+    res <- foreach::foreach(
+      k = seq_len(nrow(pairs)),
+      .combine = rbind,
+      .packages = "ltm"
+    ) %dopar% {
       i <- pairs$i[k]; j <- pairs$j[k]
       xi <- data[[i]]
       xj <- data[[j]]
       # Robust: treat y as 2-level factor even if not coded 0/1
       grp <- if (is.factor(xj)) stats::droplevels(xj) else factor(xj)
       r   <- tryCatch(
-        ltm::biserial.cor(x = xi, y = grp, use = if (na.rm) "complete.obs" else "all.obs"),
+        ltm::biserial.cor(x = xi, y = grp,
+                          use = if (na.rm) "complete.obs" else "all.obs"),
         error = function(e) NA_real_
       )
       c(i = i, j = j, r = r)
@@ -282,14 +332,17 @@ calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_cores, 
       }
     }
   } else {
-    if (isTRUE(verbose)) message("Running point-biserial sequentially.")
+    if (isTRUE(verbose)) {
+      message("Running point-biserial sequentially.")
+    }
     for (k in seq_len(nrow(pairs))) {
       i <- pairs$i[k]; j <- pairs$j[k]
       xi <- data[[i]]
       xj <- data[[j]]
       grp <- if (is.factor(xj)) stats::droplevels(xj) else factor(xj)
       r <- tryCatch(
-        ltm::biserial.cor(x = xi, y = grp, use = if (na.rm) "complete.obs" else "all.obs"),
+        ltm::biserial.cor(x = xi, y = grp,
+                          use = if (na.rm) "complete.obs" else "all.obs"),
         error = function(e) NA_real_
       )
       cm[i, j] <- r
@@ -302,10 +355,14 @@ calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_cores, 
 
 #' Polychoric Correlation Matrix
 #' @noRd
-calculate_polychoric_correlation <- function(data, verbose) {
-  if (isTRUE(verbose)) message("Calculating polychoric correlation matrix via polycor::hetcor().")
+calculate_polychoric_correlation <- function(data, na.rm, verbose) {
+  if (isTRUE(verbose)) {
+    message("Calculating polychoric correlation matrix via polycor::hetcor().")
+  }
+  # Map na.rm to hetcor's 'use' argument
+  use_opt <- if (isTRUE(na.rm)) "pairwise.complete.obs" else "complete.obs"
   # polycor::hetcor() returns a list with element `correlations`
-  res <- polycor::hetcor(as.data.frame(data))
+  res <- polycor::hetcor(as.data.frame(data), use = use_opt)
   mat <- res$correlations
   # Ensure square with dimnames
   if (is.null(colnames(mat))) colnames(mat) <- make.names(seq_len(ncol(mat)))

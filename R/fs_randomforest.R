@@ -1,8 +1,8 @@
 # ==============================================================================
 # Random Forest Wrapper (Classification/Regression)
 # ==============================================================================
-# Dependencies: randomForest, doParallel, foreach, caret, data.table, stats
-# Optional: pROC (binary ROC/AUC if installed)
+# Dependencies: randomForest, caret, data.table
+# Optional: doParallel, foreach, pROC (binary ROC/AUC)
 # ==============================================================================
 
 # ---- Package checks -----------------------------------------------------------
@@ -29,25 +29,26 @@
 #' @details
 #' \strong{control list (defaults)}:
 #' \itemize{
-#'   \item \code{seed = NULL}
+#'   \item \code{seed = NULL} (integer; used for reproducibility)
 #'   \item \code{split_ratio = 0.75}
-#'   \item \code{sample_size = NULL}
+#'   \item \code{sample_size = NULL} (optional downsampling size before split)
 #'   \item \code{ntree = 500}
 #'   \item \code{importance = TRUE}
-#'   \item \code{mtry = NULL}
+#'   \item \code{mtry = NULL} (defaults: \eqn{\sqrt{p}} for classification, \eqn{p/3} for regression)
 #'   \item \code{nodesize = NULL}
 #'   \item \code{maxnodes = NULL}
 #'   \item \code{sampsize = NULL}
 #'   \item \code{classwt = NULL}
 #'   \item \code{strata = NULL}
 #'   \item \code{replace = TRUE}
-#'   \item \code{n_cores = 1}
-#'   \item \code{preprocess = NULL} (function \code{dt -> dt})
-#'   \item \code{feature_select = NULL} (function \code{dt -> dt}; must retain target)
-#'   \item \code{impute = TRUE} (median/mode)
-#'   \item \code{drop_zerovar = TRUE}
-#'   \item \code{oob = TRUE}
+#'   \item \code{n_cores = 1} (capped at \code{ntree} and available cores)
+#'   \item \code{preprocess = NULL} (function \code{dt -> dt}, applied before split)
+#'   \item \code{feature_select = NULL} (function \code{dt -> dt}; must retain target, applied before split)
+#'   \item \code{impute = TRUE} (median/mode; learned on training data and applied to test)
+#'   \item \code{drop_zerovar = TRUE} (near-zero variance removal using training data only)
+#'   \item \code{oob = TRUE} (include OOB metrics in the result object)
 #'   \item \code{return_test_data = FALSE}
+#'   \item \code{positive_class = NULL} (optional level name for binary AUC; defaults to second factor level)
 #' }
 #'
 #' @return An object of class \code{fs_rf_result} containing:
@@ -58,7 +59,7 @@
 #'   \item \code{probabilities} : class probabilities (classification)
 #'   \item \code{importance} : variable importance data.frame (if requested)
 #'   \item \code{confusion} : confusion matrix (classification)
-#'   \item \code{oob} : out-of-bag metrics (if available)
+#'   \item \code{oob} : out-of-bag metrics (if \code{control$oob = TRUE})
 #'   \item \code{target}, \code{type}, \code{feature_names}, \code{train_index}, \code{control}
 #'   \item \code{test_data} : held-out test set (if \code{return_test_data = TRUE})
 #' }
@@ -71,11 +72,12 @@ fs_randomforest <- function(data,
                             control = list(),
                             auto_install = FALSE) {
   
-  .require_or_install(c("randomForest", "doParallel", "foreach", "caret", "data.table"), auto_install)
+  # Core dependencies (parallel and pROC are optional)
+  .require_or_install(c("randomForest", "caret", "data.table"), auto_install)
   
   type <- match.arg(type)
   if (!is.data.frame(data)) stop("`data` must be a data.frame or data.table.", call. = FALSE)
-  if (!is.character(target) || length(target) != 1 || !nzchar(target)) {
+  if (!is.character(target) || length(target) != 1L || !nzchar(target)) {
     stop("`target` must be a non-empty single column name.", call. = FALSE)
   }
   if (!target %in% names(data)) stop("Target column not found in `data`.", call. = FALSE)
@@ -100,11 +102,17 @@ fs_randomforest <- function(data,
     impute = TRUE,
     drop_zerovar = TRUE,
     oob = TRUE,
-    return_test_data = FALSE
+    return_test_data = FALSE,
+    positive_class = NULL
   ), control, keep.null = TRUE)
   
   # ---- Seed -------------------------------------------------------------------
-  if (!is.null(ctrl$seed)) set.seed(as.integer(ctrl$seed))
+  seed_int <- NULL
+  if (!is.null(ctrl$seed)) {
+    seed_int <- suppressWarnings(as.integer(ctrl$seed))
+    if (is.na(seed_int)) stop("`control$seed` must be coercible to an integer scalar.", call. = FALSE)
+    set.seed(seed_int)
+  }
   
   # ---- Convert to data.table --------------------------------------------------
   dt <- data.table::as.data.table(data)
@@ -114,13 +122,16 @@ fs_randomforest <- function(data,
     if (!is.function(ctrl$preprocess)) stop("`control$preprocess` must be a function(dt) -> dt.", call. = FALSE)
     dt <- ctrl$preprocess(dt)
     if (!is.data.frame(dt)) stop("`preprocess` must return a data.frame/data.table.", call. = FALSE)
+    dt <- data.table::as.data.table(dt)
   }
   
   # ---- Custom feature selection ----------------------------------------------
   if (!is.null(ctrl$feature_select)) {
     if (!is.function(ctrl$feature_select)) stop("`control$feature_select` must be a function(dt) -> dt.", call. = FALSE)
     dt <- ctrl$feature_select(dt)
+    if (!is.data.frame(dt)) stop("`feature_select` must return a data.frame/data.table.", call. = FALSE)
     if (!target %in% names(dt)) stop("Feature selection removed the target column.", call. = FALSE)
+    dt <- data.table::as.data.table(dt)
   }
   
   # ---- Date -> numeric --------------------------------------------------------
@@ -130,77 +141,165 @@ fs_randomforest <- function(data,
     dt[, (idx) := lapply(.SD, as.numeric), .SDcols = idx]
   }
   
-  # ---- Target type ------------------------------------------------------------
+  # ---- Target type and NA handling -------------------------------------------
   if (type == "classification") {
     dt[[target]] <- as.factor(dt[[target]])
-    if (nlevels(dt[[target]]) < 2) stop("Classification target must have at least 2 classes.", call. = FALSE)
+    
+    if (anyNA(dt[[target]])) {
+      warning("Rows with NA in the classification target were removed before training.")
+      keep_rows <- !is.na(dt[[target]])
+      if (length(keep_rows) != nrow(dt)) {
+        stop("Internal error: NA-filter logical index length mismatch (classification).", call. = FALSE)
+      }
+      dt <- dt[keep_rows]
+    }
+    
+    dt[[target]] <- droplevels(dt[[target]])
+    if (nlevels(dt[[target]]) < 2L) {
+      stop("Classification target must have at least 2 classes after preprocessing and NA removal.", call. = FALSE)
+    }
+    
   } else {
     dt[[target]] <- suppressWarnings(as.numeric(dt[[target]]))
-    if (anyNA(dt[[target]])) stop("Regression target must be numeric (coercion introduced NAs).", call. = FALSE)
+    
+    if (anyNA(dt[[target]])) {
+      warning("Rows with NA in the regression target (including from coercion) were removed before training.")
+      keep_rows <- !is.na(dt[[target]])
+      if (length(keep_rows) != nrow(dt)) {
+        stop("Internal error: NA-filter logical index length mismatch (regression).", call. = FALSE)
+      }
+      dt <- dt[keep_rows]
+    }
+  }
+  
+  if (nrow(dt) == 0L) {
+    stop("No rows left after cleaning the target variable.", call. = FALSE)
   }
   
   # ---- Optional downsampling BEFORE split ------------------------------------
   if (!is.null(ctrl$sample_size) && is.finite(ctrl$sample_size) && ctrl$sample_size > 0) {
+    total_n <- nrow(dt)
+    desired_total <- min(as.integer(ctrl$sample_size), total_n)
+    
     if (type == "classification") {
-      dt <- dt[, .SD[sample(.N, size = max(1L, floor((.N / nrow(dt)) * ctrl$sample_size)))], by = target]
+      dt <- dt[
+        , {
+          desired_class <- floor((.N / total_n) * desired_total)
+          size_class    <- max(1L, min(.N, desired_class))
+          .SD[sample(.N, size = size_class)]
+        },
+        by = target
+      ]
     } else {
-      dt <- dt[sample(.N, min(ctrl$sample_size, .N))]
+      dt <- dt[sample(.N, size = desired_total)]
     }
-  }
-  
-  # ---- Zero-variance removal --------------------------------------------------
-  if (isTRUE(ctrl$drop_zerovar)) {
-    nzv <- caret::nearZeroVar(dt[, !target, with = FALSE], saveMetrics = TRUE)
-    if (any(nzv$zeroVar | nzv$nzv)) {
-      drop_cols <- rownames(nzv)[nzv$zeroVar | nzv$nzv]
-      if (length(drop_cols)) dt[, (drop_cols) := NULL]
-    }
-  }
-  
-  # ---- Imputation -------------------------------------------------------------
-  if (isTRUE(ctrl$impute)) {
-    impute_col <- function(x) {
-      if (!anyNA(x)) return(x)
-      if (is.numeric(x)) {
-        med <- stats::median(x, na.rm = TRUE); x[is.na(x)] <- med
-      } else if (is.factor(x)) {
-        tab <- table(x, useNA = "no"); if (length(tab)) x[is.na(x)] <- names(which.max(tab))
-      } else if (is.character(x)) {
-        tab <- table(x, useNA = "no"); if (length(tab)) x[is.na(x)] <- names(which.max(tab))
-      } else {
-        x[is.na(x)] <- NA
-      }
-      x
-    }
-    feat_cols <- setdiff(names(dt), target)
-    dt[, (feat_cols) := lapply(.SD, impute_col), .SDcols = feat_cols]
   }
   
   # ---- Train/test split -------------------------------------------------------
-  if (ctrl$split_ratio <= 0 || ctrl$split_ratio >= 1) stop("`split_ratio` must be in (0,1).", call. = FALSE)
-  index <- caret::createDataPartition(y = dt[[target]], p = ctrl$split_ratio, list = FALSE)
-  train_dt <- dt[index]
-  test_dt  <- dt[-index]
-  if (nrow(test_dt) == 0L) stop("Test split is empty; adjust `split_ratio`.", call. = FALSE)
+  if (ctrl$split_ratio <= 0 || ctrl$split_ratio >= 1) {
+    stop("`split_ratio` must be in (0,1).", call. = FALSE)
+  }
   
-  # ---- Align factor levels ----------------------------------------------------
+  index <- caret::createDataPartition(y = dt[[target]], p = ctrl$split_ratio, list = FALSE)
+  train_df <- as.data.frame(dt[index])
+  test_df  <- as.data.frame(dt[-index])
+  
+  if (nrow(test_df) == 0L) {
+    stop("Test split is empty; adjust `split_ratio`.", call. = FALSE)
+  }
+  
+  # ---- Align factor levels between train and test -----------------------------
   align_levels <- function(train, test) {
-    for (nm in intersect(names(train), names(test))) {
-      if (is.factor(train[[nm]])) test[[nm]] <- factor(test[[nm]], levels = levels(train[[nm]]))
+    common <- intersect(names(train), names(test))
+    for (nm in common) {
+      if (is.factor(train[[nm]])) {
+        test[[nm]] <- factor(test[[nm]], levels = levels(train[[nm]]))
+      }
     }
     list(train = train, test = test)
   }
-  aligned <- align_levels(train_dt, test_dt)
-  train_dt <- aligned$train
-  test_dt  <- aligned$test
   
-  # ---- Prepare X/Y ------------------------------------------------------------
-  target_idx <- match(target, names(train_dt))
-  x_train <- train_dt[, -target_idx, with = FALSE]
-  y_train <- train_dt[[target]]
+  aligned <- align_levels(train_df, test_df)
+  train_df <- aligned$train
+  test_df  <- aligned$test
   
-  # Ensure data.frame for randomForest; validate predictors
-  x_train <- as.data.frame(x_train)
+  # ---- Zero-variance removal (train-only stats) ------------------------------
+  if (isTRUE(ctrl$drop_zerovar)) {
+    predictor_cols_train <- setdiff(names(train_df), target)
+    if (length(predictor_cols_train) > 0L) {
+      nzv <- caret::nearZeroVar(
+        train_df[, predictor_cols_train, drop = FALSE],
+        saveMetrics = TRUE
+      )
+      drop_cols <- rownames(nzv)[nzv$zeroVar | nzv$nzv]
+      if (length(drop_cols) > 0L) {
+        for (dc in drop_cols) {
+          train_df[[dc]] <- NULL
+          if (dc %in% names(test_df)) test_df[[dc]] <- NULL
+        }
+      }
+    }
+  }
+  
+  # ---- Imputation (train-only stats, applied to both) ------------------------
+  if (isTRUE(ctrl$impute)) {
+    feat_cols <- setdiff(names(train_df), target)
+    if (length(feat_cols) > 0L) {
+      # Compute imputation values on training data
+      impute_values <- vector("list", length(feat_cols))
+      names(impute_values) <- feat_cols
+      
+      for (i in seq_along(feat_cols)) {
+        nm <- feat_cols[i]
+        x  <- train_df[[nm]]
+        if (!anyNA(x)) {
+          impute_values[[i]] <- NA
+        } else if (is.numeric(x)) {
+          impute_values[[i]] <- stats::median(x, na.rm = TRUE)
+        } else if (is.factor(x) || is.character(x)) {
+          tab <- table(x, useNA = "no")
+          impute_values[[i]] <- if (length(tab)) names(which.max(tab)) else NA
+        } else {
+          impute_values[[i]] <- NA
+        }
+      }
+      
+      # Apply to train and test
+      for (i in seq_along(feat_cols)) {
+        nm <- feat_cols[i]
+        val <- impute_values[[i]]
+        if (length(val) == 1L && is.na(val)) next
+        
+        # Train
+        x_tr <- train_df[[nm]]
+        idx_na_tr <- is.na(x_tr)
+        if (any(idx_na_tr)) {
+          x_tr[idx_na_tr] <- val
+          train_df[[nm]] <- x_tr
+        }
+        
+        # Test
+        if (nm %in% names(test_df)) {
+          x_te <- test_df[[nm]]
+          idx_na_te <- is.na(x_te)
+          if (any(idx_na_te)) {
+            x_te[idx_na_te] <- val
+            test_df[[nm]] <- x_te
+          }
+        }
+      }
+    }
+  }
+  
+  # ---- Prepare X/Y for training ----------------------------------------------
+  if (!target %in% names(train_df)) {
+    stop("Target column missing from training data after preprocessing.", call. = FALSE)
+  }
+  
+  target_idx <- match(target, names(train_df))
+  x_train <- train_df[, -target_idx, drop = FALSE]
+  y_train <- train_df[[target]]
+  
   p <- ncol(x_train)
   if (is.na(p) || p < 1L) {
     stop("No predictor columns left after preprocessing/feature selection/NZV removal.", call. = FALSE)
@@ -223,29 +322,45 @@ fs_randomforest <- function(data,
       stop("`sampsize` must be a single scalar for regression.", call. = FALSE)
     }
     if (anyNA(sampsize_eff)) {
-      sampsize_eff <- if (isTRUE(ctrl$replace)) nrow(x_train) else ceiling(0.632 * nrow(x_train))
+      n_obs <- nrow(x_train)
+      sampsize_eff <- if (isTRUE(ctrl$replace)) n_obs else ceiling(0.632 * n_obs)
     }
     sampsize_eff <- as.integer(sampsize_eff)
-    if (!is.finite(sampsize_eff) || sampsize_eff < 1L) sampsize_eff <- 1L
-    sampsize_eff <- min(sampsize_eff, nrow(x_train))
+    if (any(!is.finite(sampsize_eff)) || any(sampsize_eff < 1L)) {
+      sampsize_eff <- 1L
+    }
+    if (length(sampsize_eff) == 1L) {
+      sampsize_eff <- min(sampsize_eff, nrow(x_train))
+    } else {
+      sampsize_eff <- pmin(sampsize_eff, nrow(x_train))
+    }
   }
   
-  # ---- Parallel setup ---------------------------------------------------------
-  max_cores <- tryCatch(parallel::detectCores(logical = TRUE), error = function(e) 1L)
-  n_cores <- max(1L, min(as.integer(ctrl$n_cores), max_cores))
-  if (is.na(n_cores)) n_cores <- 1L
-  
-  # ---- ntree distribution -----------------------------------------------------
+  # ---- ntree and parallel setup ----------------------------------------------
   ntree <- as.integer(ctrl$ntree)
   if (!is.finite(ntree) || ntree < 1L) stop("`ntree` must be a positive integer.", call. = FALSE)
+  
+  max_cores <- tryCatch(parallel::detectCores(logical = TRUE), error = function(e) 1L)
+  requested_cores <- suppressWarnings(as.integer(ctrl$n_cores))
+  if (is.na(requested_cores) || requested_cores < 1L) requested_cores <- 1L
+  n_cores <- min(requested_cores, max_cores, ntree)
+  if (is.na(n_cores) || n_cores < 1L) n_cores <- 1L
   
   ntree_list <- if (n_cores > 1L) {
     base <- ntree %/% n_cores
     remainder <- ntree %% n_cores
     out <- rep(base, n_cores)
     if (remainder > 0) out[seq_len(remainder)] <- out[seq_len(remainder)] + 1L
-    out
-  } else ntree
+    out[out > 0L]
+  } else {
+    ntree
+  }
+  
+  if (n_cores > 1L && length(ntree_list) < 1L) {
+    # Fallback in unexpected edge cases
+    n_cores <- 1L
+    ntree_list <- ntree
+  }
   
   # ---- randomForest args ------------------------------------------------------
   rf_args <- list(
@@ -267,8 +382,7 @@ fs_randomforest <- function(data,
   
   # ---- Train model ------------------------------------------------------------
   if (n_cores > 1L) {
-    .require_or_install("foreach", auto_install)
-    .require_or_install("doParallel", auto_install)
+    .require_or_install(c("foreach", "doParallel"), auto_install)
     
     cl <- parallel::makeCluster(n_cores)
     doParallel::registerDoParallel(cl)
@@ -277,11 +391,10 @@ fs_randomforest <- function(data,
       try(parallel::stopCluster(cl), silent = TRUE)
     }, add = TRUE)
     
-    if (!is.null(ctrl$seed)) {
-      parallel::clusterSetRNGStream(cl, as.integer(ctrl$seed))
+    if (!is.null(seed_int)) {
+      parallel::clusterSetRNGStream(cl, seed_int)
     }
     
-    # call %dopar% as a function to avoid parsing issues
     dopar_op <- get("%dopar%", asNamespace("foreach"))
     rf_model <- dopar_op(
       foreach::foreach(
@@ -303,9 +416,9 @@ fs_randomforest <- function(data,
   }
   
   # ---- Evaluate on test set ---------------------------------------------------
-  target_idx_test <- match(target, names(test_dt))
-  x_test <- test_dt[, -target_idx_test, with = FALSE]
-  y_test <- test_dt[[target]]
+  target_idx_test <- match(target, names(test_df))
+  x_test <- test_df[, -target_idx_test, drop = FALSE]
+  y_test <- test_df[[target]]
   x_test <- as.data.frame(x_test)
   
   metrics <- list()
@@ -315,12 +428,14 @@ fs_randomforest <- function(data,
   
   if (type == "classification") {
     preds <- stats::predict(rf_model, newdata = x_test, type = "class")
+    
     suppressWarnings({
       probs <- try(stats::predict(rf_model, newdata = x_test, type = "prob"), silent = TRUE)
       if (inherits(probs, "try-error")) probs <- NULL
     })
     
     acc <- mean(preds == y_test)
+    
     kappa <- try(caret::confusionMatrix(preds, y_test)$overall[["Kappa"]], silent = TRUE)
     if (inherits(kappa, "try-error") || is.null(kappa)) kappa <- NA_real_
     
@@ -328,8 +443,33 @@ fs_randomforest <- function(data,
     
     auc <- NA_real_
     if (nlevels(y_test) == 2L && !is.null(probs) && requireNamespace("pROC", quietly = TRUE)) {
-      positive <- levels(y_test)[2L]
-      roc_obj <- pROC::roc(response = y_test, predictor = probs[, positive], quiet = TRUE)
+      levels_y <- levels(y_test)
+      
+      # Determine positive class and levels ordering for pROC
+      if (!is.null(ctrl$positive_class) && ctrl$positive_class %in% levels_y) {
+        positive <- ctrl$positive_class
+        negative <- setdiff(levels_y, positive)
+        if (length(negative) != 1L) {
+          negative <- setdiff(levels_y, positive)[1L]
+        }
+        roc_levels <- c(negative, positive)
+      } else {
+        positive <- levels_y[2L]
+        roc_levels <- levels_y
+      }
+      
+      # Ensure we have a matching probability column
+      if (!positive %in% colnames(probs)) {
+        # Fallback to second column if naming mismatch (very unlikely for randomForest)
+        positive <- colnames(probs)[min(2L, ncol(probs))]
+      }
+      
+      roc_obj <- pROC::roc(
+        response  = y_test,
+        predictor = probs[, positive],
+        quiet     = TRUE,
+        levels    = roc_levels
+      )
       auc <- as.numeric(pROC::auc(roc_obj))
     }
     
@@ -340,7 +480,8 @@ fs_randomforest <- function(data,
     err <- preds - y_test
     rmse <- sqrt(mean(err^2))
     mae  <- mean(abs(err))
-    r2   <- 1 - sum(err^2) / sum((y_test - mean(y_test))^2)
+    sst  <- sum((y_test - mean(y_test))^2)
+    r2   <- if (sst > 0) 1 - sum(err^2) / sst else NA_real_
     metrics <- list(RMSE = rmse, MAE = mae, R2 = r2)
   }
   
@@ -348,22 +489,27 @@ fs_randomforest <- function(data,
   importance_df <- NULL
   if (isTRUE(ctrl$importance)) {
     imp <- randomForest::importance(rf_model, type = 1)
-    importance_df <- data.frame(
-      feature = rownames(imp),
-      importance = imp[, 1],
-      row.names = NULL,
-      check.names = FALSE
-    )
-    importance_df <- importance_df[order(-importance_df$importance), , drop = FALSE]
+    if (!is.null(imp)) {
+      importance_scores <- imp[, ncol(imp)]
+      importance_df <- data.frame(
+        feature = rownames(imp),
+        importance = importance_scores,
+        row.names = NULL,
+        check.names = FALSE
+      )
+      importance_df <- importance_df[order(-importance_df$importance), , drop = FALSE]
+    }
   }
   
   # ---- OOB metrics ------------------------------------------------------------
   oob <- NULL
-  if (type == "classification" && length(rf_model$confusion)) {
-    oob_acc <- 1 - rf_model$err.rate[rf_model$ntree, "OOB"]
-    oob <- list(accuracy = oob_acc)
-  } else if (type == "regression" && !is.null(rf_model$mse)) {
-    oob <- list(RMSE = sqrt(tail(rf_model$mse, 1)))
+  if (isTRUE(ctrl$oob)) {
+    if (type == "classification" && !is.null(rf_model$err.rate)) {
+      oob_acc <- 1 - rf_model$err.rate[rf_model$ntree, "OOB"]
+      oob <- list(accuracy = oob_acc)
+    } else if (type == "regression" && !is.null(rf_model$mse)) {
+      oob <- list(RMSE = sqrt(tail(rf_model$mse, 1)))
+    }
   }
   
   # ---- Assemble result --------------------------------------------------------
@@ -377,16 +523,12 @@ fs_randomforest <- function(data,
     oob = oob,
     target = target,
     type = type,
-    feature_names = setdiff(names(train_dt), target),
+    feature_names = setdiff(names(train_df), target),
     train_index = as.integer(index),
     control = ctrl
   )
-  if (isTRUE(ctrl$return_test_data)) result$test_data <- test_dt
+  if (isTRUE(ctrl$return_test_data)) result$test_data <- test_df
   
   class(result) <- c("fs_rf_result", class(result))
   return(result)
 }
-
-
-# ---- Helpers -----------------------------------------------------------------
-`%||%` <- function(a, b) if (!is.null(a)) a else b

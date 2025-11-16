@@ -1,7 +1,7 @@
 # ============================================================
 # Feature Selection & Modeling Utilities (caret-based)
 # ============================================================
-# Depends on: caret, doParallel, parallel
+# Depends on: caret, doParallel, parallel, foreach (via caret)
 # ------------------------------------------------------------
 
 suppressPackageStartupMessages({
@@ -16,27 +16,30 @@ suppressPackageStartupMessages({
 
 #' Resolve the Response Column Name
 #'
-#' Converts a response specification (column name or column index) to a valid column name present in `data`.
+#' Converts a response specification (column name or column index) to a valid
+#' column name present in `data`.
 #'
 #' @param data A `data.frame` containing the dataset.
-#' @param response_var A single column name (`character`) or column index (`integer`) indicating the response variable.
+#' @param response_var A single column name (`character`) or column index (`numeric` of length 1)
+#'   indicating the response variable.
 #'
 #' @return A single `character` string with the resolved response column name.
-#'
-#' @examples
-#' df <- data.frame(y = 1:3, x = 4:6)
-#' .resolve_response_name(df, "y")
-#' .resolve_response_name(df, 1L)
 #'
 #' @keywords internal
 .resolve_response_name <- function(data, response_var) {
   if (is.numeric(response_var)) {
+    if (length(response_var) != 1L) {
+      stop("response_var must be a single column index (integer).")
+    }
+    if (!is.finite(response_var) || response_var != as.integer(response_var)) {
+      stop("response_var must be a finite integer index.")
+    }
     response_var <- as.integer(response_var)
-    if (response_var < 1 || response_var > ncol(data)) {
+    if (response_var < 1L || response_var > ncol(data)) {
       stop("response_var index is out of bounds.")
     }
     return(colnames(data)[response_var])
-  } else if (is.character(response_var) && length(response_var) == 1) {
+  } else if (is.character(response_var) && length(response_var) == 1L) {
     if (!response_var %in% colnames(data)) {
       stop("response_var name not found in data.")
     }
@@ -48,19 +51,20 @@ suppressPackageStartupMessages({
 
 #' Infer Task Type from Response
 #'
-#' Determines whether a supervised learning task is classification or regression based on the response vector.
+#' Determines whether a supervised learning task is classification or regression
+#' based on the response vector.
 #'
-#' @param y A response vector (factor/character implies classification; otherwise regression).
+#' @param y A response vector.
+#'   Factors, character vectors, and logicals imply classification;
+#'   all other types imply regression.
 #'
 #' @return A `character` scalar: either `"classification"` or `"regression"`.
 #'
-#' @examples
-#' .task_type(factor(c("A","B")))
-#' .task_type(rnorm(10))
-#'
 #' @keywords internal
 .task_type <- function(y) {
-  if (is.factor(y) || is.character(y)) return("classification")
+  if (is.factor(y) || is.character(y) || is.logical(y)) {
+    return("classification")
+  }
   "regression"
 }
 
@@ -72,30 +76,52 @@ suppressPackageStartupMessages({
 #'
 #' Validates the resampling controls provided for recursive feature elimination (RFE).
 #'
-#' @param control_params A `list` with elements `method` and `number`. `method` must be one of `"cv"`, `"LOOCV"`, `"repeatedcv"`, or `"boot"`. `number` must be a positive integer.
+#' @param control_params A `list` with at least elements
+#'   \itemize{
+#'     \item `method` - resampling method (character scalar).
+#'     \item `number` - positive integer (e.g., number of folds or resamples).
+#'   }
+#'   Additional fields (e.g., `repeats`) are allowed and passed through.
 #'
 #' @return Invisibly returns `TRUE` on success; otherwise throws an error.
 #'
-#' @examples
-#' validate_rfe_control(list(method = "cv", number = 5))
-#'
 #' @export
 validate_rfe_control <- function(control_params) {
-  if (!is.list(control_params)) stop("rfe control_params should be a list.")
-  required <- c("method", "number")
-  if (!all(required %in% names(control_params))) {
-    stop("rfe control_params must contain 'method' and 'number'.")
+  if (!is.list(control_params)) {
+    stop("rfe control_params should be a list.")
   }
-  valid_methods <- c("cv", "LOOCV", "repeatedcv", "boot")
-  if (!(control_params$method %in% valid_methods)) {
-    stop(paste0(
-      "Invalid RFE resampling method. Must be one of: ",
-      paste(valid_methods, collapse = ", "), "."
-    ))
+  if (!("method" %in% names(control_params))) {
+    stop("rfe control_params must contain 'method'.")
   }
-  if (!is.numeric(control_params$number) || control_params$number <= 0) {
+  if (!("number" %in% names(control_params))) {
+    stop("rfe control_params must contain 'number'.")
+  }
+  
+  method <- control_params$method
+  number <- control_params$number
+  
+  if (!is.character(method) || length(method) != 1L || is.na(method)) {
+    stop("rfe control_params$method must be a non-NA character scalar.")
+  }
+  
+  if (!is.numeric(number) || length(number) != 1L ||
+      !is.finite(number) || number <= 0L || number != as.integer(number)) {
     stop("rfe control_params$number must be a positive integer.")
   }
+  
+  # Optional check for repeats when using repeated CV
+  if (identical(method, "repeatedcv")) {
+    if (!("repeats" %in% names(control_params))) {
+      warning("rfe control_params$repeats is not provided for method='repeatedcv'; default of 1 will be used by caret.")
+    } else {
+      repeats <- control_params$repeats
+      if (!is.numeric(repeats) || length(repeats) != 1L ||
+          !is.finite(repeats) || repeats <= 0L || repeats != as.integer(repeats)) {
+        stop("rfe control_params$repeats must be a positive integer when method='repeatedcv'.")
+      }
+    }
+  }
+  
   invisible(TRUE)
 }
 
@@ -103,36 +129,59 @@ validate_rfe_control <- function(control_params) {
 #'
 #' Validates the resampling controls provided for final model training.
 #'
-#' @param control_params A `list` with at least `method`. `method` must be one of `"cv"`, `"LOOCV"`, `"repeatedcv"`, `"boot"`, or `"none"`. When `method != "none"`, provide a positive integer `number`.
+#' This function accepts either a `list` of arguments for `caret::trainControl`
+#' or an already constructed `trainControl` object.
+#'
+#' @param control_params Either:
+#'   \itemize{
+#'     \item A `trainControl` object, in which case it is accepted as-is, or
+#'     \item A `list` with at least `method` and, when `method != "none"`,
+#'       a positive integer `number`. Additional trainControl arguments are allowed
+#'       and passed through unchanged.
+#'   }
 #'
 #' @return Invisibly returns `TRUE` on success; otherwise throws an error.
 #'
-#' @examples
-#' validate_train_control(list(method = "cv", number = 5))
-#' validate_train_control(list(method = "none"))
-#'
 #' @export
 validate_train_control <- function(control_params) {
-  if (!is.list(control_params)) stop("train control_params should be a list.")
-  required <- c("method")
-  if (!all(required %in% names(control_params))) {
+  # If the user passes a trainControl object, accept it directly
+  if (inherits(control_params, "trainControl")) {
+    return(invisible(TRUE))
+  }
+  
+  if (!is.list(control_params)) {
+    stop("train control_params should be a list or a trainControl object.")
+  }
+  
+  if (!("method" %in% names(control_params))) {
     stop("train control_params must contain at least 'method'.")
   }
-  valid_methods <- c("cv", "LOOCV", "repeatedcv", "boot", "none")
-  if (!(control_params$method %in% valid_methods)) {
-    stop(paste0(
-      "Invalid training resampling method. Must be one of: ",
-      paste(valid_methods, collapse = ", "), "."
-    ))
+  
+  method <- control_params$method
+  if (!is.character(method) || length(method) != 1L || is.na(method)) {
+    stop("train control_params$method must be a non-NA character scalar.")
   }
-  if (control_params$method != "none") {
+  
+  if (!identical(method, "none")) {
     if (!("number" %in% names(control_params))) {
       stop("When training control method is not 'none', provide 'number'.")
     }
-    if (!is.numeric(control_params$number) || control_params$number <= 0) {
+    number <- control_params$number
+    if (!is.numeric(number) || length(number) != 1L ||
+        !is.finite(number) || number <= 0L || number != as.integer(number)) {
       stop("train control_params$number must be a positive integer.")
     }
   }
+  
+  # Optional: if repeatedcv, check repeats
+  if (identical(method, "repeatedcv") && "repeats" %in% names(control_params)) {
+    repeats <- control_params$repeats
+    if (!is.numeric(repeats) || length(repeats) != 1L ||
+        !is.finite(repeats) || repeats <= 0L || repeats != as.integer(repeats)) {
+      stop("train control_params$repeats must be a positive integer when method='repeatedcv'.")
+    }
+  }
+  
   invisible(TRUE)
 }
 
@@ -140,12 +189,13 @@ validate_train_control <- function(control_params) {
 # Data splitting
 # -----------------------------
 
-#' Train/Test Split (80/20)
+#' Train/Test Split (80/20 by default)
 #'
-#' Splits a dataset into training (80%) and testing (20%) partitions. Stratifies by response for classification tasks.
+#' Splits a dataset into training and testing partitions. For classification tasks,
+#' the split is stratified by the response using `caret::createDataPartition`.
 #'
 #' @param data A `data.frame` containing predictors and response.
-#' @param response_var A response column name (`character`) or index (`integer`).
+#' @param response_var A response column name (`character`) or index (`numeric` of length 1).
 #' @param seed An `integer` seed for reproducibility. Default: `123`.
 #' @param p Proportion for the training set (`0 < p < 1`). Default: `0.8`.
 #'
@@ -154,30 +204,72 @@ validate_train_control <- function(control_params) {
 #'   \item{train}{Training `data.frame`.}
 #'   \item{test}{Testing `data.frame`.}
 #'   \item{response_name}{The resolved response column name.}
+#'   \item{TrainIndex}{Row indices (1-based) used for the training partition.}
+#'   \item{TestIndex}{Row indices (1-based) used for the testing partition.}
 #' }
-#'
-#' @examples
-#' set.seed(1)
-#' df <- data.frame(y = factor(sample(c("A","B"), 50, TRUE)),
-#'                  x1 = rnorm(50), x2 = rnorm(50))
-#' split <- split_data(df, response_var = "y", seed = 99)
-#' str(split)
 #'
 #' @export
 split_data <- function(data, response_var, seed = 123, p = 0.8) {
+  if (!is.numeric(p) || length(p) != 1L || !is.finite(p) || p <= 0 || p >= 1) {
+    stop("p must be a numeric scalar with 0 < p < 1.")
+  }
+  if (!is.data.frame(data)) {
+    stop("split_data: 'data' must be a data.frame.")
+  }
+  
   set.seed(seed)
   y_name <- .resolve_response_name(data, response_var)
   y <- data[[y_name]]
-  if (is.factor(y) || is.character(y)) {
-    y <- as.factor(y)
+  task <- .task_type(y)
+  
+  message(sprintf(
+    "DEBUG[split_data]: n=%d | p=%.3f | response=%s | task=%s",
+    nrow(data), p, y_name, task
+  ))
+  
+  # Prepare y for createDataPartition
+  if (task == "classification") {
+    y_part <- as.factor(y)
   } else {
-    y <- as.numeric(y)
+    y_part <- as.numeric(y)
   }
-  idx <- createDataPartition(y, p = p, list = FALSE)
+  
+  idx <- caret::createDataPartition(y_part, p = p, list = FALSE)
+  idx <- as.vector(idx)
+  
+  all_rows <- seq_len(nrow(data))
+  test_idx <- setdiff(all_rows, idx)
+  
+  train_df <- data[idx, , drop = FALSE]
+  test_df  <- data[test_idx, , drop = FALSE]
+  
+  message(sprintf(
+    "DEBUG[split_data]: train_n=%d | test_n=%d | min(idx)=%d | max(idx)=%d",
+    nrow(train_df), nrow(test_df), min(idx), max(idx)
+  ))
+  message(sprintf(
+    "DEBUG[split_data]: train_cols={%s} | test_cols={%s}",
+    paste(colnames(train_df), collapse = ", "),
+    paste(colnames(test_df),  collapse = ", ")
+  ))
+  
+  # Self-check for debugging (note: for stratified classification, counts may differ by 1)
+  expected_train <- floor(p * nrow(data))
+  expected_test  <- nrow(data) - expected_train
+  sizes_ok <- (nrow(train_df) == expected_train) && (nrow(test_df) == expected_test)
+  align_ok <- identical(data[idx, , drop = FALSE], train_df) &&
+    identical(data[test_idx, , drop = FALSE], test_df)
+  message(sprintf(
+    "DEBUG[split_data:selfcheck]: sizes_ok=%s | align_ok=%s | expected_train=%d | actual_train=%d | expected_test=%d | actual_test=%d",
+    sizes_ok, align_ok, expected_train, nrow(train_df), expected_test, nrow(test_df)
+  ))
+  
   list(
-    train = data[idx, , drop = FALSE],
-    test  = data[-idx, , drop = FALSE],
-    response_name = y_name
+    train         = train_df,
+    test          = test_df,
+    response_name = y_name,
+    TrainIndex    = idx,
+    TestIndex     = test_idx
   )
 }
 
@@ -194,14 +286,15 @@ split_data <- function(data, response_var, seed = 123, p = 0.8) {
 #'
 #' @return A `dummyVars` object fitted on training predictors.
 #'
-#' @examples
-#' tr <- data.frame(y = 1:3, a = factor(c("A","B","A")), b = c(0,1,0))
-#' dv <- fit_one_hot_encoder(tr, response_name = "y")
-#' dv
-#'
 #' @export
 fit_one_hot_encoder <- function(train_df, response_name) {
-  predictors <- train_df[ , setdiff(colnames(train_df), response_name), drop = FALSE]
+  if (!is.data.frame(train_df)) {
+    stop("fit_one_hot_encoder: train_df must be a data.frame.")
+  }
+  if (!response_name %in% colnames(train_df)) {
+    stop("fit_one_hot_encoder: response_name not found in train_df.")
+  }
+  predictors <- train_df[, setdiff(colnames(train_df), response_name), drop = FALSE]
   caret::dummyVars(~ ., data = predictors)
 }
 
@@ -215,14 +308,15 @@ fit_one_hot_encoder <- function(train_df, response_name) {
 #'
 #' @return A `data.frame` with the response as the first column, followed by encoded predictors.
 #'
-#' @examples
-#' tr <- data.frame(y = 1:3, a = factor(c("A","B","A")), b = c(0,1,0))
-#' dv <- fit_one_hot_encoder(tr, response_name = "y")
-#' apply_one_hot_encoder(tr, response_name = "y", dv = dv)
-#'
 #' @export
 apply_one_hot_encoder <- function(data_df, response_name, dv) {
-  predictors <- data_df[ , setdiff(colnames(data_df), response_name), drop = FALSE]
+  if (!is.data.frame(data_df)) {
+    stop("apply_one_hot_encoder: data_df must be a data.frame.")
+  }
+  if (!response_name %in% colnames(data_df)) {
+    stop("apply_one_hot_encoder: response_name not found in data_df.")
+  }
+  predictors <- data_df[, setdiff(colnames(data_df), response_name), drop = FALSE]
   X <- as.data.frame(predict(dv, newdata = predictors))
   data.frame(
     setNames(list(data_df[[response_name]]), response_name),
@@ -243,32 +337,42 @@ apply_one_hot_encoder <- function(data_df, response_name, dv) {
 #'
 #' @return A cluster object (from `parallel::makeCluster`) if started; otherwise `NULL`.
 #'
-#' @examples
-#' cl <- .start_parallel(FALSE)  # returns NULL
-#'
 #' @keywords internal
 .start_parallel <- function(enable) {
   if (!enable) return(NULL)
-  cores <- max(1L, parallel::detectCores() - 1L)
+  cores <- parallel::detectCores()
+  if (!is.numeric(cores) || length(cores) != 1L || !is.finite(cores)) {
+    cores <- 2L
+  }
+  cores <- max(1L, cores - 1L)
   cl <- parallel::makeCluster(cores)
   doParallel::registerDoParallel(cl)
+  message(sprintf("DEBUG[parallel]: started PSOCK cluster with %d workers", cores))
   cl
 }
 
 #' Stop Parallel Backend
 #'
-#' Stops a previously started PSOCK cluster if not `NULL`.
+#' Stops a previously started PSOCK cluster if not `NULL` and resets to sequential execution.
 #'
 #' @param cl A cluster object or `NULL`.
 #'
 #' @return Invisibly returns `NULL`.
 #'
-#' @examples
-#' .stop_parallel(NULL)
-#'
 #' @keywords internal
 .stop_parallel <- function(cl) {
-  if (!is.null(cl)) parallel::stopCluster(cl)
+  if (!is.null(cl)) {
+    message("DEBUG[parallel]: stopping PSOCK cluster and returning to sequential execution")
+    parallel::stopCluster(cl)
+  } else {
+    message("DEBUG[parallel]: no cluster to stop, ensuring sequential backend")
+  }
+  # Ensure we return to sequential backend using foreach's registerDoSEQ
+  if (requireNamespace("foreach", quietly = TRUE)) {
+    foreach::registerDoSEQ()
+  } else {
+    message("DEBUG[parallel]: 'foreach' namespace not available; cannot register sequential backend explicitly")
+  }
   invisible(NULL)
 }
 
@@ -280,47 +384,55 @@ apply_one_hot_encoder <- function(data_df, response_name, dv) {
 #'
 #' Runs recursive feature elimination (RFE) on a preprocessed training dataset.
 #'
-#' @param train_df A `data.frame` where the first column is the response and remaining columns are predictors (or ensure `response_name` is provided to select the response).
+#' @param train_df A `data.frame` where the first column is the response and remaining columns
+#'   are predictors (or ensure `response_name` is provided to select the response).
 #' @param response_name A single `character` name of the response column in `train_df`.
 #' @param sizes A numeric vector of feature subset sizes to evaluate. If `NULL`, uses `1:ncol(X)`.
-#' @param rfe_control_params A `list` with elements `method` and `number` for resampling control; see [\code{validate_rfe_control}].
+#' @param rfe_control_params A `list` with at least `method` and `number` for resampling control.
 #' @param feature_funcs A caret RFE function set (e.g., `caret::rfFuncs`). If `NULL`, defaults to `caret::rfFuncs`.
 #' @param parallel `logical`. Allow parallel evaluation.
 #' @param early_stop `logical`. If `TRUE`, sets `returnResamp = "final"` and `saveDetails = TRUE`.
 #'
 #' @return An object of class `rfe` from `caret`, containing RFE results.
 #'
-#' @examples
-#' set.seed(1)
-#' tr <- data.frame(y = rnorm(40), x1 = rnorm(40), x2 = rnorm(40))
-#' rfe_obj <- perform_rfe(
-#'   train_df = tr,
-#'   response_name = "y",
-#'   sizes = c(1,2),
-#'   rfe_control_params = list(method = "cv", number = 3),
-#'   feature_funcs = caret::rfFuncs,
-#'   parallel = FALSE,
-#'   early_stop = FALSE
-#' )
-#' rfe_obj$optsize
-#'
 #' @export
 perform_rfe <- function(train_df, response_name, sizes, rfe_control_params,
                         feature_funcs = NULL, parallel = FALSE, early_stop = FALSE) {
   validate_rfe_control(rfe_control_params)
   
+  # Defensive: ensure data.frame
+  if (!is.data.frame(train_df)) {
+    message(sprintf(
+      "DEBUG[perform_rfe]: coercing train_df to data.frame; class was: %s",
+      paste(class(train_df), collapse = "/")
+    ))
+    train_df <- as.data.frame(train_df)
+  }
+  
+  if (!response_name %in% colnames(train_df)) {
+    message("DEBUG[perform_rfe]: response_name not found in train_df.")
+    message(sprintf("DEBUG[perform_rfe]: colnames(train_df) = %s",
+                    paste(colnames(train_df), collapse = ", ")))
+    stop("perform_rfe: response_name not found in train_df.")
+  }
+  
   y <- train_df[[response_name]]
   task <- .task_type(y)
+  
   if (is.null(feature_funcs)) {
     feature_funcs <- caret::rfFuncs
   }
   
-  ctrl <- caret::rfeControl(
-    functions = feature_funcs,
-    method    = rfe_control_params$method,
-    number    = rfe_control_params$number,
-    verbose   = TRUE,
-    allowParallel = parallel
+  # Build rfeControl, starting from user params
+  ctrl <- do.call(
+    caret::rfeControl,
+    c(
+      list(
+        functions = feature_funcs,
+        allowParallel = parallel
+      ),
+      rfe_control_params
+    )
   )
   
   if (early_stop) {
@@ -328,22 +440,35 @@ perform_rfe <- function(train_df, response_name, sizes, rfe_control_params,
     ctrl$saveDetails  <- TRUE
   }
   
-  X <- train_df[ , setdiff(colnames(train_df), response_name), drop = FALSE]
+  X <- train_df[, setdiff(colnames(train_df), response_name), drop = FALSE]
   y_vec <- train_df[[response_name]]
-  if (task == "classification" && !is.factor(y_vec)) y_vec <- as.factor(y_vec)
+  if (task == "classification" && !is.factor(y_vec)) {
+    y_vec <- as.factor(y_vec)
+  }
   
   if (is.null(sizes)) {
     sizes <- seq_len(ncol(X))
   } else {
     sizes <- sizes[sizes >= 1 & sizes <= ncol(X)]
-    if (length(sizes) == 0) stop("No valid 'sizes' remain within the range of available predictors.")
+    if (length(sizes) == 0L) {
+      stop("No valid 'sizes' remain within the range of available predictors.")
+    }
   }
+  
+  message(sprintf(
+    "DEBUG[perform_rfe]: n=%d | p=%d | response=%s | predictors={%s} | sizes={%s}",
+    nrow(X), ncol(X), response_name,
+    paste(colnames(X), collapse = ", "),
+    paste(sizes, collapse = ", ")
+  ))
   
   rfe_profile <- tryCatch(
     {
       caret::rfe(x = X, y = y_vec, sizes = sizes, rfeControl = ctrl)
     },
-    error = function(e) stop("Error during RFE: ", e$message)
+    error = function(e) {
+      stop("Error during RFE: ", e$message)
+    }
   )
   
   rfe_profile
@@ -357,25 +482,15 @@ perform_rfe <- function(train_df, response_name, sizes, rfe_control_params,
 #'
 #' Trains a model on a preprocessed dataset using a specified set of selected predictors.
 #'
-#' @param data_df A `data.frame` containing the response column and encoded predictors.
+#' @param data_df A `data.frame` containing the response column and predictors.
 #' @param response_name A single `character` name of the response column.
 #' @param optimal_vars A `character` vector of selected predictor names.
-#' @param train_control_params A `list` specifying training control; see [\code{validate_train_control}].
-#' @param model_method A `character` string specifying the caret model key (e.g., `"rf"`, `"lm"`, `"xgbTree"`). Default: `"rf"`.
+#' @param train_control_params A `list` specifying training control or a `trainControl` object.
+#' @param model_method A `character` string specifying the caret model key (e.g., `"rf"`, `"lm"`, `"xgbTree"`).
 #'
-#' @return A trained `caret::train` model object.
-#'
-#' @examples
-#' set.seed(1)
-#' dat <- data.frame(y = rnorm(30), a = rnorm(30), b = rnorm(30))
-#' model <- train_final_model(
-#'   data_df = dat,
-#'   response_name = "y",
-#'   optimal_vars = c("a","b"),
-#'   train_control_params = list(method = "cv", number = 3),
-#'   model_method = "lm"
-#' )
-#' model
+#' @return A trained `caret::train` model object. The set of predictors actually used
+#'   (after NZV and linear-combination filtering) is stored as
+#'   `attr(model, "predictors_used")`.
 #'
 #' @export
 train_final_model <- function(data_df, response_name, optimal_vars,
@@ -383,9 +498,16 @@ train_final_model <- function(data_df, response_name, optimal_vars,
                               model_method = "rf") {
   validate_train_control(train_control_params)
   
+  if (!is.data.frame(data_df)) {
+    stop("train_final_model: data_df must be a data.frame.")
+  }
+  if (!response_name %in% colnames(data_df)) {
+    stop("train_final_model: response_name not found in data_df.")
+  }
+  
   # Check requested predictors exist
   missing_vars <- setdiff(optimal_vars, colnames(data_df))
-  if (length(missing_vars) > 0) {
+  if (length(missing_vars) > 0L) {
     stop("train_final_model: The following predictors are missing from data_df: ",
          paste(missing_vars, collapse = ", "))
   }
@@ -394,55 +516,67 @@ train_final_model <- function(data_df, response_name, optimal_vars,
   df <- data_df[, c(response_name, optimal_vars), drop = FALSE]
   
   # Coerce response appropriately
-  if (is.factor(df[[response_name]]) || is.character(df[[response_name]])) {
+  task <- .task_type(df[[response_name]])
+  if (task == "classification") {
     df[[response_name]] <- as.factor(df[[response_name]])
   } else {
     df[[response_name]] <- as.numeric(df[[response_name]])
   }
   
-  # Ensure predictors are numeric (defensive; dummyVars usually guarantees this)
+  # Ensure predictors are in reasonable types:
+  # - logical -> integer
+  # - character -> factor
   pred_names <- setdiff(colnames(df), response_name)
   for (nm in pred_names) {
-    if (is.logical(df[[nm]])) df[[nm]] <- as.integer(df[[nm]])
-    if (is.factor(df[[nm]]) || is.character(df[[nm]])) {
-      df[[nm]] <- as.numeric(as.factor(df[[nm]]))
+    if (is.logical(df[[nm]])) {
+      df[[nm]] <- as.integer(df[[nm]])
+    } else if (is.character(df[[nm]])) {
+      df[[nm]] <- factor(df[[nm]])
     }
   }
   
-  # Remove NZV predictors
-  nzv_idx <- caret::nearZeroVar(df[, pred_names, drop = FALSE], saveMetrics = FALSE)
-  if (length(nzv_idx) > 0) {
-    removed <- pred_names[nzv_idx]
-    message("DEBUG[nzv]: Removing near-zero variance predictors: ",
-            paste(removed, collapse = ", "))
-    pred_names <- setdiff(pred_names, removed)
-    df <- df[, c(response_name, pred_names), drop = FALSE]
-  }
-  
-  # Remove linear combinations
-  if (length(pred_names) > 1) {
-    lc <- caret::findLinearCombos(as.matrix(df[, pred_names, drop = FALSE]))
-    if (!is.null(lc$remove) && length(lc$remove) > 0) {
-      drop_lc <- pred_names[lc$remove]
-      message("DEBUG[lincomb]: Removing linear-combination predictors: ",
-              paste(drop_lc, collapse = ", "))
-      pred_names <- setdiff(pred_names, drop_lc)
+  # Remove NZV predictors (handles numeric and factor/character)
+  if (length(pred_names) > 0L) {
+    nzv_idx <- caret::nearZeroVar(df[, pred_names, drop = FALSE], saveMetrics = FALSE)
+    if (length(nzv_idx) > 0L) {
+      removed <- pred_names[nzv_idx]
+      message("DEBUG[nzv]: Removing near-zero variance predictors: ",
+              paste(removed, collapse = ", "))
+      pred_names <- setdiff(pred_names, removed)
       df <- df[, c(response_name, pred_names), drop = FALSE]
     }
   }
   
-  if (length(pred_names) == 0) {
+  # Remove linear combinations on numeric predictors only
+  if (length(pred_names) > 1L) {
+    X <- df[, pred_names, drop = FALSE]
+    num_cols <- vapply(X, is.numeric, logical(1L))
+    if (sum(num_cols) > 1L) {
+      lc <- caret::findLinearCombos(as.matrix(X[, num_cols, drop = FALSE]))
+      if (!is.null(lc$remove) && length(lc$remove) > 0L) {
+        drop_lc <- colnames(X[, num_cols, drop = FALSE])[lc$remove]
+        message("DEBUG[lincomb]: Removing linear-combination predictors: ",
+                paste(drop_lc, collapse = ", "))
+        pred_names <- setdiff(pred_names, drop_lc)
+        df <- df[, c(response_name, pred_names), drop = FALSE]
+      }
+    }
+  }
+  
+  if (length(pred_names) == 0L) {
     stop("train_final_model: No predictors remain after preprocessing.")
   }
   
   # TrainControl setup
   make_ctrl <- function(ctrl) {
-    if (identical(ctrl$method, "none")) {
-      caret::trainControl(method = "none")
-    } else {
-      caret::trainControl(method = ctrl$method, number = ctrl$number)
+    # Allow user-supplied trainControl object
+    if (inherits(ctrl, "trainControl")) {
+      return(ctrl)
     }
+    # Otherwise, treat as argument list to trainControl
+    do.call(caret::trainControl, ctrl)
   }
+  
   tr_ctrl <- make_ctrl(train_control_params)
   
   # Formula interface
@@ -456,7 +590,11 @@ train_final_model <- function(data_df, response_name, optimal_vars,
       paste(pred_names, collapse = ", ")
     ))
     tryCatch(
-      caret::train(form, data = df, method = model_method, trControl = ctrl_used),
+      {
+        model_obj <- caret::train(form, data = df, method = model_method, trControl = ctrl_used)
+        attr(model_obj, "predictors_used") <- pred_names
+        model_obj
+      },
       error = function(e) {
         message("DEBUG[error:", tag, "]: caret::train failed")
         message("DEBUG[message:", tag, "]: ", conditionMessage(e))
@@ -465,7 +603,8 @@ train_final_model <- function(data_df, response_name, optimal_vars,
         message("DEBUG[predictors:", tag, "]: ", paste(pred_names, collapse = ", "))
         message("DEBUG[class(y):", tag, "]: ", paste(class(df[[response_name]]), collapse = "/"))
         message("DEBUG[head(df):", tag, "]:")
-        utils::capture.output(print(utils::head(df, 5))) |> paste(collapse = "\n") |> message()
+        dbg <- utils::capture.output(print(utils::head(df, 5)))
+        message(paste(dbg, collapse = "\n"))
         stop(e)
       }
     )
@@ -475,8 +614,10 @@ train_final_model <- function(data_df, response_name, optimal_vars,
   res <- tryCatch(
     attempt_train(tr_ctrl, tag = "cv"),
     error = function(e) {
-      # Automatic fallback for 'lm' if resampling is requested
-      if (identical(model_method, "lm") && !identical(train_control_params$method, "none")) {
+      # Automatic fallback for 'lm' if resampling is requested and user gave a list
+      if (identical(model_method, "lm") &&
+          (!inherits(train_control_params, "trainControl")) &&
+          !identical(train_control_params$method, "none")) {
         message("DEBUG[retry]: Retrying with trainControl(method='none') for model_method='lm'")
         ctrl_none <- caret::trainControl(method = "none")
         return(attempt_train(ctrl_none, tag = "none"))
@@ -494,19 +635,21 @@ train_final_model <- function(data_df, response_name, optimal_vars,
 
 #' Recursive Feature Selection and Optional Final Training
 #'
-#' Orchestrates train/test split, optional one-hot encoding, RFE on the training set, and optional final model training on all rows.
+#' Orchestrates train/test split, optional one-hot encoding, RFE on the training set,
+#' and optional final model training on all rows.
 #'
 #' @param data A `data.frame` with the response and predictors.
-#' @param response_var A response column name (`character`) or index (`integer`).
+#' @param response_var A response column name (`character`) or index (`numeric` of length 1).
 #' @param seed An `integer` seed. Default: `123`.
-#' @param rfe_control A `list(method, number)` for RFE resampling control. Methods: `"cv"`, `"LOOCV"`, `"repeatedcv"`, `"boot"`. Default: `list(method = "cv", number = 5)`.
-#' @param train_control A `list(method, number)` for final training control. Methods: `"cv"`, `"LOOCV"`, `"repeatedcv"`, `"boot"`, `"none"`. Default: `list(method = "cv", number = 5)`.
-#' @param sizes A numeric vector of subset sizes to evaluate during RFE. If `NULL`, uses `1:ncol(X)` where `X` are predictors after preprocessing.
-#' @param parallel `logical`. Enable parallel processing for RFE/training. Default: `FALSE`.
+#' @param rfe_control A `list` of arguments for `caret::rfeControl` (at least `method` and `number`).
+#' @param train_control A `list` of arguments for `caret::trainControl` or a `trainControl` object.
+#' @param sizes A numeric vector of subset sizes to evaluate during RFE. If `NULL`, uses `1:ncol(X)`
+#'   where `X` are predictors after preprocessing.
+#' @param parallel `logical`. Enable parallel processing for RFE/training.
 #' @param feature_funcs A caret RFE function set (e.g., `caret::rfFuncs`). If `NULL`, defaults to `caret::rfFuncs`.
-#' @param handle_categorical `logical`. Apply one-hot encoding to predictors (fit on train, apply to test and full). Default: `FALSE`.
-#' @param return_final_model `logical`. If `TRUE`, trains a final model on the full dataset using selected features. Default: `FALSE`.
-#' @param model_method A `character` specifying the caret model key for final training. Default: `"rf"`.
+#' @param handle_categorical `logical`. Apply one-hot encoding to predictors (fit on train, apply to test and full).
+#' @param return_final_model `logical`. If `TRUE`, trains a final model on the full dataset using selected features.
+#' @param model_method A `character` specifying the caret model key for final training.
 #'
 #' @return A `list` with components:
 #' \describe{
@@ -517,40 +660,12 @@ train_final_model <- function(data_df, response_name, optimal_vars,
 #'   \item{Preprocessor}{`dummyVars` object used for encoding, if any; else `NULL`.}
 #'   \item{RFE}{The `rfe` object returned by `caret`.}
 #'   \item{OptimalNumberOfVariables}{Optimal subset size selected by RFE.}
-#'   \item{OptimalVariables}{Character vector of selected variable names.}
+#'   \item{OptimalVariables}{Character vector of selected variable names (from RFE).}
 #'   \item{VariableImportance}{Variable importance data.frame from RFE.}
 #'   \item{ResamplingResults}{Resampling summary from the RFE process.}
 #'   \item{FinalModel}{Trained `caret::train` object if `return_final_model = TRUE`; else `NULL`.}
-#' }
-#'
-#' @examples
-#' \dontrun{
-#' set.seed(123)
-#' n <- 100
-#' dat <- data.frame(
-#'   y = factor(sample(c("A","B"), n, TRUE)),
-#'   x1 = rnorm(n),
-#'   x2 = rnorm(n),
-#'   cat = sample(LETTERS[1:3], n, TRUE)
-#' )
-#'
-#' res <- fs_recursivefeature(
-#'   data = dat,
-#'   response_var = "y",
-#'   seed = 42,
-#'   rfe_control = list(method = "cv", number = 5),
-#'   train_control = list(method = "cv", number = 5),
-#'   sizes = c(1,2,3,4),
-#'   parallel = FALSE,
-#'   feature_funcs = caret::rfFuncs,
-#'   handle_categorical = TRUE,
-#'   return_final_model = TRUE,
-#'   model_method = "rf"
-#' )
-#'
-#' res$OptimalNumberOfVariables
-#' res$OptimalVariables
-#' res$FinalModel
+#'   \item{FinalModelVariables}{Character vector of predictors actually used in the final model (after NZV and
+#'         linear-combination filtering), or `NULL` if no final model was fit.}
 #' }
 #'
 #' @export
@@ -564,13 +679,22 @@ fs_recursivefeature <- function(data, response_var,
                                 handle_categorical = FALSE,
                                 return_final_model = FALSE,
                                 model_method = "rf") {
+  if (!is.data.frame(data)) {
+    stop("fs_recursivefeature: 'data' must be a data.frame.")
+  }
+  
   y_name <- .resolve_response_name(data, response_var)
   
   split <- split_data(data, response_var = y_name, seed = seed, p = 0.8)
   train_raw <- split$train
   test_raw  <- split$test
-  train_idx <- as.integer(rownames(train_raw))
-  test_idx  <- as.integer(rownames(test_raw))
+  train_idx <- split$TrainIndex
+  test_idx  <- split$TestIndex
+  
+  message(sprintf(
+    "DEBUG[fs_recursivefeature]: train_n=%d | test_n=%d | response=%s",
+    nrow(train_raw), nrow(test_raw), y_name
+  ))
   
   preproc <- NULL
   if (handle_categorical) {
@@ -587,13 +711,13 @@ fs_recursivefeature <- function(data, response_var,
   on.exit(.stop_parallel(cl), add = TRUE)
   
   rfe_obj <- perform_rfe(
-    train_df        = train_df,
-    response_name   = y_name,
-    sizes           = sizes,
+    train_df           = train_df,
+    response_name      = y_name,
+    sizes              = sizes,
     rfe_control_params = rfe_control,
-    feature_funcs   = feature_funcs,
-    parallel        = parallel,
-    early_stop      = FALSE
+    feature_funcs      = feature_funcs,
+    parallel           = parallel,
+    early_stop         = FALSE
   )
   
   optimal_num  <- rfe_obj$optsize
@@ -602,6 +726,8 @@ fs_recursivefeature <- function(data, response_var,
   resamp       <- rfe_obj$results
   
   final_model <- NULL
+  final_model_vars <- NULL
+  
   if (return_final_model) {
     if (handle_categorical) {
       full_df <- apply_one_hot_encoder(data, response_name = y_name, dv = preproc)
@@ -616,19 +742,21 @@ fs_recursivefeature <- function(data, response_var,
       train_control_params = train_control,
       model_method = model_method
     )
+    final_model_vars <- attr(final_model, "predictors_used")
   }
   
   list(
-    ResponseName = y_name,
-    TaskType = .task_type(data[[y_name]]),
-    TrainIndex = train_idx,
-    TestIndex = test_idx,
-    Preprocessor = preproc,
-    RFE = rfe_obj,
+    ResponseName             = y_name,
+    TaskType                 = .task_type(data[[y_name]]),
+    TrainIndex               = train_idx,
+    TestIndex                = test_idx,
+    Preprocessor             = preproc,
+    RFE                      = rfe_obj,
     OptimalNumberOfVariables = optimal_num,
-    OptimalVariables = optimal_vars,
-    VariableImportance = var_imp,
-    ResamplingResults = resamp,
-    FinalModel = final_model
+    OptimalVariables         = optimal_vars,
+    VariableImportance       = var_imp,
+    ResamplingResults        = resamp,
+    FinalModel               = final_model,
+    FinalModelVariables      = final_model_vars
   )
 }

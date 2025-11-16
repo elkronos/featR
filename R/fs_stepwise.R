@@ -71,49 +71,12 @@ log_error_with_trace <- function(e) {
   tb <- NULL
   # Attempt to capture the most recent traceback
   tb <- tryCatch({
-    # generate a traceback
     utils::capture.output(traceback(x = sys.calls(), max.lines = 50))
   }, error = function(...) character(0))
   if (length(tb) > 0) {
     log_error("Stack Trace:\n{paste(tb, collapse = '\n')}")
   }
   invisible(TRUE)
-}
-
-# ---- Results Table Helper (Optional) ----
-
-#' Create (if missing) and append a test result row to a global results data frame
-#'
-#' @param test_name Name of the test or check.
-#' @param passed Logical; whether the test passed.
-#' @param message Optional message to print/log.
-#' @return Invisibly returns the updated \code{test_results} data frame.
-#' @examples
-#' test_results_init()
-#' print_and_store_result("Example test", TRUE, "All good")
-test_results_init <- function() {
-  if (!exists("test_results", inherits = .GlobalEnv)) {
-    assign("test_results",
-           data.frame(Test = character(), Result = character(), stringsAsFactors = FALSE),
-           envir = .GlobalEnv)
-  }
-  invisible(get("test_results", envir = .GlobalEnv))
-}
-
-#' @rdname test_results_init
-print_and_store_result <- function(test_name, passed, message = NULL) {
-  test_results_init()
-  result <- if (isTRUE(passed)) "PASS" else "FAIL"
-  cat(sprintf("%-50s [%s]\n", test_name, result))
-  log_info("{test_name} [{result}]")
-  if (!is.null(message)) {
-    cat("  ", message, "\n")
-    log_debug("Additional Message for {test_name}: {message}")
-  }
-  tr <- get("test_results", envir = .GlobalEnv)
-  tr <- rbind(tr, data.frame(Test = test_name, Result = result, stringsAsFactors = FALSE))
-  assign("test_results", tr, envir = .GlobalEnv)
-  invisible(tr)
 }
 
 # ---- Input Checking & Formula Prep ----
@@ -125,8 +88,6 @@ print_and_store_result <- function(test_name, passed, message = NULL) {
 #' @param step_type One of \code{"backward"}, \code{"forward"}, or \code{"both"}.
 #' @return The dependent variable name as a character string.
 check_inputs <- function(data, dependent_var, step_type) {
-  log_info("Validating inputs: dependent_var = {deparse(substitute(dependent_var))}, step_type = {step_type}")
-  
   if (!is.data.frame(data)) {
     log_error("The 'data' input must be a data frame.")
     stop("Input 'data' must be a data frame")
@@ -137,6 +98,8 @@ check_inputs <- function(data, dependent_var, step_type) {
   } else {
     deparse(substitute(dependent_var))
   }
+  
+  log_info("Validating inputs: dependent_var = {dep_var}, step_type = {step_type}")
   
   if (!(dep_var %in% colnames(data))) {
     log_error("Dependent variable '{dep_var}' not found in data columns.")
@@ -162,7 +125,9 @@ check_inputs <- function(data, dependent_var, step_type) {
 prepare_formula <- function(data, dep_var) {
   log_info("Preparing model formula with dependent variable: {dep_var}")
   rhs <- setdiff(colnames(data), dep_var)
-  if (length(rhs) == 0) stop("No predictors found in 'data' besides the dependent variable")
+  if (length(rhs) == 0) {
+    stop("No predictors found in 'data' besides the dependent variable")
+  }
   formula <- reformulate(termlabels = rhs, response = dep_var)
   log_debug("Constructed formula: {format(formula)}")
   formula
@@ -197,29 +162,35 @@ build_models_for_direction <- function(formula, data, direction) {
 
 # ---- Training via stepAIC ----
 
-#' Train a model via stepwise selection using \code{MASS::stepAIC}
+#' Train a model via stepwise selection using MASS::stepAIC
 #'
 #' @param formula A model formula.
 #' @param data A data.frame.
-#' @param direction One of \code{"backward"}, \code{"forward"}, or \code{"both"}.
+#' @param direction One of "backward", "forward", or "both".
 #' @param verbose Logical; whether to print stepAIC tracing output.
-#' @param ... Additional arguments passed to \code{MASS::stepAIC}.
-#' @return The final model object returned by \code{stepAIC}.
-#' @examples
-#' final <- train_stepwise_model(mpg ~ ., mtcars, direction = "both")
+#' @param ... Additional arguments passed to MASS::stepAIC
+#'        (excluding 'trace', which is controlled by 'verbose').
+#' @return The final model object returned by stepAIC.
 train_stepwise_model <- function(formula, data, direction = "both", verbose = FALSE, ...) {
   log_info("Training stepwise model with direction = {direction}")
+  
+  # Normalize '...' and strip any user-supplied 'trace'
+  dots <- list(...)
+  if ("trace" %in% names(dots)) {
+    log_warn("Argument 'trace' supplied via '...' will be ignored; use 'verbose' instead.")
+    dots$trace <- NULL
+  }
+  
   tryCatch({
-    parts <- build_models_for_direction(formula, data, direction)
+    parts       <- build_models_for_direction(formula, data, direction)
     start_model <- parts$start_model
-    scope <- parts$scope
-    dir <- parts$direction
+    scope       <- parts$scope
+    dir         <- parts$direction
     
-    # Create a unique, hidden global binding for the data so update() can always see it
+    # Create a unique, hidden global binding for the data so update()/stepAIC can always see it
     df_token <- paste0(".fs_data_", sprintf("%08d", sample.int(1e8, 1)))
     assign(df_token, data, envir = .GlobalEnv)
     on.exit({
-      # best effort cleanup
       if (exists(df_token, envir = .GlobalEnv, inherits = FALSE)) {
         rm(list = df_token, envir = .GlobalEnv)
       }
@@ -228,7 +199,7 @@ train_stepwise_model <- function(formula, data, direction = "both", verbose = FA
     # Rewrite the model call to use the global data symbol
     start_model$call$data <- as.name(df_token)
     
-    # Also harden the terms/formula environments to the global env (defensive)
+    # Harden the terms/formula environments to the global env (defensive)
     if (!is.null(start_model$terms)) {
       environment(start_model$terms) <- .GlobalEnv
     }
@@ -237,10 +208,19 @@ train_stepwise_model <- function(formula, data, direction = "both", verbose = FA
     }
     
     log_info("Starting stepwise selection using stepAIC.")
-    step_model <- if (is.null(scope)) {
-      MASS::stepAIC(start_model, direction = dir, trace = verbose, ...)
-    } else {
-      MASS::stepAIC(start_model, scope = scope, direction = dir, trace = verbose, ...)
+    
+    base_args <- list(object = start_model, direction = dir, trace = verbose)
+    if (!is.null(scope)) {
+      base_args$scope <- scope
+    }
+    
+    # Call stepAIC with normalized args
+    step_model <- do.call(MASS::stepAIC, c(base_args, dots))
+    
+    # Clean up the returned model call so it does not depend on the temporary df_token
+    if (!is.null(step_model$call$data) &&
+        identical(step_model$call$data, as.name(df_token))) {
+      step_model$call$data <- NULL
     }
     
     log_info("Stepwise model training completed successfully.")
@@ -248,9 +228,10 @@ train_stepwise_model <- function(formula, data, direction = "both", verbose = FA
   }, error = function(e) {
     log_error("Error during stepwise model training: {e$message}")
     log_error_with_trace(e)
-    stop("Model training failed.")
+    stop(sprintf("Model training failed: %s", e$message), call. = FALSE)
   })
 }
+
 
 # ---- Variable Importance Helper ----
 
@@ -280,10 +261,11 @@ variable_importance <- function(model) {
 #' @param data A data.frame containing the dataset.
 #' @param dependent_var The name (as a character string or unquoted symbol) of the dependent variable.
 #' @param step_type The direction for stepwise selection: \code{"backward"}, \code{"forward"}, or \code{"both"}. Default is \code{"both"}.
-#' @param seed An optional seed for reproducibility.
-#' @param verbose Logical. If \code{TRUE}, prints detailed \code{stepAIC} output. Default is \code{FALSE}.
-#' @param return_models Logical. If \code{TRUE}, includes the final stepwise model in the returned list.
-#' @param ... Additional parameters to pass to \code{MASS::stepAIC} (e.g., \code{k} for AIC penalty).
+#' @param seed An optional seed for reproducibility (sets the global RNG seed).
+#' @param verbose Logical. If \code{TRUE}, prints detailed \code{stepAIC} output and final summaries. Default is \code{FALSE}.
+#' @param return_models Logical. If \code{TRUE}, also includes the final model as \code{step_model} in the returned list
+#'   (in addition to \code{final_model}).
+#' @param ... Additional parameters to pass to \code{MASS::stepAIC} (excluding \code{trace}, which is controlled by \code{verbose}).
 #'
 #' @return A list with:
 #' \itemize{
@@ -307,8 +289,6 @@ fs_stepwise <- function(data,
                         verbose = FALSE,
                         return_models = FALSE,
                         ...) {
-  log_info("Starting fs_stepwise with dependent_var = {deparse(substitute(dependent_var))}, step_type = {step_type}")
-  
   if (!is.null(seed)) {
     set.seed(seed)
     log_info("Random seed set to: {seed}")
@@ -316,6 +296,12 @@ fs_stepwise <- function(data,
   
   dep_var <- check_inputs(data, dependent_var, step_type)
   formula <- prepare_formula(data, dep_var)
+  
+  if (verbose) {
+    log_info("Starting fs_stepwise with dependent_var = {dep_var}, step_type = {step_type}")
+  } else {
+    log_info("Starting fs_stepwise.")
+  }
   
   step_model <- train_stepwise_model(formula, data, direction = step_type, verbose = verbose, ...)
   
@@ -333,9 +319,10 @@ fs_stepwise <- function(data,
       verbose       = verbose
     )
   )
+  
   if (isTRUE(return_models)) {
     out$step_model <- step_model
-    log_info("Returning full model details as requested.")
+    log_info("Returning full model details as requested via 'return_models = TRUE'.")
   }
   
   if (isTRUE(verbose)) {
@@ -350,9 +337,3 @@ fs_stepwise <- function(data,
   log_info("fs_stepwise completed successfully.")
   out
 }
-
-# ---- (Optional) Quick Self-Test ----
-# Uncomment to run a quick check
-# test_results_init()
-# res <- try(fs_stepwise(mtcars, "mpg", step_type = "both", seed = 42, verbose = TRUE), silent = TRUE)
-# print_and_store_result("fs_stepwise runs on mtcars", !inherits(res, "try-error"))

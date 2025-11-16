@@ -29,20 +29,51 @@ suppressPackageStartupMessages({
 #' @export
 validate_inputs <- function(data, target, task, train_ratio, nfolds) {
   if (!is.data.frame(data)) stop("`data` must be a data frame.")
-  if (!is.character(target) || length(target) != 1) stop("`target` must be a single string.")
+  if (!is.character(target) || length(target) != 1L) {
+    stop("`target` must be a single string.")
+  }
   if (!(target %in% names(data))) stop("`target` not found in `data`.")
   if (!(task %in% c("classification", "regression"))) {
     stop("`task` must be either 'classification' or 'regression'.")
   }
-  if (!is.numeric(train_ratio) || train_ratio <= 0 || train_ratio >= 1) {
-    stop("`train_ratio` must be numeric in (0, 1).")
+  
+  if (!is.numeric(train_ratio) || length(train_ratio) != 1L ||
+      is.na(train_ratio) || train_ratio <= 0 || train_ratio >= 1) {
+    stop("`train_ratio` must be a single numeric value in (0, 1).")
   }
-  if (!is.numeric(nfolds) || nfolds != as.integer(nfolds) || nfolds <= 1) {
-    stop("`nfolds` must be an integer > 1.")
+  
+  if (!is.numeric(nfolds) || length(nfolds) != 1L || is.na(nfolds) ||
+      nfolds != as.integer(nfolds) || nfolds <= 1) {
+    stop("`nfolds` must be a single integer > 1.")
   }
+  
+  if (nrow(data) < 2L) {
+    stop("`data` must contain at least 2 rows.")
+  }
+  
+  predictor_names <- setdiff(names(data), target)
+  if (length(predictor_names) == 0L) {
+    stop("`data` must contain at least one predictor column besides the target.")
+  }
+  
+  if (anyNA(data[[target]])) {
+    stop("`target` contains missing values; please handle them before modeling.")
+  }
+  
+  if (anyNA(data[predictor_names])) {
+    stop("Predictor columns contain missing values; please handle them before modeling.")
+  }
+  
   if (task == "regression" && !is.numeric(data[[target]])) {
     stop("For regression, the target must be numeric.")
   }
+  
+  if (task == "classification") {
+    if (length(unique(data[[target]])) < 2L) {
+      stop("For classification, the target must have at least two classes.")
+    }
+  }
+  
   invisible(TRUE)
 }
 
@@ -84,18 +115,38 @@ coerce_target_type <- function(data, target, task) {
 #'
 #' @return A list with \code{train_set} and \code{test_set}.
 #' @export
-split_data <- function(data, target, train_ratio, seed = NULL, task = c("classification", "regression")) {
+split_data <- function(data,
+                       target,
+                       train_ratio,
+                       seed = NULL,
+                       task = c("classification", "regression")) {
   task <- match.arg(task)
   if (!is.null(seed)) set.seed(seed)
+  
   if (task == "classification") {
-    idx <- createDataPartition(data[[target]], p = train_ratio, list = FALSE)
+    idx <- caret::createDataPartition(data[[target]], p = train_ratio, list = FALSE)
   } else {
     n <- nrow(data)
-    idx <- sample.int(n, size = floor(train_ratio * n))
+    train_size <- floor(train_ratio * n)
+    idx <- sample.int(n, size = train_size)
   }
+  
+  train_set <- data[idx, , drop = FALSE]
+  test_set  <- data[-idx, , drop = FALSE]
+  
+  if (nrow(train_set) == 0L || nrow(test_set) == 0L) {
+    stop("Training or test set is empty; adjust `train_ratio` or check data size.")
+  }
+  
+  if (task == "classification") {
+    if (length(unique(train_set[[target]])) < 2L) {
+      stop("Training set contains fewer than 2 classes after splitting; adjust `train_ratio` or handle class imbalance.")
+    }
+  }
+  
   list(
-    train_set = data[idx, , drop = FALSE],
-    test_set  = data[-idx, , drop = FALSE]
+    train_set = train_set,
+    test_set  = test_set
   )
 }
 
@@ -113,6 +164,9 @@ split_data <- function(data, target, train_ratio, seed = NULL, task = c("classif
 #' @export
 fit_dummy_encoder <- function(data, target, fullRank = TRUE) {
   predictors <- setdiff(names(data), target)
+  if (length(predictors) == 0L) {
+    stop("No predictor columns available for dummy encoding.")
+  }
   caret::dummyVars(
     formula = stats::reformulate(predictors),
     data = data,
@@ -164,21 +218,22 @@ perform_feature_selection <- function(train_set,
   X  <- transform_with_encoder(dv, train_set)
   yv <- y
   
-  if (ncol(X) == 0) stop("No predictors available for feature selection.")
+  if (ncol(X) == 0L) stop("No predictors available for feature selection.")
   
   sizes <- seq_len(ncol(X))
   ctrl  <- caret::rfeControl(functions = caret::rfFuncs,
                              method    = "cv",
                              number    = rfe_folds,
-                             verbose   = FALSE)
+                             verbose   = FALSE,
+                             allowParallel = TRUE)
   
   rfe_vars <- tryCatch({
     rf_rfe <- caret::rfe(x = X, y = yv, sizes = sizes, rfeControl = ctrl)
     out <- caret::predictors(rf_rfe)
-    if (length(out) > 0) out else character()
+    if (length(out) > 0L) out else character()
   }, error = function(e) character())
   
-  if (length(rfe_vars) > 0) return(rfe_vars)
+  if (length(rfe_vars) > 0L) return(rfe_vars)
   
   rf_fit <- randomForest::randomForest(x = X, y = yv, importance = TRUE)
   imp    <- randomForest::importance(rf_fit, type = 2)
@@ -187,9 +242,9 @@ perform_feature_selection <- function(train_set,
   score_col <- tail(names(imp)[vapply(imp, is.numeric, logical(1))], 1)
   ord <- order(imp[[score_col]], decreasing = TRUE, na.last = NA)
   
-  keep_n <- max(min_keep, 1)
+  keep_n <- max(min_keep, 1L)
   selected <- imp$Feature[ord][seq_len(min(keep_n, length(ord)))]
-  if (length(selected) == 0) {
+  if (length(selected) == 0L) {
     selected <- colnames(X)[seq_len(min(keep_n, ncol(X)))]
   }
   selected
@@ -256,12 +311,19 @@ default_tune_grid <- function(kernel = c("linear", "radial", "polynomial")) {
 #' @export
 calculate_performance <- function(predictions, actuals, task) {
   if (task == "classification") {
+    valid_idx <- !is.na(actuals) & !is.na(predictions)
+    if (!all(valid_idx)) {
+      predictions <- predictions[valid_idx]
+      actuals     <- actuals[valid_idx]
+    }
     predictions <- factor(predictions, levels = levels(actuals))
     caret::confusionMatrix(predictions, actuals)
   } else {
-    pr <- caret::postResample(pred = predictions, obs = actuals)
-    mae <- mean(abs(predictions - actuals))
-    c(RMSE = unname(pr["RMSE"]), Rsquared = unname(pr["Rsquared"]), MAE = mae)
+    pr  <- caret::postResample(pred = predictions, obs = actuals)
+    mae <- mean(abs(predictions - actuals), na.rm = TRUE)
+    c(RMSE = unname(pr["RMSE"]),
+      Rsquared = unname(pr["Rsquared"]),
+      MAE = mae)
   }
 }
 
@@ -276,7 +338,13 @@ calculate_performance <- function(predictions, actuals, task) {
 #' @return A cluster object.
 #' @export
 setup_parallel_processing <- function() {
-  cores <- max(parallel::detectCores() - 1, 1)
+  cores <- parallel::detectCores()
+  if (is.null(cores) || !is.numeric(cores) || !is.finite(cores) || cores < 2L) {
+    cores <- 1L
+  } else {
+    cores <- cores - 1L
+  }
+  cores <- as.integer(cores)
   cl <- parallel::makeCluster(cores)
   doParallel::registerDoParallel(cl)
   cl
@@ -320,7 +388,7 @@ stop_parallel_processing <- function(cl) {
 #' \itemize{
 #'   \item \code{model}: Trained \code{caret} model object.
 #'   \item \code{test_set}: Test set (with original columns and coerced target).
-#'   \item \code{predictions}: Predictions on the encoded test set.
+#'   \item \code{predictions}: Predictions on the test set.
 #'   \item \code{performance}: Performance metrics.
 #'   \item \code{selected_features}: Names of selected encoded features (if \code{feature_select = TRUE}).
 #' }
@@ -336,78 +404,104 @@ fs_svm <- function(data,
                    class_imbalance = FALSE,
                    kernel = c("linear", "radial", "polynomial")) {
   
+  # Validate and coerce inputs
   validate_inputs(data, target, task, train_ratio, nfolds)
   data <- coerce_target_type(data, target, task)
   
+  # Optional global seed for reproducibility
+  if (!is.null(seed)) set.seed(seed)
+  
+  # Split data
   splits <- split_data(data, target, train_ratio, seed, task)
   train_set <- splits$train_set
   test_set  <- splits$test_set
   
+  # Handle classification target levels and drop unseen classes in test set
   if (task == "classification") {
     train_set[[target]] <- droplevels(train_set[[target]])
     test_set[[target]]  <- factor(test_set[[target]], levels = levels(train_set[[target]]))
+    
+    keep_idx <- !is.na(test_set[[target]])
+    if (!all(keep_idx)) {
+      test_set <- test_set[keep_idx, , drop = FALSE]
+    }
+    
+    if (nrow(test_set) == 0L) {
+      stop("All test set rows had classes not present in training; adjust `train_ratio` or check class distribution.")
+    }
   }
   
+  # Set up parallel backend early so feature selection and training can share it
+  cl <- setup_parallel_processing()
+  on.exit(stop_parallel_processing(cl), add = TRUE)
+  
+  # Dummy-encode predictors
   dv <- fit_dummy_encoder(train_set, target, fullRank = TRUE)
   train_x <- transform_with_encoder(dv, train_set)
   test_x  <- transform_with_encoder(dv, test_set)
   
+  # Optional feature selection
   selected_features <- NULL
   if (isTRUE(feature_select)) {
     selected_features <- perform_feature_selection(train_set, target, seed = seed)
     keep <- intersect(colnames(train_x), selected_features)
-    if (length(keep) == 0) stop("No features selected by feature selection.")
+    if (length(keep) == 0L) stop("No features selected by feature selection.")
     train_x <- train_x[, keep, drop = FALSE]
     test_x  <- test_x[, keep, drop = FALSE]
   }
   
+  # Build modeling data frames (encoded predictors + target)
   train_df <- cbind(train_x, setNames(list(train_set[[target]]), target))
   test_df  <- cbind(test_x,  setNames(list(test_set[[target]]),  target))
   
+  # Optional class imbalance handling
   if (task == "classification" && isTRUE(class_imbalance)) {
     train_df <- handle_class_imbalance(train_df, target)
   }
   
+  # SVM kernel/method selection
   kernel <- match.arg(kernel)
   method <- switch(kernel,
                    linear     = "svmLinear",
                    radial     = "svmRadial",
                    polynomial = "svmPoly")
   
+  # Default tuning grid, if required
   if (is.null(tune_grid)) {
     tune_grid <- default_tune_grid(kernel)
   }
   
+  # Training control with cross-validation and parallel support
   tr_ctrl <- caret::trainControl(
     method = "cv",
     number = nfolds,
     allowParallel = TRUE
   )
   
-  cl <- setup_parallel_processing()
-  on.exit(stop_parallel_processing(cl), add = TRUE)
-  if (!is.null(seed)) set.seed(seed)
-  
-  pre_proc <- c("center", "scale")
-  
+  pre_proc    <- c("center", "scale")
   formula_str <- paste(target, "~ .")
+  
+  # Train SVM
   svm_fit <- caret::train(
-    as.formula(formula_str),   # positional arg to fill `form` across caret versions
-    data = train_df,
-    method = method,
+    as.formula(formula_str),
+    data      = train_df,
+    method    = method,
     trControl = tr_ctrl,
     preProcess = pre_proc,
-    tuneGrid = tune_grid
+    tuneGrid  = tune_grid
   )
   
+  # Predict on test set
   preds <- predict(svm_fit, newdata = test_df)
+  
+  # Compute performance metrics
   perf <- calculate_performance(preds, test_df[[target]], task)
   
   list(
-    model = svm_fit,
-    test_set = test_set,
-    predictions = preds,
-    performance = perf,
+    model             = svm_fit,
+    test_set          = test_set,
+    predictions       = preds,
+    performance       = perf,
     selected_features = selected_features
   )
 }

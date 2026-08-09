@@ -1,81 +1,62 @@
-# Feature Selection Repository
+# featR
 
-This repository contains a comprehensive collection of R functions designed to support feature selection, model training, and dimensionality reduction. Each script is thoroughly documented with its purpose, key assumptions, usage examples, and expected outputs to help you choose the most appropriate method for your data analysis and predictive modeling tasks.
+A unified R package of feature-selection methods: statistical filters, regularization, model-based wrappers, and dimensionality reduction behind a consistent set of `fs_*()` functions.
 
-The repository is organized into four main categories:
+Heavy modeling engines (brms, caret, glmnet, randomForest, ...) are optional **Suggests** — each function checks for what it needs and tells you what to install.
 
-1. **Statistical & Filter Methods**
-2. **Regularization Methods**
-3. **Model-Based & Wrapper Methods**
-4. **Dimensionality Reduction Techniques**
+## Installation
 
----
+```r
+# From a local checkout:
+# install.packages("devtools")
+devtools::install()
 
-## 1. Statistical & Filter Methods
+# Or build/check from the shell:
+# R CMD build . && R CMD check --as-cran featR_0.1.0.tar.gz
+```
 
-These functions evaluate features using statistical tests or filtering criteria to assess their relevance.
+## Functions
 
-| Function Name        | Description                                                                                                     | Key Assumptions                                                  | Outputs                                               | Primary Applications                                | When to Use                                                                     |
-|----------------------|-----------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------|----------------------------------------------------|---------------------------------------------------------------------------------|
-| **`fs_chi`**         | Performs chi-square tests to assess associations between categorical features and the target.                   | Categorical features and target exist; chi-square assumptions met.| Significant features with corresponding p-values.     | Selecting relevant categorical features.           | When you need to test the association of categorical features with the target.  |
-| **`fs_correlation`** | Identifies and removes highly correlated numeric features based on a specified threshold.                       | All features are numeric; valid correlation method selected.      | Correlation matrix and names of selected features.    | Handling multicollinearity and reducing redundancy. | When you want to eliminate redundant features to improve model performance.     |
-| **`fs_infogain`**    | Computes information gain for each feature relative to the target variable.                                     | Target exists; supports numeric, categorical, and date data.       | Data frame of features with information gain scores.  | Ranking features by relevance.                     | When you need to quantify how much each feature reduces uncertainty.            |
-| **`fs_variance`**    | Applies variance thresholding to filter features based on their variability.                                    | Data is numeric; threshold is a non-negative numeric value.         | A numeric matrix with features filtered by variance.  | Removing low-information features.                 | When you want to eliminate features that show little variation.                 |
+### 1. Statistical & Filter Methods
 
----
+| Function | What it does | Notes |
+|---|---|---|
+| `fs_chi` | Chi-square tests of association between categorical features and a categorical target, with p-value adjustment, Yates/Monte-Carlo handling. | Returns a results table plus `significant_features`. |
+| `fs_correlation` | Computes a correlation matrix (Pearson/Spearman/Kendall/point-biserial/polychoric) and flags variable pairs above a threshold. | Returns **both** members of each high-correlation pair (the redundant set) — prune accordingly. |
+| `fs_infogain` | Information gain of each feature w.r.t. a target; supports numeric (binned), categorical, and date features. | The target is discretized once so scores are comparable across features. |
+| `fs_supervised` | Threshold filter scoring features against a target: absolute Pearson correlation (numeric target) or ANOVA F (factor target). | Flexible output shapes (matrix, data.table, mask, indices, names, list). |
+| `fs_unsupervised` | Target-free threshold filter: variance, MAD, IQR, range, missing proportion, or distinct-value count. | Variance filtering lives here (`method = "variance"`). |
 
-## 2. Regularization Methods
+### 2. Regularization Methods
 
-These functions integrate feature selection directly into the model training process using regularization techniques.
+| Function | What it does | Notes |
+|---|---|---|
+| `fs_elastic` | Elastic-net over an alpha/lambda grid via caret + glmnet, optional PCA preprocessing. | Reports best alpha/lambda and coefficients. |
+| `fs_lasso` | Cross-validated LASSO (glmnet) returning coefficient-based importance at `lambda.min`. | Importance is on the original predictor scale — see docs. |
 
-| Function Name     | Description                                                                                                     | Key Assumptions                                                  | Outputs                                               | Primary Applications                                | When to Use                                                                     |
-|-------------------|-----------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------|----------------------------------------------------|---------------------------------------------------------------------------------|
-| **`fs_elastic`**  | Performs elastic net regression with cross-validation to combine Lasso and Ridge penalties.                     | Numeric predictors/response; proper hyperparameter tuning.        | Best model coefficients, optimal alpha & lambda, RMSE.| Handling multicollinearity and variable selection.  | When you need a robust model that balances variable selection and regularization.|
-| **`fs_lasso`**    | Fits a Lasso regression model using cross-validation to promote sparsity in the predictor set.                   | Numeric predictors/response; proper preprocessing and tuning.       | Variable importance scores and a fitted Lasso model.  | Sparse model construction and interpretation.      | When you require a sparse, interpretable model for regression tasks.            |
+### 3. Model-Based & Wrapper Methods
 
----
+| Function | What it does | Notes |
+|---|---|---|
+| `fs_bayes` | Bayesian model comparison over predictor combinations (brms), ranked by LOO. | Expensive; MAE/RMSE reported are in-sample. |
+| `fs_boruta` | Boruta all-relevant selection with optional correlation-based pruning. | |
+| `fs_randomforest` | Random-forest train/evaluate pipeline with permutation importance and preprocessing options. | |
+| `fs_recursivefeature` | caret RFE on a training split, evaluated on a held-out test split; optional final model on training data. | |
+| `fs_stepwise` | Stepwise linear regression via `MASS::stepAIC` (forward/backward/both). | Post-selection p-values are not valid for inference — see docs. |
+| `fs_svm` | SVM (caret) train/evaluate pipeline with optional feature selection and class-imbalance handling. | Feature selection uses random-forest RFE, not SVM-RFE. Classification returns a confusion matrix; regression returns RMSE/R2/MAE. |
+| `fs_mars` | MARS (earth) train/evaluate pipeline with tuning and optional ROC/PR AUC. | |
 
-## 3. Model-Based & Wrapper Methods
+### 4. Dimensionality Reduction
 
-These functions combine feature selection with model training, often incorporating iterative or ensemble techniques.
+| Function | What it does | Notes |
+|---|---|---|
+| `fs_pca` | PCA (prcomp, or bigstatsr for large data) with loadings, scores, variance explained, optional plot. | |
+| `fs_svd` | Exact or approximate (RSpectra) truncated SVD. | Request `n_singular_values < min(dim(x))` to enable the approximate solver. |
 
-| Function Name             | Description                                                                                                     | Key Assumptions                                                  | Outputs                                               | Primary Applications                                 | When to Use                                                                     |
-|---------------------------|-----------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------|-----------------------------------------------------|---------------------------------------------------------------------------------|
-| **`fs_bayes`**            | Fits a Bayesian regression model using the `brms` package with LOO cross-validation for model selection.         | Preprocessed data; appropriate Bayesian priors and structure.      | Fitted model, predictions, residuals, MAE, RMSE.      | Incorporating uncertainty in predictor selection.   | When robust evaluation using Bayesian inference is needed despite higher computation cost. |
-| **`fs_boruta`**           | Implements the Boruta algorithm to determine all relevant features with optional removal of correlated ones.      | Target exists; supports parallel processing and correlation filtering. | Selected features and full Boruta object.           | Automated feature selection in high-dimensional datasets. | When an out-of-the-box method for identifying relevant features is required.  |
-| **`fs_randomforest`**     | Trains a Random Forest model with support for parallel processing and integrated feature selection.              | Data is preprocessed; applicable for both classification and regression. | Trained model, predictions, and performance metrics (accuracy or RMSE). | Building ensemble models with built-in feature ranking. | When you need a versatile model capable of handling non-linear relationships.   |
-| **`fs_recursivefeature`** | Uses Recursive Feature Elimination (RFE) to iteratively select an optimal subset of features and optionally trains a final model. | Proper data splitting and control parameters; supports parallel processing. | Optimal feature subset, variable importance, and resampling results; final model if requested. | Systematic feature selection to improve interpretability and performance. | When an iterative elimination process is needed to fine-tune your feature set.  |
-| **`fs_stepwise`**         | Performs stepwise regression using `stepAIC` to select features based on a specified direction (forward, backward, or both). | Data is a valid data frame; dependent variable exists; linear model assumptions.        | Final linear model and variable importance from coefficients. | Feature selection in linear regression.              | When a methodical, cross-validated approach to feature selection is required.  |
-| **`fs_svm`**              | Trains an SVM model with options for feature selection, class imbalance handling, and hyperparameter tuning via cross-validation. | Data is valid; target exists; proper tuning and preprocessing applied. | Trained SVM model, predictions, and performance metrics (accuracy, R-squared, RMSE, MAE). | Building SVM models with integrated feature selection and imbalance handling. | When you need a flexible SVM approach for either classification or regression tasks. |
-| **`fs_mars`**             | Trains and evaluates a Multivariate Adaptive Regression Splines (MARS) model to capture non-linear relationships.   | Required libraries are loaded; proper handling of missing data and tuning is in place. | Trained MARS model and performance metrics (RMSE or accuracy). | Modeling complex, non-linear interactions with automatic feature selection. | When an interpretable model that captures non-linearities is required.             |
+## Conventions
 
----
+All functions validate inputs up front, are sequential by default (parallelism is opt-in and capped), never seed the RNG unless you pass `seed = ...` (and then restore its state), and signal progress with suppressible `message()`s.
 
-## 4. Dimensionality Reduction Techniques
+## License
 
-These functions reduce the dimensionality of data by transforming it into a lower-dimensional space.
-
-| Function Name    | Description                                                                                                     | Key Assumptions                                                  | Outputs                                               | Primary Applications                                 | When to Use                                                                     |
-|------------------|-----------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------|-----------------------------------------------------|---------------------------------------------------------------------------------|
-| **`fs_pca`**     | Executes Principal Component Analysis (PCA) to reduce dimensionality and visualize underlying data patterns.     | Data is numeric; PCA assumptions are met; number of components specified. | PCA loadings, scores, variance explained, and optional visual plots. | Simplifying data structure and visualization.       | When you need to reduce dimensionality while retaining variance information.   |
-| **`fs_svd`**     | Performs Singular Value Decomposition (SVD) with options for scaling, truncation, and approximate computations for large matrices. | Input matrix is numeric and complete; scaling options specified.   | Singular values, left singular vectors, and right singular vectors.  | Dimensionality reduction and data decomposition.     | When efficient matrix factorization is needed, especially for large datasets.   |
-
----
-
-## Repository Summary
-
-The repository now includes the following functions:
-
-- **Statistical & Filter Methods:**  
-  `fs_chi`, `fs_correlation`, `fs_infogain`, `fs_variance`
-
-- **Regularization Methods:**  
-  `fs_elastic`, `fs_lasso`
-
-- **Model-Based & Wrapper Methods:**  
-  `fs_bayes`, `fs_boruta`, `fs_randomforest`, `fs_recursivefeature`, `fs_stepwise`, `fs_svm`, `fs_mars`
-
-- **Dimensionality Reduction Techniques:**  
-  `fs_pca`, `fs_svd`
-
-For detailed usage instructions and examples, please refer to the individual R scripts in this repository.
+MIT (c) Justin Chase. See `LICENSE.md`.

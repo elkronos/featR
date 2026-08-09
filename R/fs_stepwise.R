@@ -1,339 +1,259 @@
-# ============================================
-# Stepwise Feature Selection Utilities (R)
-# ============================================
-# - Modular, maintainable, and correct
-# - Uses MASS::stepAIC with proper handling of forward/backward/both
-# - Robust logging to both console and file
-# - Roxygen docs included
-# ============================================
+# Stepwise linear-model selection (MASS::stepAIC) for featR.
 
-# ---- Setup: Load/Install Required Libraries ----
-.ensure_packages <- function(pkgs) {
-  for (p in pkgs) {
-    if (!requireNamespace(p, quietly = TRUE)) {
-      install.packages(p)
-    }
-  }
-}
-.ensure_packages(c("logger", "MASS"))
-
-library(logger)
-library(MASS)
-
-# ---- Logger Initialization ----
-
-#' Initialize logging (console + file) with a colored console layout
+#' Fit a linear model inside the persistent fit environment
 #'
-#' @param logfile Path to the logfile (default: "script_log.log").
-#' @param threshold Logging threshold; one of \code{TRACE, DEBUG, INFO, WARN, ERROR, FATAL}.
-#' @return Invisibly returns \code{TRUE} on success.
-#' @examples
-#' init_logging()  # default logfile and INFO threshold
-init_logging <- function(logfile = "script_log.log", threshold = INFO) {
-  # Log to both console and file
-  log_appender(appender_tee(logfile))
-  log_layout(layout_glue_colors)
-  log_threshold(threshold)
-  log_info("===== Logger initialized =====")
-  invisible(TRUE)
+#' Builds and evaluates `stats::lm(<fml>, data = .fs_stepwise_data)` inside
+#' `fit_env`, where `.fs_stepwise_data` has been assigned. Because the formula
+#' (and therefore the model's terms) carries `fit_env`, the data stays
+#' reachable for `stepAIC()` refits and for later generics that re-evaluate
+#' through the terms environment (`add1()`, `drop1()`, `model.frame()`, ...),
+#' without ever touching the global environment.
+#'
+#' @param fml A formula whose environment is `fit_env`.
+#' @param fit_env Environment holding `.fs_stepwise_data`.
+#' @return A fitted `lm` object.
+#' @noRd
+step_fit_lm <- function(fml, fit_env) {
+  fit_call <- as.call(list(
+    quote(stats::lm),
+    formula = fml,
+    data = as.name(".fs_stepwise_data")
+  ))
+  eval(fit_call, fit_env)
 }
 
-# Default init (you can comment this out in package context)
-init_logging()
-
-# ---- Environment & Session Info Logging (Optional) ----
-
-#' Log basic R environment details
+#' Build the start model and scope for a stepwise search
 #'
-#' @return Invisibly returns \code{TRUE}.
-#' @examples
-#' log_environment_details()
-log_environment_details <- function() {
-  log_info("===== R Environment Details =====")
-  log_info("R Version: {R.version.string}")
-  os <- tryCatch(Sys.info(), error = function(e) list(sysname = NA, release = NA))
-  log_info("Operating System: {os[['sysname']]} {os[['release']]}")
-  installed_pkgs <- as.data.frame(installed.packages()[, c("Package", "Version")])
-  pkg_lines <- paste(apply(installed_pkgs, 1, paste, collapse = " "), collapse = "\n")
-  log_debug("Installed Packages:\n{pkg_lines}")
-  log_info("=================================")
-  invisible(TRUE)
-}
-
-# ---- Utility: Safe Error Logging with Traceback ----
-
-#' Log an error with a captured traceback
+#' Reproduces the classic setup: backward starts from the full model with no
+#' scope; forward starts from the intercept-only model with
+#' `scope = list(lower = null, upper = full)`; both starts from the full model
+#' with the same scope.
 #'
-#' @param e The condition (error) object from \code{tryCatch}.
-#' @return Invisibly returns \code{TRUE}.
-log_error_with_trace <- function(e) {
-  log_error("Error: {e$message}")
-  tb <- NULL
-  # Attempt to capture the most recent traceback
-  tb <- tryCatch({
-    utils::capture.output(traceback(x = sys.calls(), max.lines = 50))
-  }, error = function(...) character(0))
-  if (length(tb) > 0) {
-    log_error("Stack Trace:\n{paste(tb, collapse = '\n')}")
-  }
-  invisible(TRUE)
-}
+#' @param dep_var Dependent variable name (character).
+#' @param direction One of "backward", "forward", "both".
+#' @param fit_env Environment holding `.fs_stepwise_data`.
+#' @return A list with `start_model`, `scope` (list or NULL), and `direction`.
+#' @noRd
+step_build_models <- function(dep_var, direction, fit_env) {
+  fml <- stats::as.formula(paste(backtick(dep_var), "~ ."), env = fit_env)
+  full_model <- step_fit_lm(fml, fit_env)
 
-# ---- Input Checking & Formula Prep ----
-
-#' Validate inputs for \code{fs_stepwise}
-#'
-#' @param data A data.frame.
-#' @param dependent_var Character name of the dependent variable, or unquoted symbol.
-#' @param step_type One of \code{"backward"}, \code{"forward"}, or \code{"both"}.
-#' @return The dependent variable name as a character string.
-check_inputs <- function(data, dependent_var, step_type) {
-  if (!is.data.frame(data)) {
-    log_error("The 'data' input must be a data frame.")
-    stop("Input 'data' must be a data frame")
-  }
-  
-  dep_var <- if (is.character(dependent_var)) {
-    dependent_var
-  } else {
-    deparse(substitute(dependent_var))
-  }
-  
-  log_info("Validating inputs: dependent_var = {dep_var}, step_type = {step_type}")
-  
-  if (!(dep_var %in% colnames(data))) {
-    log_error("Dependent variable '{dep_var}' not found in data columns.")
-    stop("Dependent variable not found in data")
-  }
-  
-  if (!step_type %in% c("backward", "forward", "both")) {
-    log_error("Invalid 'step_type' ({step_type}). Must be one of 'backward', 'forward', or 'both'.")
-    stop("Invalid 'step_type'")
-  }
-  
-  log_info("Input validation successful; using dependent variable: {dep_var}")
-  dep_var
-}
-
-#' Prepare a modeling formula of the form dep_var ~ all_other_columns
-#'
-#' @param data A data.frame.
-#' @param dep_var Character name of the dependent variable.
-#' @return An object of class \code{formula}.
-#' @examples
-#' prepare_formula(mtcars, "mpg")
-prepare_formula <- function(data, dep_var) {
-  log_info("Preparing model formula with dependent variable: {dep_var}")
-  rhs <- setdiff(colnames(data), dep_var)
-  if (length(rhs) == 0) {
-    stop("No predictors found in 'data' besides the dependent variable")
-  }
-  formula <- reformulate(termlabels = rhs, response = dep_var)
-  log_debug("Constructed formula: {format(formula)}")
-  formula
-}
-
-# ---- Model Builders for Step Directions ----
-
-#' Build initial models and scope objects for stepwise selection
-#'
-#' @param formula A model formula.
-#' @param data A data.frame.
-#' @param direction One of \code{"backward"}, \code{"forward"}, or \code{"both"}.
-#' @return A list with \code{start_model} (lm), \code{scope} (list or NULL), and \code{direction}.
-build_models_for_direction <- function(formula, data, direction) {
-  full_model <- lm(formula, data = data)
-  
   if (direction == "backward") {
-    return(list(start_model = full_model, scope = NULL, direction = "backward"))
+    return(list(start_model = full_model, scope = NULL,
+                direction = "backward"))
   }
-  
-  dep_var <- all.vars(formula)[1]
-  null_formula <- as.formula(paste(dep_var, "~ 1"))
-  null_model <- lm(null_formula, data = data)
-  scope <- list(lower = formula(null_model), upper = formula(full_model))
-  
+
+  null_fml <- stats::as.formula(paste(backtick(dep_var), "~ 1"),
+                                env = fit_env)
+  null_model <- step_fit_lm(null_fml, fit_env)
+  scope <- list(lower = stats::formula(null_model),
+                upper = stats::formula(full_model))
+
   if (direction == "forward") {
-    return(list(start_model = null_model, scope = scope, direction = "forward"))
+    return(list(start_model = null_model, scope = scope,
+                direction = "forward"))
   }
-  
+
   list(start_model = full_model, scope = scope, direction = "both")
 }
 
-# ---- Training via stepAIC ----
-
-#' Train a model via stepwise selection using MASS::stepAIC
+#' Run MASS::stepAIC inside the fit environment
 #'
-#' @param formula A model formula.
-#' @param data A data.frame.
-#' @param direction One of "backward", "forward", or "both".
-#' @param verbose Logical; whether to print stepAIC tracing output.
-#' @param ... Additional arguments passed to MASS::stepAIC
-#'        (excluding 'trace', which is controlled by 'verbose').
-#' @return The final model object returned by stepAIC.
-train_stepwise_model <- function(formula, data, direction = "both", verbose = FALSE, ...) {
-  log_info("Training stepwise model with direction = {direction}")
-  
-  # Normalize '...' and strip any user-supplied 'trace'
-  dots <- list(...)
+#' The `stepAIC()` call is evaluated inside `fit_env` so that its internal
+#' refits (which use `eval.parent()`) resolve `.fs_stepwise_data` there.
+#'
+#' @param start_model Starting `lm` model.
+#' @param scope Scope list or NULL.
+#' @param direction One of "backward", "forward", "both".
+#' @param verbose Logical; passed as `trace` to `stepAIC()`.
+#' @param dots List of extra arguments for `stepAIC()`; a user-supplied
+#'   `trace` is dropped with a warning.
+#' @param fit_env Environment holding `.fs_stepwise_data`.
+#' @return The model selected by `stepAIC()`.
+#' @noRd
+step_run_stepwise <- function(start_model, scope, direction, verbose, dots,
+                              fit_env) {
   if ("trace" %in% names(dots)) {
-    log_warn("Argument 'trace' supplied via '...' will be ignored; use 'verbose' instead.")
+    warning("Argument 'trace' supplied via '...' is ignored; use 'verbose' instead.",
+            call. = FALSE)
     dots$trace <- NULL
   }
-  
-  tryCatch({
-    parts       <- build_models_for_direction(formula, data, direction)
-    start_model <- parts$start_model
-    scope       <- parts$scope
-    dir         <- parts$direction
-    
-    # Create a unique, hidden global binding for the data so update()/stepAIC can always see it
-    df_token <- paste0(".fs_data_", sprintf("%08d", sample.int(1e8, 1)))
-    assign(df_token, data, envir = .GlobalEnv)
-    on.exit({
-      if (exists(df_token, envir = .GlobalEnv, inherits = FALSE)) {
-        rm(list = df_token, envir = .GlobalEnv)
-      }
-    }, add = TRUE)
-    
-    # Rewrite the model call to use the global data symbol
-    start_model$call$data <- as.name(df_token)
-    
-    # Harden the terms/formula environments to the global env (defensive)
-    if (!is.null(start_model$terms)) {
-      environment(start_model$terms) <- .GlobalEnv
-    }
-    if (!is.null(attr(start_model$terms, "formula"))) {
-      environment(attr(start_model$terms, "formula")) <- .GlobalEnv
-    }
-    
-    log_info("Starting stepwise selection using stepAIC.")
-    
-    base_args <- list(object = start_model, direction = dir, trace = verbose)
-    if (!is.null(scope)) {
-      base_args$scope <- scope
-    }
-    
-    # Call stepAIC with normalized args
-    step_model <- do.call(MASS::stepAIC, c(base_args, dots))
-    
-    # Clean up the returned model call so it does not depend on the temporary df_token
-    if (!is.null(step_model$call$data) &&
-        identical(step_model$call$data, as.name(df_token))) {
-      step_model$call$data <- NULL
-    }
-    
-    log_info("Stepwise model training completed successfully.")
-    step_model
-  }, error = function(e) {
-    log_error("Error during stepwise model training: {e$message}")
-    log_error_with_trace(e)
-    stop(sprintf("Model training failed: %s", e$message), call. = FALSE)
-  })
+
+  args <- c(
+    list(object = start_model, direction = direction, trace = verbose),
+    if (!is.null(scope)) list(scope = scope),
+    dots
+  )
+
+  assign(".fs_stepwise_args", args, envir = fit_env)
+  on.exit(rm(list = ".fs_stepwise_args", envir = fit_env), add = TRUE)
+
+  step_call <- as.call(list(
+    quote(do.call),
+    quote(MASS::stepAIC),
+    as.name(".fs_stepwise_args")
+  ))
+  eval(step_call, fit_env)
 }
 
-
-# ---- Variable Importance Helper ----
-
-#' Compute a simple variable importance table from a fitted model
+#' Coefficient summary of the selected model
 #'
-#' Currently returns the coefficient summary table from \code{summary(model)$coefficients}.
-#' You may customize this to use standardized coefficients or other metrics.
+#' Returns `summary(model)$coefficients`. Note that estimates and p-values
+#' computed on the same data that drove the stepwise selection are subject to
+#' selection bias and are not valid for formal inference.
 #'
-#' @param model A fitted \code{lm} or compatible model.
-#' @return A matrix (like \code{summary(model)$coefficients}) with rows per term.
-#' @examples
-#' model <- lm(mpg ~ wt + hp, data = mtcars)
-#' importance <- variable_importance(model)
-variable_importance <- function(model) {
-  sm <- summary(model)
-  sm$coefficients
+#' @param model A fitted `lm`.
+#' @return The coefficient matrix from `summary()`.
+#' @noRd
+step_coef_summary <- function(model) {
+  summary(model)$coefficients
 }
 
-# ---- Public API: fs_stepwise ----
-
-#' Perform stepwise feature selection using linear regression
+#' Stepwise linear-regression feature selection via AIC
 #'
-#' This function uses \code{MASS::stepAIC} to perform forward, backward, or both-direction
-#' stepwise selection. For \code{direction = "forward"} and \code{"both"}, it sets up a
-#' proper null model and \code{scope} to ensure forward moves are possible.
+#' Uses `MASS::stepAIC()` to perform forward, backward, or both-direction
+#' stepwise selection on a linear regression of `dependent_var` against all
+#' other columns of `data`. For `step_type = "forward"` and `"both"` a proper
+#' null model and scope are set up so that forward moves are possible.
 #'
-#' @param data A data.frame containing the dataset.
-#' @param dependent_var The name (as a character string or unquoted symbol) of the dependent variable.
-#' @param step_type The direction for stepwise selection: \code{"backward"}, \code{"forward"}, or \code{"both"}. Default is \code{"both"}.
-#' @param seed An optional seed for reproducibility (sets the global RNG seed).
-#' @param verbose Logical. If \code{TRUE}, prints detailed \code{stepAIC} output and final summaries. Default is \code{FALSE}.
-#' @param return_models Logical. If \code{TRUE}, also includes the final model as \code{step_model} in the returned list
-#'   (in addition to \code{final_model}).
-#' @param ... Additional parameters to pass to \code{MASS::stepAIC} (excluding \code{trace}, which is controlled by \code{verbose}).
+#' @details
+#' Requires the suggested package 'MASS'. The function is
+#' linear-regression-only: the dependent variable must be numeric.
+#'
+#' The fitted models reference the data through a small private environment
+#' attached to the model formula, so `predict()`, `summary()`, `anova()`,
+#' `add1()`/`drop1()`, and similar generics keep working on the returned
+#' model; nothing is assigned to the global environment and nothing is
+#' written to disk. To refit the returned model with `update()` from another
+#' environment, pass the data explicitly, e.g.
+#' `update(model, . ~ . - x, data = my_data)` (plain `update(model)`
+#' re-evaluates the call in the caller's environment, where the private data
+#' object is not visible).
+#'
+#' Rows containing missing values in any column are dropped (with a warning)
+#' before the search, because `stepAIC()` cannot compare models fitted on
+#' differing row sets.
+#'
+#' @param data A data.frame containing the dependent variable and the
+#'   candidate predictors (all other columns).
+#' @param dependent_var Character string naming the numeric dependent
+#'   variable. (Unquoted symbols are not accepted.)
+#' @param step_type Direction of the search: `"backward"`, `"forward"`, or
+#'   `"both"` (default).
+#' @param verbose Logical. If `TRUE`, emits progress messages and enables the
+#'   `stepAIC()` trace output. Default `FALSE`.
+#' @param ... Additional arguments passed to `MASS::stepAIC()` (e.g. `k`,
+#'   `steps`), excluding `trace`, which is controlled by `verbose` (a
+#'   user-supplied `trace` is dropped with a warning).
 #'
 #' @return A list with:
 #' \itemize{
-#'   \item \code{final_model}: the fitted model returned by \code{stepAIC}.
-#'   \item \code{importance}: a coefficient summary matrix for the final model.
-#'   \item \code{selected_terms}: character vector of selected predictors (excluding intercept).
-#'   \item \code{call}: a list describing inputs used.
-#'   \item \code{step_model}: (optional) same as \code{final_model} if \code{return_models = TRUE}.
+#'   \item \code{final_model}: the model selected by \code{stepAIC()}.
+#'   \item \code{importance}: the coefficient summary matrix of the final
+#'     model. \strong{Caveat}: p-values obtained after stepwise selection on
+#'     the same data are optimistically biased (the selective-inference
+#'     problem) and must not be used for formal inference.
+#'   \item \code{selected_terms}: character vector of selected predictors
+#'     (excluding the intercept).
+#'   \item \code{call}: a list describing the inputs used.
 #' }
 #'
 #' @examples
-#' # Basic usage with mtcars
-#' out <- fs_stepwise(mtcars, dependent_var = "mpg", step_type = "both", seed = 123)
-#' out$final_model
-#' out$importance
-#' out$selected_terms
+#' \donttest{
+#' if (requireNamespace("MASS", quietly = TRUE)) {
+#'   out <- fs_stepwise(mtcars, dependent_var = "mpg", step_type = "both")
+#'   out$selected_terms
+#'   out$importance
+#' }
+#' }
+#' @export
 fs_stepwise <- function(data,
                         dependent_var,
                         step_type = "both",
-                        seed = NULL,
                         verbose = FALSE,
-                        return_models = FALSE,
                         ...) {
-  if (!is.null(seed)) {
-    set.seed(seed)
-    log_info("Random seed set to: {seed}")
+  fs_require("MASS", "stepwise selection")
+
+  assert_data_frame(data, "data")
+  assert_target(data, dependent_var, arg = "dependent_var")
+  assert_string(step_type, "step_type")
+  if (!step_type %in% c("backward", "forward", "both")) {
+    stop("'step_type' must be one of 'backward', 'forward', or 'both'.",
+         call. = FALSE)
   }
-  
-  dep_var <- check_inputs(data, dependent_var, step_type)
-  formula <- prepare_formula(data, dep_var)
-  
+  assert_flag(verbose, "verbose")
+
+  dep_var <- dependent_var
+
+  if (!is.numeric(data[[dep_var]])) {
+    stop("fs_stepwise() fits linear regressions only; the dependent variable must be numeric.",
+         call. = FALSE)
+  }
+  if (ncol(data) < 2L) {
+    stop("'data' must contain at least one predictor besides the dependent variable.",
+         call. = FALSE)
+  }
+
+  data <- as.data.frame(data)
+
+  # stepAIC() fails mid-search when the number of usable rows changes between
+  # candidate models, so drop incomplete rows up front.
+  if (anyNA(data)) {
+    n_before <- nrow(data)
+    data <- stats::na.omit(data)
+    warning(sprintf("Dropped %d row(s) with missing values before stepwise selection.",
+                    n_before - nrow(data)), call. = FALSE)
+    if (nrow(data) == 0L) {
+      stop("No rows remain after removing missing values.", call. = FALSE)
+    }
+  }
+
   if (verbose) {
-    log_info("Starting fs_stepwise with dependent_var = {dep_var}, step_type = {step_type}")
-  } else {
-    log_info("Starting fs_stepwise.")
+    message(sprintf("Starting stepwise selection ('%s') for dependent variable '%s'.",
+                    step_type, dep_var))
   }
-  
-  step_model <- train_stepwise_model(formula, data, direction = step_type, verbose = verbose, ...)
-  
-  imp <- variable_importance(step_model)
-  terms_selected <- attr(terms(step_model), "term.labels")
-  
-  out <- list(
-    final_model    = step_model,
-    importance     = imp,
+
+  # Private environment that carries the data for model fitting; it persists
+  # through the returned model's formula/terms environment (never the global
+  # environment).
+  fit_env <- new.env(parent = parent.frame())
+  assign(".fs_stepwise_data", data, envir = fit_env)
+
+  parts <- step_build_models(dep_var, direction = step_type,
+                             fit_env = fit_env)
+
+  step_model <- step_run_stepwise(
+    start_model = parts$start_model,
+    scope = parts$scope,
+    direction = parts$direction,
+    verbose = verbose,
+    dots = list(...),
+    fit_env = fit_env
+  )
+
+  imp <- step_coef_summary(step_model)
+  terms_selected <- attr(stats::terms(step_model), "term.labels")
+
+  if (verbose) {
+    message(sprintf(
+      "Stepwise selection complete: %d term(s) selected%s.",
+      length(terms_selected),
+      if (length(terms_selected) > 0L) {
+        paste0(" (", paste(terms_selected, collapse = ", "), ")")
+      } else {
+        ""
+      }
+    ))
+  }
+
+  list(
+    final_model = step_model,
+    importance = imp,
     selected_terms = terms_selected,
-    call           = list(
+    call = list(
       dependent_var = dep_var,
-      step_type     = step_type,
-      seed          = seed,
-      verbose       = verbose
+      step_type = step_type,
+      verbose = verbose
     )
   )
-  
-  if (isTRUE(return_models)) {
-    out$step_model <- step_model
-    log_info("Returning full model details as requested via 'return_models = TRUE'.")
-  }
-  
-  if (isTRUE(verbose)) {
-    cat("===== Final Model Summary =====\n")
-    print(summary(step_model))
-    cat("\n===== Variable Importance =====\n")
-    print(imp)
-    cat("\n===== Selected Terms =====\n")
-    print(terms_selected)
-  }
-  
-  log_info("fs_stepwise completed successfully.")
-  out
 }

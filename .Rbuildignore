@@ -1,7 +1,8 @@
 ^LICENSE\.md$
 ^CRAN_REVIEW\.md$
 ^CHANGES\.md$
-^Tests$
+^cran-comments\.md$
+^legacy-tests$
 ^\.Rproj\.user$
 ^.*\.Rproj$
 ^\.github$

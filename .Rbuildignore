@@ -1,0 +1,7 @@
+^LICENSE\.md$
+^CRAN_REVIEW\.md$
+^CHANGES\.md$
+^Tests$
+^\.Rproj\.user$
+^.*\.Rproj$
+^\.github$

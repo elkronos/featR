@@ -1,332 +1,436 @@
-# ============================
-# PCA Utilities (Data Table)
-# ============================
+# Principal component analysis helpers for featR.
 
-suppressPackageStartupMessages({
-  library(data.table)
-  library(ggplot2)      # plotting
-  library(RColorBrewer) # discrete palette
-  library(viridis)      # large discrete palette
-  library(bigstatsr)    # large PCA
-  library(rlang)        # for tidy evaluation (.data)
-})
+# ------------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------------
 
-# ------------------------------------------------
-# 1) Validation & Helpers
-# ------------------------------------------------
-
-#' Check Data Validity for PCA
-#' Ensures data is non-null, has >= 2 rows, and contains >= 1 numeric column.
-#' Stops with an informative error if invalid.
-check_data_validity <- function(data) {
-  if (is.null(data)) stop("Invalid data for PCA: data is NULL.")
-  dt <- as.data.table(data)
-  if (nrow(dt) < 2L) stop("Invalid data for PCA: need at least 2 rows.")
-  n_num <- sum(vapply(dt, is.numeric, logical(1)))
-  if (n_num < 1L) stop("Invalid data for PCA: need at least 1 numeric column.")
+#' Validate a dataset for PCA
+#'
+#' Ensures the input has at least two rows and at least one numeric column.
+#'
+#' @param data A data.frame or data.table.
+#' @return Invisibly `TRUE`; stops with an informative error otherwise.
+#' @noRd
+pca_check_data <- function(data) {
+  if (nrow(data) < 2L) {
+    stop("Invalid data for PCA: need at least 2 rows.", call. = FALSE)
+  }
+  n_num <- sum(vapply(data, is.numeric, logical(1L)))
+  if (n_num < 1L) {
+    stop("Invalid data for PCA: need at least 1 numeric column.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
-#' Identify Label Columns
-#' Returns names of columns that are character or factor.
-identify_label_cols <- function(data) {
-  dt <- as.data.table(data)
-  names(dt)[vapply(dt, function(col) is.character(col) || is.factor(col), logical(1))]
+#' Names of character/factor columns (label candidates, excluded from PCA)
+#'
+#' @param data A data.frame or data.table.
+#' @return Character vector of column names.
+#' @noRd
+pca_label_cols <- function(data) {
+  names(data)[vapply(data, function(col) is.character(col) || is.factor(col),
+                     logical(1L))]
 }
 
-# ------------------------------------------------
-# 2) PCA Computation
-# ------------------------------------------------
+#' Compute PCA scores and loadings with automatic engine selection
+#'
+#' Rows with missing values in the numeric columns are dropped, as are
+#' zero-variance columns. Small data (fewer than 1e7 cells) uses
+#' `stats::prcomp()`; larger data uses `bigstatsr::big_SVD()` when the
+#' suggested package 'bigstatsr' is installed, and falls back to `prcomp()`
+#' with a message otherwise.
+#'
+#' @param data A data.frame or data.table.
+#' @param label_cols Character vector of columns excluded from the features.
+#' @param num_pc Number of PCs to retain, or `NULL` to use
+#'   `min(2, max_possible)`.
+#' @param scale_data,center_data Logical scaling/centering switches.
+#' @param verbose Logical; emit progress messages.
+#' @return A list with `svd` (list `u` = scores, `d` = singular values or
+#'   standard deviations, `v` = loadings), `var_explained` (proportion of
+#'   total variance per computed PC), `num_pc` (resolved value), `rows_kept`
+#'   (logical vector), and `numeric_cols` (character vector).
+#' @noRd
+pca_compute <- function(data,
+                        label_cols = character(0),
+                        num_pc = NULL,
+                        scale_data = TRUE,
+                        center_data = TRUE,
+                        verbose = TRUE) {
+  dt <- as_dt(data)
 
-#' Perform PCA on numeric subset (rows with complete numeric cases only).
-#'
-#' For small data (n_rows * n_cols < 1e7): uses base prcomp.
-#' For large data: uses bigstatsr::big_SVD on a Filebacked Big Matrix.
-#'
-#' Returns a list with:
-#' - svd: list(u = scores, d = singular values / sdev, v = loadings)
-#' - rows_kept: logical index for rows used (complete numeric cases)
-#' - numeric_cols: character vector of numeric column names used
-.perform_pca <- function(data,
-                         label_cols  = character(0),
-                         num_pc      = 2L,
-                         scale_data  = TRUE,
-                         center_data = TRUE) {
-  dt <- as.data.table(data)
-  
-  # Numeric columns are those not in label_cols and actually numeric
+  # Numeric columns are those not declared as labels and actually numeric.
   candidate_cols <- setdiff(names(dt), label_cols)
-  numeric_cols <- candidate_cols[vapply(dt[, ..candidate_cols], is.numeric, logical(1))]
-  
+  is_num <- vapply(dt[, candidate_cols, with = FALSE], is.numeric, logical(1L))
+  numeric_cols <- candidate_cols[is_num]
+
   if (length(numeric_cols) == 0L) {
-    stop("No numeric columns found for PCA after excluding label columns.")
+    stop("No numeric columns found for PCA after excluding label columns.",
+         call. = FALSE)
   }
-  
-  # Keep rows with complete numeric cases only
-  rows_kept <- complete.cases(dt[, ..numeric_cols])
-  if (!any(rows_kept)) stop("All rows have missing values in numeric columns.")
-  Xdt <- dt[rows_kept, ..numeric_cols]
-  
+
+  # Keep rows with complete numeric cases only.
+  rows_kept <- stats::complete.cases(dt[, numeric_cols, with = FALSE])
+  if (!any(rows_kept)) {
+    stop("All rows have missing values in numeric columns.", call. = FALSE)
+  }
+  Xdt <- dt[rows_kept, numeric_cols, with = FALSE]
+
   if (nrow(Xdt) < 2L) {
-    stop("Not enough rows with complete numeric data to compute PCA (need at least 2).")
+    stop("Not enough rows with complete numeric data to compute PCA (need at least 2).",
+         call. = FALSE)
   }
-  
-  # Remove zero-variance numeric columns (avoids scaling error)
-  sds <- vapply(Xdt, sd, numeric(1))
+
+  # Remove zero-variance numeric columns (avoids scaling errors).
+  sds <- vapply(Xdt, stats::sd, numeric(1L))
   sds[!is.finite(sds)] <- 0
   keep_cols <- names(sds)[sds > 0]
   drop_cols <- setdiff(names(Xdt), keep_cols)
-  
+
   if (length(keep_cols) == 0L) {
-    stop("All numeric columns have zero variance; PCA is not defined.")
+    stop("All numeric columns have zero variance; PCA is not defined.",
+         call. = FALSE)
   }
   if (length(drop_cols) > 0L) {
-    warning(sprintf(
-      "Removed %d zero-variance column(s): %s",
-      length(drop_cols),
-      paste(drop_cols, collapse = ", ")
-    ))
+    warning(sprintf("Removed %d zero-variance column(s): %s",
+                    length(drop_cols), paste(drop_cols, collapse = ", ")),
+            call. = FALSE)
   }
-  
-  Xdt <- Xdt[, ..keep_cols]
+
+  Xdt <- Xdt[, keep_cols, with = FALSE]
   numeric_cols <- keep_cols
-  
+
   n_rows <- nrow(Xdt)
   n_cols <- ncol(Xdt)
-  
-  # Basic dimensional sanity
-  if (n_cols < 1L) stop("Not enough numeric columns for PCA.")
-  
+
   max_possible <- min(n_rows - 1L, n_cols)
   if (max_possible < 1L) {
-    stop("Not enough information to compute any principal component (check data dimensions).")
+    stop("Not enough information to compute any principal component (check data dimensions).",
+         call. = FALSE)
   }
-  if (num_pc > max_possible) {
-    stop(sprintf(
-      "Requested %d PCs, but at most %d can be computed from the data.",
-      num_pc, max_possible
-    ))
-  }
-  
-  # Small vs large branch
-  if ((n_rows * n_cols) < 1e7) {
-    message("Using prcomp for PCA computation (small dataset).")
-    
-    pca_obj  <- prcomp(Xdt, center = center_data, scale. = scale_data)
-    scores   <- pca_obj$x
-    loadings <- pca_obj$rotation
-    sdev     <- pca_obj$sdev
-    
-    svd <- list(u = scores, d = sdev, v = loadings)
-    
-  } else {
-    message("Using bigstatsr::big_SVD for PCA computation (large dataset).")
-    
-    big_mat <- FBM(n_rows, n_cols, backingfile = tempfile())
-    big_mat[,] <- as.matrix(Xdt)
-    
-    k <- as.integer(num_pc)
-    if (k <= 0L) {
-      stop("Requested number of PCs is not valid for the data dimensions.")
-    }
-    
-    svd_obj <- big_SVD(
-      big_mat,
-      fun.scaling = big_scale(center = center_data, scale = scale_data),
-      k = k
-    )
-    
-    d        <- svd_obj$d
-    # PCA scores are U %*% diag(D) for SVD
-    scores   <- svd_obj$u %*% diag(d, nrow = length(d), ncol = length(d))
-    loadings <- svd_obj$v
-    
-    svd <- list(u = scores, d = d, v = loadings)
-  }
-  
-  list(svd = svd, rows_kept = rows_kept, numeric_cols = numeric_cols)
-}
-
-# ------------------------------------------------
-# 3) Result Structuring
-# ------------------------------------------------
-
-#' Build a tidy PCA results object
-#'
-#' Returns a list with:
-#' - pc_loadings:   matrix [features x PCs]
-#' - pc_scores:     matrix [rows_kept x PCs]
-#' - var_explained: numeric vector length num_pc (proportion of variance
-#'                  relative to the PCs represented in svd$d)
-#' - pca_df:        data.table of scores + chosen labels
-#' - meta:          list with numeric_cols, rows_kept (logical), n_rows_used, n_cols_used
-.create_pca_results <- function(pca_fit,
-                                num_pc,
-                                data,
-                                label_cols      = character(0),
-                                extra_label_col = NULL) {
-  svd          <- pca_fit$svd
-  rows_kept    <- pca_fit$rows_kept
-  numeric_cols <- pca_fit$numeric_cols
-  
-  # Validate requested PCs vs computed
-  n_avail <- ncol(svd$u)
-  if (num_pc > n_avail) {
-    stop(sprintf("Requested %d PCs, but only %d were computed.", num_pc, n_avail))
-  }
-  
-  # Variance explained (relative to all PCs represented in svd$d)
-  var_explained <- (svd$d[1:num_pc]^2) / sum(svd$d^2)
-  
-  # Loadings and scores
-  pc_loadings <- svd$v[, 1:num_pc, drop = FALSE]
-  pc_scores   <- svd$u[, 1:num_pc, drop = FALSE]
-  colnames(pc_loadings) <- paste0("PC", seq_len(num_pc))
-  colnames(pc_scores)   <- paste0("PC", seq_len(num_pc))
-  
-  # Assemble labels: include declared label_cols AND an explicit extra_label_col
-  dt_all <- as.data.table(data)
-  cols_for_labels <- unique(c(label_cols, extra_label_col))
-  cols_for_labels <- cols_for_labels[cols_for_labels %in% names(dt_all)]
-  label_data <- if (length(cols_for_labels)) {
-    dt_all[rows_kept, ..cols_for_labels]
-  } else {
-    data.table()
-  }
-  
-  pca_df <- cbind(data.table(pc_scores), label_data)
-  
-  list(
-    pc_loadings   = pc_loadings,
-    pc_scores     = pc_scores,
-    var_explained = var_explained,
-    pca_df        = pca_df,
-    meta = list(
-      numeric_cols = numeric_cols,
-      rows_kept    = rows_kept,
-      n_rows_used  = sum(rows_kept),
-      n_cols_used  = length(numeric_cols)
-    )
-  )
-}
-
-# ------------------------------------------------
-# 4) Visualization
-# ------------------------------------------------
-
-#' Plot first two PCs, colored by a label column in pca_df.
-#' If many unique labels (> 9), uses viridis discrete palette.
-plot_pca_results <- function(pca_result, label_col) {
-  dt <- copy(pca_result$pca_df)
-  
-  if (!label_col %in% names(dt)) {
-    stop(sprintf("Label column '%s' not found in PCA results.", label_col))
-  }
-  
-  # If label is numeric, coerce to factor for coloring
-  if (is.numeric(dt[[label_col]])) {
-    dt[[label_col]] <- factor(dt[[label_col]])
-  }
-  
-  num_labels <- length(unique(dt[[label_col]]))
-  
-  p <- ggplot(
-    dt,
-    aes(
-      x     = .data$PC1,
-      y     = .data$PC2,
-      color = .data[[label_col]]
-    )
-  ) +
-    geom_point(alpha = 0.8, size = 2) +
-    ggtitle("PCA Results") +
-    xlab(sprintf("PC1 (%.2f%% variance)", 100 * pca_result$var_explained[1])) +
-    ylab(sprintf("PC2 (%.2f%% variance)", 100 * pca_result$var_explained[2]))
-  
-  if (num_labels > 9L) {
-    warning("More than 9 unique labels; using viridis discrete palette.")
-    p <- p + scale_color_viridis_d()
-  } else {
-    p <- p + scale_color_brewer(palette = "Set1")
-  }
-  
-  print(p)
-  invisible(p)
-}
-
-# ------------------------------------------------
-# 5) Public Wrapper
-# ------------------------------------------------
-
-#' Full PCA analysis wrapper
-#'
-#' @param data        data.frame or data.table
-#' @param num_pc      number of PCs to retain (integer >= 1; default 2)
-#' @param scale_data  logical; scale numeric cols
-#' @param center_data logical; center numeric cols
-#' @param label_col   optional column name to attach/plot (can be numeric or
-#'                    non-numeric). This column is excluded from PCA features
-#'                    and only used as a label.
-#' @param plot        logical; if TRUE and label_col supplied, plot PC1 vs PC2
-#'
-#' @return list with pc_loadings, pc_scores, var_explained, pca_df, meta
-#'
-#' @examples
-#' # Basic use
-#' res <- fs_pca(mtcars, num_pc = 2, label_col = "cyl", plot = TRUE)
-fs_pca <- function(data,
-                   num_pc      = 2L,
-                   scale_data  = TRUE,
-                   center_data = TRUE,
-                   label_col   = NULL,
-                   plot        = !is.null(label_col)) {
-  check_data_validity(data)
-  
-  # Validate num_pc
-  if (!is.numeric(num_pc) || length(num_pc) != 1L || is.na(num_pc) || num_pc < 1L) {
-    stop("`num_pc` must be a single numeric value >= 1.")
+  if (is.null(num_pc)) {
+    num_pc <- min(2L, max_possible)
+  } else if (num_pc > max_possible) {
+    stop(sprintf("Requested %d PCs, but at most %d can be computed from the data.",
+                 num_pc, max_possible), call. = FALSE)
   }
   num_pc <- as.integer(num_pc)
-  
-  # Validate label_col if provided
-  if (!is.null(label_col) && !label_col %in% names(data)) {
-    stop(sprintf("`label_col` '%s' not found in data.", label_col))
-  }
-  
-  # Non-numeric label columns auto-detected;
-  # label_col (even if numeric) treated as a label and excluded from PCA features
-  base_label_cols <- identify_label_cols(data)
-  extra_label     <- if (!is.null(label_col)) label_col else NULL
-  all_label_cols  <- unique(c(base_label_cols, extra_label))
-  
-  # Compute PCA (keeps only complete rows for numeric subset)
-  pca_fit <- .perform_pca(
-    data        = data,
-    label_cols  = all_label_cols,
-    num_pc      = num_pc,
-    scale_data  = scale_data,
-    center_data = center_data
-  )
-  
-  # Build tidy results; include extra label col
-  results <- .create_pca_results(
-    pca_fit,
-    num_pc          = num_pc,
-    data            = data,
-    label_cols      = all_label_cols,
-    extra_label_col = extra_label
-  )
-  
-  # Optional plot if label_col provided and we have at least 2 PCs
-  if (plot) {
-    if (is.null(label_col)) {
-      warning("plot = TRUE but no label_col provided; skipping plot.")
-    } else if (num_pc < 2L) {
-      warning("plot = TRUE requires at least 2 PCs; skipping plot.")
-    } else {
-      plot_pca_results(results, label_col = label_col)
+
+  # as.numeric() avoids integer overflow for very large n_rows * n_cols.
+  large <- (as.numeric(n_rows) * n_cols) >= 1e7
+  use_big <- FALSE
+  if (large) {
+    if (requireNamespace("bigstatsr", quietly = TRUE)) {
+      use_big <- TRUE
+    } else if (verbose) {
+      message("Package 'bigstatsr' is not installed; falling back to prcomp for this large dataset.")
     }
   }
-  
+
+  if (!use_big) {
+    if (verbose) {
+      message("Using prcomp for PCA computation.")
+    }
+    pca_obj <- stats::prcomp(Xdt, center = center_data, scale. = scale_data)
+    svd_parts <- list(u = pca_obj$x, d = pca_obj$sdev, v = pca_obj$rotation)
+    # prcomp returns standard deviations for all PCs, so this is exact.
+    var_explained <- pca_obj$sdev^2 / sum(pca_obj$sdev^2)
+  } else {
+    if (verbose) {
+      message("Using bigstatsr::big_SVD for PCA computation (large dataset).")
+    }
+
+    backing <- tempfile()
+    on.exit(unlink(paste0(backing, c(".bk", ".rds"))), add = TRUE)
+
+    big_mat <- bigstatsr::FBM(n_rows, n_cols, backingfile = backing)
+    big_mat[, ] <- as.matrix(Xdt)
+
+    svd_obj <- bigstatsr::big_SVD(
+      big_mat,
+      fun.scaling = bigstatsr::big_scale(center = center_data,
+                                         scale = scale_data),
+      k = num_pc
+    )
+
+    d <- svd_obj$d
+    # PCA scores are U %*% diag(D) for an SVD.
+    scores <- svd_obj$u %*% diag(d, nrow = length(d), ncol = length(d))
+    loadings <- svd_obj$v
+    # big_SVD does not carry feature names; restore them.
+    rownames(loadings) <- numeric_cols
+
+    # big_SVD returns only the top-k singular values, so sum(d^2) is NOT the
+    # total variance. Compute the total sum of squares of the (implicitly
+    # centered/scaled) matrix explicitly from column statistics.
+    n <- nrow(big_mat)
+    cs <- bigstatsr::big_colstats(big_mat)
+    if (scale_data && center_data) {
+      total_ss <- (n - 1) * ncol(big_mat)
+    } else if (center_data) {
+      total_ss <- (n - 1) * sum(cs$var)
+    } else {
+      # Sum of raw squared entries: (n - 1) * var + n * mean^2 per column.
+      total_ss <- sum((n - 1) * cs$var + n * cs$sum^2 / n^2)
+    }
+    var_explained <- d^2 / total_ss
+
+    svd_parts <- list(u = scores, d = d, v = loadings)
+  }
+
+  list(
+    svd = svd_parts,
+    var_explained = var_explained,
+    num_pc = num_pc,
+    rows_kept = rows_kept,
+    numeric_cols = numeric_cols
+  )
+}
+
+#' Assemble tidy PCA results
+#'
+#' @param pca_fit Result of `pca_compute()`.
+#' @param num_pc Number of PCs to report.
+#' @param data Original data (labels are taken from it).
+#' @param label_cols Character vector of label column names.
+#' @param extra_label_col Optional extra label column name.
+#' @return A list with `pc_loadings`, `pc_scores`, `var_explained`, `pca_df`,
+#'   and `meta`.
+#' @noRd
+pca_results <- function(pca_fit,
+                        num_pc,
+                        data,
+                        label_cols = character(0),
+                        extra_label_col = NULL) {
+  svd_parts <- pca_fit$svd
+  rows_kept <- pca_fit$rows_kept
+  numeric_cols <- pca_fit$numeric_cols
+
+  n_avail <- ncol(svd_parts$u)
+  if (num_pc > n_avail) {
+    stop(sprintf("Requested %d PCs, but only %d were computed.",
+                 num_pc, n_avail), call. = FALSE)
+  }
+
+  var_explained <- pca_fit$var_explained[seq_len(num_pc)]
+
+  pc_loadings <- svd_parts$v[, seq_len(num_pc), drop = FALSE]
+  pc_scores <- svd_parts$u[, seq_len(num_pc), drop = FALSE]
+  colnames(pc_loadings) <- paste0("PC", seq_len(num_pc))
+  colnames(pc_scores) <- paste0("PC", seq_len(num_pc))
+
+  # Assemble labels: declared label columns plus the explicit extra label.
+  dt_all <- as_dt(data)
+  cols_for_labels <- unique(c(label_cols, extra_label_col))
+  cols_for_labels <- cols_for_labels[cols_for_labels %in% names(dt_all)]
+  label_data <- if (length(cols_for_labels) > 0L) {
+    dt_all[rows_kept, cols_for_labels, with = FALSE]
+  } else {
+    data.table::data.table()
+  }
+
+  pca_df <- cbind(data.table::as.data.table(pc_scores), label_data)
+
+  list(
+    pc_loadings = pc_loadings,
+    pc_scores = pc_scores,
+    var_explained = var_explained,
+    pca_df = pca_df,
+    meta = list(
+      numeric_cols = numeric_cols,
+      rows_kept = rows_kept,
+      n_rows_used = sum(rows_kept),
+      n_cols_used = length(numeric_cols)
+    )
+  )
+}
+
+#' Build a ggplot of the first two PCs, colored by a label column
+#'
+#' Returns the plot object without printing it; the caller decides whether to
+#' print. Uses the viridis discrete palette (from ggplot2) when there are more
+#' than 9 unique labels, and the Set1 brewer palette otherwise.
+#'
+#' @param pca_result Result list from `pca_results()`.
+#' @param label_col Name of the label column in `pca_result$pca_df`.
+#' @return A ggplot object.
+#' @noRd
+pca_plot <- function(pca_result, label_col) {
+  fs_require("ggplot2", "PCA plotting")
+
+  dt <- pca_result$pca_df
+  if (!label_col %in% names(dt)) {
+    stop(sprintf("Label column '%s' not found in PCA results.", label_col),
+         call. = FALSE)
+  }
+  if (!all(c("PC1", "PC2") %in% names(dt))) {
+    stop("PCA results must contain PC1 and PC2 to plot.", call. = FALSE)
+  }
+
+  label_values <- dt[[label_col]]
+  if (is.numeric(label_values)) {
+    label_values <- factor(label_values)
+  }
+
+  plot_df <- data.frame(
+    PC1 = dt[["PC1"]],
+    PC2 = dt[["PC2"]],
+    label = label_values
+  )
+
+  num_labels <- length(unique(stats::na.omit(plot_df$label)))
+
+  # Bind plotting symbols locally so R CMD check does not flag the
+  # non-standard evaluation inside aes(); the data mask takes precedence.
+  PC1 <- PC2 <- label <- NULL
+
+  p <- ggplot2::ggplot(plot_df,
+                       ggplot2::aes(x = PC1, y = PC2, color = label)) +
+    ggplot2::geom_point(alpha = 0.8, size = 2) +
+    ggplot2::ggtitle("PCA Results") +
+    ggplot2::xlab(sprintf("PC1 (%.2f%% variance)",
+                          100 * pca_result$var_explained[1L])) +
+    ggplot2::ylab(sprintf("PC2 (%.2f%% variance)",
+                          100 * pca_result$var_explained[2L])) +
+    ggplot2::labs(color = label_col)
+
+  if (num_labels > 9L) {
+    warning("More than 9 unique labels; using the viridis discrete palette.",
+            call. = FALSE)
+    p <- p + ggplot2::scale_color_viridis_d()
+  } else {
+    p <- p + ggplot2::scale_color_brewer(palette = "Set1")
+  }
+
+  p
+}
+
+# ------------------------------------------------------------------
+# Public wrapper
+# ------------------------------------------------------------------
+
+#' Principal component analysis with tidy results and optional plotting
+#'
+#' Runs a PCA on the numeric columns of `data`. Character and factor columns
+#' are excluded from the feature set and kept as label candidates; an
+#' explicitly supplied `label_col` (numeric or not) is likewise excluded from
+#' the features and only used for labeling. Rows with missing values in the
+#' numeric columns and zero-variance columns are dropped before the
+#' decomposition.
+#'
+#' @details
+#' For small data (fewer than 1e7 cells) the decomposition uses
+#' `stats::prcomp()`. For larger data it uses `bigstatsr::big_SVD()` on a
+#' temporary file-backed matrix (the backing file is deleted on exit) when the
+#' suggested package 'bigstatsr' is installed; otherwise it falls back to
+#' `prcomp()` with a message.
+#'
+#' `var_explained` always reports the proportion of *total* variance
+#' explained by each retained component. With the 'bigstatsr' engine only the
+#' retained components are computed, so the entries do not sum to 1 (they sum
+#' to the fraction of variance captured by those components). Plotting
+#' requires the suggested package 'ggplot2'.
+#'
+#' @param data A data.frame or data.table with at least two rows and at least
+#'   one numeric column.
+#' @param num_pc Number of principal components to retain, or `NULL` (the
+#'   default) to retain `min(2, max_possible)` where `max_possible` is
+#'   `min(nrow - 1, ncol)` of the usable numeric data. Explicit values larger
+#'   than `max_possible` raise an error.
+#' @param scale_data Logical; scale numeric columns to unit variance.
+#'   Default `TRUE`.
+#' @param center_data Logical; center numeric columns. Default `TRUE`.
+#' @param label_col Optional name of a column used to label and color points;
+#'   the column is excluded from the PCA features.
+#' @param plot Logical; if `TRUE` (the default whenever `label_col` is
+#'   supplied) and at least two components are available, a PC1 vs PC2
+#'   scatterplot is printed and returned as `$plot`.
+#' @param verbose Logical; emit progress messages. Default `TRUE`.
+#'
+#' @return A list with components:
+#' \itemize{
+#'   \item `pc_loadings`: matrix of variable loadings (features x PCs).
+#'   \item `pc_scores`: matrix of observation scores (rows kept x PCs).
+#'   \item `var_explained`: proportion of total variance per retained PC
+#'     (see Details for the large-data engine).
+#'   \item `pca_df`: data.table of scores plus label columns.
+#'   \item `meta`: list with `numeric_cols`, `rows_kept`, `n_rows_used`,
+#'     `n_cols_used`.
+#'   \item `plot`: the ggplot object (only when a plot was produced).
+#' }
+#'
+#' @examples
+#' res <- fs_pca(mtcars, num_pc = 2, label_col = "cyl", plot = FALSE)
+#' res$var_explained
+#' head(res$pca_df)
+#'
+#' \donttest{
+#' if (requireNamespace("ggplot2", quietly = TRUE)) {
+#'   res <- fs_pca(iris, label_col = "Species")
+#' }
+#' }
+#' @export
+fs_pca <- function(data,
+                   num_pc = NULL,
+                   scale_data = TRUE,
+                   center_data = TRUE,
+                   label_col = NULL,
+                   plot = !is.null(label_col),
+                   verbose = TRUE) {
+  assert_data_frame(data, "data")
+  if (!is.null(num_pc)) {
+    num_pc <- assert_count(num_pc, "num_pc", lower = 1L)
+  }
+  assert_flag(scale_data, "scale_data")
+  assert_flag(center_data, "center_data")
+  if (!is.null(label_col)) {
+    assert_target(data, label_col, arg = "label_col")
+  }
+  assert_flag(plot, "plot")
+  assert_flag(verbose, "verbose")
+
+  pca_check_data(data)
+
+  base_label_cols <- pca_label_cols(data)
+  if (length(base_label_cols) > 0L && verbose) {
+    message(sprintf(
+      "Excluding %d non-numeric column(s) from the PCA features (kept as label candidates): %s",
+      length(base_label_cols), paste(base_label_cols, collapse = ", ")
+    ))
+  }
+  all_label_cols <- unique(c(base_label_cols, label_col))
+
+  pca_fit <- pca_compute(
+    data = data,
+    label_cols = all_label_cols,
+    num_pc = num_pc,
+    scale_data = scale_data,
+    center_data = center_data,
+    verbose = verbose
+  )
+  num_pc <- pca_fit$num_pc
+
+  results <- pca_results(
+    pca_fit,
+    num_pc = num_pc,
+    data = data,
+    label_cols = all_label_cols,
+    extra_label_col = label_col
+  )
+
+  if (plot) {
+    if (is.null(label_col)) {
+      warning("plot = TRUE but no 'label_col' provided; skipping plot.",
+              call. = FALSE)
+    } else if (num_pc < 2L) {
+      warning("plot = TRUE requires at least 2 principal components; skipping plot.",
+              call. = FALSE)
+    } else {
+      p <- pca_plot(results, label_col = label_col)
+      print(p)
+      results$plot <- p
+    }
+  }
+
   results
 }

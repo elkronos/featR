@@ -1,127 +1,121 @@
-#' -----------------------------------------------------------------------------
-#' Lasso with Cross-Validation and Feature Importance
-#' -----------------------------------------------------------------------------
-#' Utilities to validate inputs, prepare predictors, fit a glmnet cv model
-#' (lasso / elastic net), and extract variable importance.
-#'
-#' Requires the packages: Matrix, glmnet, stats, parallel, doParallel, foreach
-#' -----------------------------------------------------------------------------
+# Lasso / elastic-net feature selection for featR.
+# Suggests: glmnet, Matrix (always); doParallel + foreach (only when
+# parallel = TRUE and more than one worker resolves).
 
-#' Validate Input Parameters
-#'
-#' Checks the user-provided parameters for consistency and correctness.
+#' Validate fs_lasso() input parameters
 #'
 #' @param x A data frame or matrix of predictor variables.
 #' @param y A numeric vector of response values (no NA/NaN/Inf).
-#' @param alpha A numeric value in (0, 1]; 1 = lasso, (0,1) = elastic net.
+#' @param alpha A numeric value in (0, 1]; 1 = lasso, (0, 1) = elastic net.
 #' @param nfolds Integer > 1 specifying the number of CV folds.
 #' @param standardize Logical; whether glmnet should standardize predictors.
 #' @param parallel Logical; whether to use a parallel backend for CV.
 #' @param verbose Logical; whether to print progress messages.
-#' @param seed Either NULL or a single integer for reproducibility.
-#' @param custom_folds Optional integer vector of custom fold IDs (same length as y).
+#' @param seed Either NULL or a single whole number for reproducibility.
+#' @param custom_folds Optional integer vector of fold IDs (same length as y).
 #' @param return_model Logical; whether to return the fitted cv.glmnet object.
-#'
-#' @return Invisibly returns TRUE if all parameters are valid; otherwise errors.
-#' @keywords internal
-validate_parameters <- function(x, y, alpha, nfolds, standardize,
-                                parallel, verbose, seed, custom_folds,
-                                return_model) {
-  # x must be data.frame or matrix
-  if (!inherits(x, c("data.frame", "matrix"))) {
-    stop("Error: 'x' should be a data frame or matrix.")
-  }
-  
-  # x must have at least one column
-  if (NCOL(x) == 0L) {
-    stop("Error: 'x' must have at least one predictor (one column).")
-  }
-  
-  # y must be numeric vector with length matching nrow(x)
+#' @return Invisibly TRUE when all parameters are valid; otherwise errors.
+#' @noRd
+lasso_validate <- function(x, y, alpha, nfolds, standardize,
+                           parallel, verbose, seed, custom_folds,
+                           return_model) {
+  assert_data_frame(x, arg = "x", allow_matrix = TRUE)
+
   if (!is.numeric(y)) {
-    stop("Error: 'y' should be a numeric vector.")
+    stop("'y' must be a numeric vector.")
   }
   if (any(!is.finite(y))) {
-    stop("Error: 'y' contains non-finite values (NA/NaN/Inf).")
+    stop("'y' contains non-finite values (NA/NaN/Inf).")
   }
   if (NROW(x) != length(y)) {
-    stop("Error: 'x' and 'y' must have the same number of rows/observations.")
+    stop("'x' and 'y' must have the same number of rows/observations.")
   }
-  
-  # alpha in (0, 1]
-  if (!(is.numeric(alpha) && length(alpha) == 1 && is.finite(alpha) && alpha > 0 && alpha <= 1)) {
-    stop("Error: 'alpha' must be a numeric value in (0, 1].")
+
+  assert_number(alpha, "alpha")
+  if (alpha <= 0 || alpha > 1) {
+    stop("'alpha' must be a numeric value in (0, 1].")
   }
-  
-  # nfolds integer > 1
-  if (!(is.numeric(nfolds) && length(nfolds) == 1 && nfolds > 1 && nfolds == as.integer(nfolds))) {
-    stop("Error: 'nfolds' must be a single integer greater than 1.")
-  }
-  
-  # logical flags
-  if (!is.logical(standardize) || length(standardize) != 1 ||
-      !is.logical(parallel)    || length(parallel)    != 1 ||
-      !is.logical(verbose)     || length(verbose)     != 1 ||
-      !is.logical(return_model)|| length(return_model)!= 1) {
-    stop("Error: 'standardize', 'parallel', 'verbose', and 'return_model' must be single logical values.")
-  }
-  
-  # seed: NULL or single integer
-  if (!is.null(seed) && !(is.numeric(seed) && length(seed) == 1 && is.finite(seed) && seed == as.integer(seed))) {
-    stop("Error: 'seed' must be a single integer value or NULL.")
-  }
-  
-  # custom_folds checks
-  if (!is.null(custom_folds)) {
-    # allow integer or numeric-looks-like-integer
-    if (!(is.integer(custom_folds) || all(custom_folds == as.integer(custom_folds)))) {
-      stop("Error: 'custom_folds' must be an integer vector.")
+
+  assert_count(nfolds, "nfolds", lower = 2L)
+
+  assert_flag(standardize, "standardize")
+  assert_flag(parallel, "parallel")
+  assert_flag(verbose, "verbose")
+  assert_flag(return_model, "return_model")
+
+  if (!is.null(seed)) {
+    assert_number(seed, "seed")
+    if (seed != round(seed) || abs(seed) > .Machine$integer.max) {
+      stop("'seed' must be a single whole number (integer-sized) or NULL.")
     }
-    if (length(custom_folds) != length(y)) {
-      stop("Error: 'custom_folds' must be the same length as 'y'.")
+  }
+
+  if (!is.null(custom_folds)) {
+    if (!is.numeric(custom_folds)) {
+      stop("'custom_folds' must be an integer vector.")
+    }
+    # Check for NA before any integer-ness comparison: comparing a double NA
+    # yields NA and would crash the conditions below.
+    if (anyNA(custom_folds)) {
+      stop("'custom_folds' contains missing values (NA); fold IDs must be complete.")
     }
     if (any(!is.finite(custom_folds))) {
-      stop("Error: 'custom_folds' contains non-finite values.")
+      stop("'custom_folds' contains non-finite values.")
+    }
+    if (!(is.integer(custom_folds) || all(custom_folds == round(custom_folds)))) {
+      stop("'custom_folds' must be an integer vector.")
+    }
+    if (length(custom_folds) != length(y)) {
+      stop("'custom_folds' must be the same length as 'y'.")
     }
     if (any(custom_folds < 1)) {
-      stop("Error: 'custom_folds' contains invalid IDs (must be >= 1).")
+      stop("'custom_folds' contains invalid IDs (must be >= 1).")
     }
-    
-    # Allow arbitrary fold labels, but relate them to nfolds
+    # Range-check on the raw values before any as.integer() conversion, so
+    # IDs beyond integer range cannot become NA.
+    if (any(custom_folds > nfolds)) {
+      stop("'custom_folds' contains fold IDs greater than 'nfolds'.")
+    }
+
     unique_folds <- sort(unique(as.integer(custom_folds)))
     if (length(unique_folds) > nfolds) {
-      stop("Error: 'custom_folds' defines more unique folds than 'nfolds'.")
+      stop("'custom_folds' defines more unique folds than 'nfolds'.")
     }
-    if (max(unique_folds) > nfolds) {
-      stop("Error: 'custom_folds' contains fold IDs greater than 'nfolds'.")
-    }
-    
+
     missing_folds <- setdiff(seq_len(nfolds), unique_folds)
-    if (length(missing_folds) > 0) {
-      warning("Some folds in 1..nfolds are not represented in 'custom_folds': ",
-              paste(missing_folds, collapse = ", "))
+    if (length(missing_folds) > 0L) {
+      stop("'custom_folds' leaves some folds in 1..nfolds empty (",
+           paste(missing_folds, collapse = ", "),
+           "); every fold must contain at least one observation.")
     }
   }
-  
+
   invisible(TRUE)
 }
 
-#' Handle Missing Values in a Numeric Matrix
+#' Impute missing values in a numeric matrix with column means
 #'
-#' Imputes missing values column-wise using column means.
+#' Columns that are entirely NA cannot be imputed and raise an error naming
+#' the offending columns. When imputation does run, a single warning notes
+#' that the means are computed on the full data prior to cross-validation.
 #'
-#' @param x A numeric matrix.
-#'
+#' @param x A numeric matrix with column names.
 #' @return The matrix with missing values imputed.
-#' @keywords internal
-handle_missing_values <- function(x) {
+#' @noRd
+lasso_impute_means <- function(x) {
   if (!is.matrix(x) || !is.numeric(x)) {
-    stop("Internal error: 'handle_missing_values' expects a numeric matrix.")
+    stop("Internal error: 'lasso_impute_means' expects a numeric matrix.")
   }
   if (anyNA(x)) {
-    col_means <- suppressWarnings(colMeans(x, na.rm = TRUE))
-    # Replace columns whose mean is NA (all NA) with 0
-    col_means[is.na(col_means)] <- 0
+    n_obs <- colSums(!is.na(x))
+    if (any(n_obs == 0L)) {
+      bad <- colnames(x)[n_obs == 0L]
+      stop("Column(s) entirely missing (all NA): ",
+           paste0("'", bad, "'", collapse = ", "),
+           ". Remove or impute these columns before calling fs_lasso().")
+    }
+    warning("Missing predictor values were imputed with column means computed on the full data prior to cross-validation (mild information leakage; per-fold imputation is deferred).")
+    col_means <- colMeans(x, na.rm = TRUE)
     for (j in seq_along(col_means)) {
       missing_idx <- which(is.na(x[, j]))
       if (length(missing_idx)) {
@@ -132,173 +126,115 @@ handle_missing_values <- function(x) {
   x
 }
 
-#' Prepare Predictors
+#' Prepare predictors as a numeric dense matrix without missing values
 #'
-#' Ensures predictors are numeric, handles factors/characters via model.matrix,
-#' applies column-mean imputation for missing values, and assigns default names if needed.
+#' Builds the design matrix through `stats::model.frame(na.action =
+#' stats::na.pass)` so rows with NA survive to the imputation step:
+#' `stats::model.matrix()` alone silently ignores its `na.action` argument
+#' and would drop those rows.
 #'
 #' @param x A data frame or matrix of predictors.
-#'
 #' @return A purely numeric dense matrix with no missing values.
-#' @keywords internal
-prepare_predictors <- function(x) {
-  # If data.frame, build a numeric design matrix (no intercept)
+#' @noRd
+lasso_prepare <- function(x) {
   if (is.data.frame(x)) {
-    # Preserve NA so they can be imputed later
-    mm <- stats::model.matrix(~ . - 1, data = x, na.action = stats::na.pass)
+    mm <- stats::model.matrix(
+      ~ . - 1,
+      data = stats::model.frame(~ . - 1, as.data.frame(x),
+                                na.action = stats::na.pass)
+    )
   } else if (is.matrix(x)) {
-    # If matrix and not numeric, be strict: require numeric predictors
     if (!is.numeric(x)) {
-      stop("Error: Non-numeric matrices are not supported; please supply a data.frame so factors/characters can be handled via model.matrix.")
-    } else {
-      mm <- x
+      stop("Non-numeric matrices are not supported; please supply a data.frame so factors/characters can be handled via model.matrix.")
     }
+    mm <- x
   } else {
     stop("Internal error: 'x' must be a data.frame or matrix.")
   }
-  
-  # Ensure column names
+
   if (is.null(colnames(mm))) {
     colnames(mm) <- paste0("V", seq_len(ncol(mm)))
   }
-  
-  # Impute missing values with column means
-  mm <- handle_missing_values(mm)
-  
-  # Final sanity checks
+
+  mm <- lasso_impute_means(mm)
+
   if (!is.numeric(mm)) {
     stop("Internal error: predictors are not numeric after preparation.")
   }
   if (any(!is.finite(mm))) {
     stop("Internal error: predictors contain non-finite values after imputation.")
   }
-  
+
   mm
 }
 
-#' Convert Predictors to a Sparse Matrix
-#'
-#' @param x A numeric dense matrix.
-#'
-#' @return A "dgCMatrix" sparse matrix.
-#' @keywords internal
-convert_to_sparse <- function(x) {
-  # Prefer explicit constructor to ensure class
+#' Convert a numeric dense matrix to a sparse matrix
+#' @noRd
+lasso_sparse <- function(x) {
   Matrix::Matrix(x, sparse = TRUE)
 }
 
-#' Manage Parallel Cluster Setup and Teardown
+#' Start and register a parallel cluster
 #'
-#' Sets up a parallel backend (if requested) and returns a handle for teardown.
+#' The caller is responsible for stopping the returned cluster (via
+#' `on.exit()` registered immediately after this call). If registration
+#' fails, the cluster is stopped here so it cannot leak.
 #'
-#' @param enable_parallel Logical; whether to enable parallel processing.
-#' @param verbose Logical; whether to print status messages.
-#'
-#' @return A list with elements: cluster (or NULL), registered (logical).
-#' @keywords internal
-manage_parallel_cluster <- function(enable_parallel, verbose) {
-  info <- list(cluster = NULL, registered = FALSE)
-  
-  # If parallel not requested, ensure a sequential backend is registered
-  if (!enable_parallel) {
-    if (verbose) message("Parallel processing disabled; running sequentially.")
-    if (requireNamespace("foreach", quietly = TRUE)) {
-      foreach::registerDoSEQ()
-      info$registered <- TRUE
-    }
-    return(info)
-  }
-  
-  # Check required namespaces
-  have_parallel <- requireNamespace("parallel",   quietly = TRUE)
-  have_doPar    <- requireNamespace("doParallel", quietly = TRUE)
-  have_foreach  <- requireNamespace("foreach",    quietly = TRUE)
-  
-  if (!have_parallel || !have_doPar || !have_foreach) {
-    if (verbose) {
-      message("Parallel packages not fully available (need 'parallel', 'doParallel', and 'foreach'); continuing sequentially.")
-    }
-    if (have_foreach) foreach::registerDoSEQ()
-    return(info)
-  }
-  
-  # Determine usable cores
-  total_cores <- parallel::detectCores()
-  if (!is.finite(total_cores) || total_cores <= 1L) {
-    if (verbose) {
-      message("Only one core detected; parallel processing disabled.")
-    }
-    foreach::registerDoSEQ()
-    return(info)
-  }
-  
-  # Use up to (total_cores - 1) cores, but at least 1
-  n_cores <- max(1L, total_cores - 1L)
-  if (n_cores <= 1L) {
-    if (verbose) {
-      message("Insufficient cores for parallel processing; running sequentially.")
-    }
-    foreach::registerDoSEQ()
-    return(info)
-  }
-  
-  # Start a cluster and register it
+#' @param n_cores Integer > 1, already resolved via `resolve_cores()`.
+#' @param verbose Logical; whether to print a status message.
+#' @return The cluster object.
+#' @noRd
+lasso_cluster <- function(n_cores, verbose) {
   cl <- parallel::makeCluster(n_cores)
-  doParallel::registerDoParallel(cl)
+  tryCatch(
+    doParallel::registerDoParallel(cl),
+    error = function(e) {
+      try(parallel::stopCluster(cl), silent = TRUE)
+      stop(e)
+    }
+  )
   if (verbose) {
-    message("Parallel processing enabled using ", n_cores, " cores out of ", total_cores, " available.")
+    message("Parallel cross-validation enabled with ", n_cores, " worker(s).")
   }
-  
-  info$cluster <- cl
-  info$registered <- TRUE
-  info
+  cl
 }
 
-#' Fit a Lasso/Elastic-Net Model with Cross-Validation
+#' Fit a lasso/elastic-net model with cross-validation
 #'
-#' @param x_sparse A sparse matrix ("dgCMatrix") of predictors.
+#' @param x_sparse A sparse matrix of predictors.
 #' @param y A numeric response vector.
-#' @param alpha Numeric in (0,1]; 1 = lasso, (0,1) = elastic net.
+#' @param alpha Numeric in (0, 1].
 #' @param nfolds Integer number of CV folds.
 #' @param standardize Logical; whether to standardize predictors.
-#' @param use_parallel Logical; whether to use parallel CV if backend registered.
-#' @param custom_folds Optional integer vector of custom fold IDs.
-#' @param seed Optional integer for reproducibility.
-#' @param verbose Logical; whether to print status.
-#'
+#' @param use_parallel Logical; whether to run CV in parallel.
+#' @param n_cores Integer >= 1, already resolved via `resolve_cores()`.
+#' @param custom_folds Optional integer vector of fold IDs.
+#' @param seed Optional whole number for reproducibility.
+#' @param verbose Logical; whether to print status messages.
+#' @param return_model Logical; when TRUE, `keep = TRUE` is passed to
+#'   `glmnet::cv.glmnet()` so prevalidated fits are retained.
 #' @return The fitted cv.glmnet object.
-#' @keywords internal
-fit_lasso_model <- function(x_sparse, y, alpha, nfolds, standardize,
-                            use_parallel, custom_folds, seed, verbose) {
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
-  
-  # Setup parallel backend (and guarantee teardown)
-  par_info <- manage_parallel_cluster(enable_parallel = use_parallel, verbose = verbose)
-  
-  # If a cluster is active and a seed is provided, set RNG streams for reproducibility
-  if (!is.null(seed) && !is.null(par_info$cluster)) {
-    parallel::clusterSetRNGStream(par_info$cluster, iseed = seed)
-  }
-  
-  on.exit({
-    # Teardown cluster if started
-    if (!is.null(par_info$cluster)) {
-      try(parallel::stopCluster(par_info$cluster), silent = TRUE)
-    }
-    # Ensure sequential backend afterward
-    if (requireNamespace("foreach", quietly = TRUE)) {
+#' @noRd
+lasso_fit <- function(x_sparse, y, alpha, nfolds, standardize,
+                      use_parallel, n_cores, custom_folds, seed, verbose,
+                      return_model) {
+  local_seed(seed)
+
+  parallel_flag <- FALSE
+  if (use_parallel && n_cores > 1L) {
+    cl <- lasso_cluster(n_cores, verbose)
+    on.exit({
+      try(parallel::stopCluster(cl), silent = TRUE)
       foreach::registerDoSEQ()
+    }, add = TRUE)
+    if (!is.null(seed)) {
+      parallel::clusterSetRNGStream(cl, iseed = as.integer(seed))
     }
-  }, add = TRUE)
-  
-  # Only pass parallel=TRUE to cv.glmnet if a parallel backend is actually active
-  parallel_flag <- isTRUE(use_parallel) &&
-    requireNamespace("foreach", quietly = TRUE) &&
-    foreach::getDoParWorkers() > 1L
-  
-  # Build argument list
+    parallel_flag <- TRUE
+  } else if (use_parallel && verbose) {
+    message("Only one worker resolved; running cross-validation sequentially.")
+  }
+
   args <- list(
     x = x_sparse,
     y = y,
@@ -306,120 +242,145 @@ fit_lasso_model <- function(x_sparse, y, alpha, nfolds, standardize,
     nfolds = nfolds,
     standardize = standardize,
     parallel = parallel_flag,
-    keep = TRUE
+    keep = isTRUE(return_model)
   )
-  
+
   if (!is.null(custom_folds)) {
     args$foldid <- as.integer(custom_folds)
     args$nfolds <- NULL  # cv.glmnet will use length(unique(foldid))
   }
-  
+
   do.call(glmnet::cv.glmnet, args)
 }
 
-#' Extract Variable Importance from a Fitted cv.glmnet Model
+#' Extract variable importance from a fitted cv.glmnet model
 #'
-#' Coefficients (excluding intercept) at lambda.min, ordered by |coef|.
+#' Coefficients (excluding the intercept) at `lambda.min`, ordered by
+#' absolute value.
 #'
 #' @param lasso_model A fitted cv.glmnet model.
-#' @param feature_names Optional character vector of feature names; if NULL,
-#'   will use colnames from the model matrix where available.
-#'
-#' @return A data.frame with columns: Variable, Coefficient, AbsCoefficient.
-#' @keywords internal
-extract_importance <- function(lasso_model, feature_names = NULL) {
+#' @param feature_names Optional character vector of feature names; when
+#'   NULL, coefficient row names are used where available.
+#' @return A data.frame with columns Variable, Coefficient, AbsCoefficient.
+#' @noRd
+lasso_importance <- function(lasso_model, feature_names = NULL) {
   cf <- stats::coef(lasso_model, s = "lambda.min")
-  # cf is a sparse matrix; first row is intercept
-  cf_vec <- as.vector(cf)[-1]
-  
+  # cf is a sparse matrix; the first row is the intercept
+  cf_vec <- as.vector(cf)[-1L]
+
   if (is.null(feature_names)) {
     all_names <- rownames(cf)
-    feature_names <- if (!is.null(all_names)) all_names[-1] else paste0("V", seq_along(cf_vec))
+    feature_names <- if (!is.null(all_names)) all_names[-1L] else paste0("V", seq_along(cf_vec))
   }
-  
+
   if (length(feature_names) != length(cf_vec)) {
     stop("Internal error: length of 'feature_names' does not match number of coefficients.")
   }
-  
+
   importance_df <- data.frame(
     Variable = feature_names,
     Coefficient = cf_vec,
     AbsCoefficient = abs(cf_vec),
     stringsAsFactors = FALSE
   )
-  
-  # Order by absolute coefficient, descending
+
   importance_df <- importance_df[order(-importance_df$AbsCoefficient), , drop = FALSE]
   rownames(importance_df) <- NULL
   importance_df
 }
 
-#' Main Function: fs_lasso
+#' Lasso Feature Selection with Cross-Validation
 #'
-#' Fit and evaluate a lasso (or elastic-net) model with cross-validation,
-#' returning variable importance and (optionally) the fitted model.
+#' Fits a lasso (or elastic-net) model with `glmnet::cv.glmnet()` and returns
+#' variable importance and, optionally, the fitted model. Currently designed
+#' for numeric regression (gaussian family).
 #'
-#' This function is currently designed for numeric regression (gaussian family).
+#' @details
+#' Importance is the absolute value of each coefficient at `lambda.min`, on
+#' the ORIGINAL predictor scale (glmnet standardizes internally for fitting
+#' when `standardize = TRUE`, but reports coefficients back on the input
+#' scale). Rankings therefore depend on the units of the predictors; rescale
+#' the predictors yourself if you need scale-free comparisons.
 #'
-#' @param x A data frame or matrix of predictor variables.
-#' @param y A numeric vector of response values.
-#' @param alpha Numeric in (0, 1]; default 1 (lasso). Use (0,1) for elastic-net.
+#' Missing predictor values are imputed with column means computed on the
+#' full data before cross-validation (a warning is raised); columns that are
+#' entirely NA are an error.
+#'
+#' @param x A data frame or matrix of predictor variables. Factors and
+#'   characters in a data frame are expanded via `model.matrix()`; rows with
+#'   missing values are preserved and mean-imputed.
+#' @param y A numeric vector of response values (no NA/NaN/Inf).
+#' @param alpha Numeric in (0, 1]; default 1 (lasso). Use values in (0, 1)
+#'   for elastic-net.
 #' @param nfolds Integer > 1; default 5.
 #' @param standardize Logical; default TRUE.
-#' @param parallel Logical; default TRUE. Requires 'parallel' + 'doParallel' + 'foreach'.
+#' @param parallel Logical; default FALSE. When TRUE, cross-validation runs
+#'   on `n_cores` workers (requires the 'doParallel' and 'foreach' packages).
 #' @param verbose Logical; default FALSE.
-#' @param seed Optional integer for reproducibility; default NULL.
-#' @param return_model Logical; whether to include the fitted cv.glmnet object in output; default FALSE.
-#' @param custom_folds Optional integer vector of custom fold IDs (same length as y); default NULL.
-#'
+#' @param seed Optional whole number for reproducibility, applied locally and
+#'   restored on exit; default NULL (never seeds by default).
+#' @param return_model Logical; include the fitted cv.glmnet object in the
+#'   output (and pass `keep = TRUE` to `cv.glmnet()`); default FALSE.
+#' @param custom_folds Optional integer vector of fold IDs (same length as
+#'   `y`, covering 1..`nfolds` with no empty folds); default NULL.
+#' @param n_cores Integer >= 1; number of workers used only when
+#'   `parallel = TRUE`. Default 2. Values above the detected core count are
+#'   capped.
 #' @return A list with:
-#'   \item{importance}{data.frame of variable importance at lambda.min}
-#'   \item{lambda_min}{Numeric value of lambda minimizing CV error}
-#'   \item{lambda_1se}{Numeric value of lambda within 1 SE of minimum}
-#'   \item{model}{(Optional) The fitted cv.glmnet object if return_model = TRUE}
-#'
+#'   \item{importance}{data.frame of variable importance at `lambda.min` (see Details on scale-dependence).}
+#'   \item{lambda_min}{Value of lambda minimizing CV error.}
+#'   \item{lambda_1se}{Value of lambda within 1 SE of the minimum.}
+#'   \item{model}{(Optional) The fitted cv.glmnet object if `return_model = TRUE`.}
 #' @examples
-#' \dontrun{
-#'   set.seed(123)
+#' \donttest{
+#' if (requireNamespace("glmnet", quietly = TRUE) &&
+#'     requireNamespace("Matrix", quietly = TRUE)) {
 #'   n <- 100
 #'   X <- data.frame(
 #'     x1 = rnorm(n),
 #'     x2 = rnorm(n),
-#'     cat = sample(letters[1:3], n, TRUE)  # non-numeric handled via model.matrix
+#'     cat = sample(letters[1:3], n, TRUE)
 #'   )
 #'   y <- 2 * X$x1 - 3 * X$x2 + rnorm(n)
-#'   result <- fs_lasso(x = X, y = y, verbose = TRUE, seed = 123)
+#'   result <- fs_lasso(x = X, y = y, seed = 123)
 #'   head(result$importance)
+#' }
 #' }
 #' @export
 fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE,
-                     parallel = TRUE, verbose = FALSE, seed = NULL,
-                     return_model = FALSE, custom_folds = NULL) {
-  
-  # Validate inputs
-  validate_parameters(x, y, alpha, nfolds, standardize,
-                      parallel, verbose, seed, custom_folds, return_model)
-  
+                     parallel = FALSE, verbose = FALSE, seed = NULL,
+                     return_model = FALSE, custom_folds = NULL,
+                     n_cores = 2L) {
+
+  lasso_validate(x, y, alpha, nfolds, standardize,
+                 parallel, verbose, seed, custom_folds, return_model)
+  n_cores <- resolve_cores(n_cores, "n_cores")
+
+  fs_require(c("glmnet", "Matrix"), "lasso feature selection")
+  if (parallel && n_cores > 1L) {
+    fs_require(c("doParallel", "foreach"), "parallel cross-validation")
+  }
+
   # Prepare predictors -> dense numeric matrix with names, no NA
-  x_dense <- prepare_predictors(x)
-  
+  x_dense <- lasso_prepare(x)
+
   # Sanity check: row alignment
   if (nrow(x_dense) != length(y)) {
     stop("Internal error: prepared predictor matrix and response 'y' have different numbers of rows.")
   }
-  
+
   # Convert to sparse for glmnet
-  x_sparse <- convert_to_sparse(x_dense)
-  
+  x_sparse <- lasso_sparse(x_dense)
+
   # Fit model
-  lasso_model <- fit_lasso_model(x_sparse, y, alpha, nfolds, standardize,
-                                 parallel, custom_folds, seed, verbose)
-  
+  lasso_model <- lasso_fit(x_sparse, y, alpha, nfolds, standardize,
+                           parallel, n_cores, custom_folds, seed, verbose,
+                           return_model)
+
   # Importance
   feature_names <- colnames(x_dense)
-  importance_df <- extract_importance(lasso_model, feature_names)
-  
-  # Build result
+  importance_df <- lasso_importance(lasso_model, feature_names)
+
   out <- list(
     importance = importance_df,
     lambda_min = lasso_model$lambda.min,

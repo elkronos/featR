@@ -199,8 +199,8 @@ sup_scores <- function(dt,
 #'   \code{threshold}.
 #' @param action One of \code{"keep"}, \code{"remove"}; determines whether
 #'   features meeting the condition are retained or dropped.
-#' @param include_equal Logical; if TRUE, comparisons use >= / <= instead of
-#'   > / <.
+#' @param include_equal Logical; if TRUE, comparisons are inclusive
+#'   (greater/less than or equal) instead of strict.
 #' @param na_rm Logical; if TRUE, rows with NA in `x` or `y` are dropped when
 #'   computing scores.
 #' @param out One of \code{"matrix"}, \code{"dt"}, \code{"data.frame"},

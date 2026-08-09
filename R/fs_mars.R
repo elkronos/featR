@@ -397,7 +397,7 @@ mars_evaluate <- function(model, test, responseName, verbose = TRUE) {
 #'   are randomly down-sampled first (default 10000).
 #' @param show_warnings Logical. Warn on class imbalance (default TRUE).
 #' @param verbose Logical. Print progress messages (default TRUE).
-#' @param corr_cut Numeric in [0, 1]. Correlation cutoff for dropping highly
+#' @param corr_cut Numeric between 0 and 1. Correlation cutoff for dropping highly
 #'   correlated numeric predictors (default 0.95; 0 disables).
 #' @param remove_nzv Logical. Remove near-zero-variance predictors
 #'   (default TRUE).

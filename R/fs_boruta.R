@@ -100,7 +100,7 @@ boruta_preprocess_predictors <- function(data, target_var) {
 #'
 #' @param predictors A data frame of predictor variables.
 #' @param selected_features Character vector of feature names to evaluate.
-#' @param cutoff_cor Numeric threshold for absolute correlation in [0, 1].
+#' @param cutoff_cor Numeric threshold for absolute correlation, between 0 and 1.
 #' @return A character vector of feature names after dropping highly
 #'   correlated ones.
 #' @noRd
@@ -185,7 +185,7 @@ boruta_remove_highly_correlated <- function(predictors,
 #' @param cutoff_features Optional whole number to cap the number of returned
 #'   features. When specified, the top features by Boruta mean importance are
 #'   retained.
-#' @param cutoff_cor Numeric correlation cutoff in [0, 1] used to drop
+#' @param cutoff_cor Numeric correlation cutoff between 0 and 1 used to drop
 #'   redundant features via caret::findCorrelation() (requires the suggested
 #'   caret package; set NULL to skip this step). Default 0.7.
 #' @param resolve_tentative Logical; if TRUE, apply Boruta::TentativeRoughFix()

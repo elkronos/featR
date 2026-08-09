@@ -10,7 +10,7 @@
 #'   \code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:
 #'   all columns must be ordered factors. For \code{"pointbiserial"}: columns
 #'   may be numeric (continuous) or dichotomous (exactly 2 unique non-NA values).
-#' @param threshold Numeric in [0, 1]. Pairs with |correlation| > threshold are selected.
+#' @param threshold Numeric between 0 and 1. Pairs with |correlation| > threshold are selected.
 #' @param method One of \code{"pearson"} (default), \code{"spearman"},
 #'   \code{"kendall"}, \code{"polychoric"}, \code{"pointbiserial"}.
 #'   Point-biserial correlations are computed as the Pearson correlation

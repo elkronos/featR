@@ -16,18 +16,17 @@ export(fs_supervised)
 export(fs_svd)
 export(fs_svm)
 export(fs_unsupervised)
-importFrom(data.table,
-  ":=",
-  .I,
-  .N,
-  .SD,
-  as.data.table,
-  copy,
-  data.table,
-  is.data.table,
-  rbindlist,
-  set,
-  setDF,
-  setDT,
-  setnames
-)
+
+importFrom(data.table, ":=")
+importFrom(data.table, ".N")
+importFrom(data.table, ".SD")
+importFrom(data.table, ".I")
+importFrom(data.table, as.data.table)
+importFrom(data.table, copy)
+importFrom(data.table, data.table)
+importFrom(data.table, is.data.table)
+importFrom(data.table, rbindlist)
+importFrom(data.table, set)
+importFrom(data.table, setDF)
+importFrom(data.table, setDT)
+importFrom(data.table, setnames)

@@ -11,14 +11,28 @@ type, an `fs_result` object with `selected`, `scores`, `method`, `task`,
 
 ## Test environments
 
-* local macOS 26.5 (aarch64-apple-darwin23), R 4.6.1 -- 0 errors, 0 warnings,
-  0 notes, with all Suggests except brms installed
-* win-builder, R-devel -- (paste result before submitting)
-* macOS builder (mac.r-project.org), R-release -- (paste result before submitting)
+Checked via GitHub Actions (r-lib/actions), all passing:
+
+* macOS latest, R release
+* Windows latest, R release
+* Ubuntu latest, R devel
+* Ubuntu latest, R release
+* Ubuntu latest, R oldrel-1
+
+Also checked locally on macOS 26.5 (aarch64-apple-darwin23), R 4.6.1, with all
+Suggests installed except brms.
 
 ## R CMD check results
 
-0 errors | 0 warnings | 0 notes
+0 errors | 0 warnings | 1 note
+
+The note is the expected one for a first-time submission:
+
+```
+checking CRAN incoming feasibility ... NOTE
+  Maintainer: 'Justin Chase <jchase.msu@gmail.com>'
+  New submission
+```
 
 ## Notes for reviewers
 

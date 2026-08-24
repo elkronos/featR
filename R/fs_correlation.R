@@ -35,7 +35,7 @@
 #'   for \code{"polychoric"}. If \code{FALSE} (default), missing values
 #'   propagate NA into the affected correlations, except for
 #'   \code{"polychoric"}, which stops with an error when missing values are
-#'   present (silently deleting cases would contradict the behaviour of the
+#'   present (silently deleting cases would contradict the behavior of the
 #'   other methods). Default \code{FALSE}.
 #' @param sample_frac Numeric in (0, 1]. Fraction of rows to sample before computing
 #'   correlations. Default \code{1} (no sampling).
@@ -557,7 +557,7 @@ corr_prune_redundant <- function(corr_matrix, threshold) {
     # mean absolute correlation with the other retained variables
     avg <- rowSums(sub) / (length(keep) - 1L)
 
-    # i < j, so an exact tie drops the later column (caret's behaviour)
+    # i < j, so an exact tie drops the later column (caret's behavior)
     loser <- if (avg[[i]] > avg[[j]]) keep[[i]] else keep[[j]]
 
     dropped <- c(dropped, loser)

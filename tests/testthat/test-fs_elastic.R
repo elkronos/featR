@@ -367,3 +367,38 @@ test_that("regression smoke run returns an fs_result with the documented shape",
   expect_output(print(res), "fs_result")
   expect_output(print(res), "elastic_net")
 })
+
+test_that("fs_elastic handles a classification target end to end", {
+  # COVERAGE: every prior end-to-end elastic test used a numeric target, so the
+  # classification branch -- task inference, the Accuracy metric default, and
+  # glmnet's multinomial/binomial coefficient shape -- had never run.
+  skip_on_cran()
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+
+  n <- 60L
+  grp <- rep(c("neg", "pos"), each = 30)
+  wobble <- rep(c(-0.2, 0.1, 0.3, -0.1, 0.2, -0.3), 10)
+  d <- data.frame(
+    y  = factor(grp, levels = c("neg", "pos")),
+    x1 = ifelse(grp == "pos", 2, 0) + wobble,
+    x2 = ifelse(grp == "pos", -1, 1) + rev(wobble),
+    x3 = seq(-1, 1, length.out = n)
+  )
+
+  res <- suppressWarnings(fs_elastic(
+    d, "y",
+    alpha_seq = c(0, 1), lambda_seq = c(0.01, 0.1),
+    seed = 3
+  ))
+
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$task, "classification")
+  # The metric defaults to Accuracy for a factor target, not RMSE.
+  expect_identical(res$details$metric_name, "Accuracy")
+  expect_true(is.finite(res$details$metric_value))
+  expect_true(res$details$best_alpha %in% c(0, 1))
+  expect_true(res$details$best_lambda %in% c(0.01, 0.1))
+  expect_s3_class(res$model, "train")
+})

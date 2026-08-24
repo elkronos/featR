@@ -613,8 +613,10 @@ svm_rf_importance <- function(rfe_obj, features) {
 #' @param rfe_folds Number of CV folds for RFE. Default 10; `fs_svm()` does
 #'   not pass its own `nfolds` here.
 #' @param min_keep Number of predictors the fallback keeps: the top `min_keep`
-#'   by importance, capped at the number available. It does not constrain the
-#'   `rfe()` path, which ignores it.
+#'   by importance, capped at the number available. It is a FLOOR, not a quota:
+#'   the fallback keeps every predictor with positive impurity importance, and
+#'   only drops back to `min_keep` top-ranked predictors when fewer than that
+#'   many qualify. It does not constrain the `rfe()` path, which ignores it.
 #' @param allow_parallel Logical; let RFE use a registered foreach backend.
 #' @return A list with `selected` (character), `scores` (named numeric aligned
 #'   to the encoded predictors, `NA` where no importance was recorded) and
@@ -665,8 +667,18 @@ svm_feature_selection <- function(x_enc,
   score_col <- utils::tail(names(imp)[vapply(imp, is.numeric, logical(1L))], 1L)
   ord <- order(imp[[score_col]], decreasing = TRUE, na.last = NA)
 
+  # `min_keep` is a FLOOR, not a quota. With rfe() failed there is no
+  # cross-validated size estimate, so reducing to a fixed count (formerly 1)
+  # threw away usable predictors for no stated reason. Keep everything that
+  # earned positive impurity importance, and only fall back to a fixed count
+  # if that leaves too few.
   keep_n <- max(as.integer(min_keep), 1L)
-  selected <- imp$Feature[ord][seq_len(min(keep_n, length(ord)))]
+  ranked <- imp$Feature[ord]
+  ranked_imp <- imp[[score_col]][ord]
+  selected <- ranked[is.finite(ranked_imp) & ranked_imp > 0]
+  if (length(selected) < keep_n) {
+    selected <- utils::head(ranked, min(keep_n, length(ranked)))
+  }
   if (length(selected) == 0L) {
     selected <- feature_names[seq_len(min(keep_n, length(feature_names)))]
   }

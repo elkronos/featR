@@ -424,12 +424,20 @@ corr_calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_co
       message("Running point-biserial in parallel on ", n_cores, " cores.")
     }
 
+    # Remember whatever backend the caller had registered, so exiting restores
+    # their session rather than forcing it sequential.
+    prev_backend <- foreach::getDoParName()
+
     cl <- parallel::makeCluster(n_cores)
-    doParallel::registerDoParallel(cl)
+    # Register the teardown before registerDoParallel() can throw: otherwise a
+    # failure there leaves the cluster running with no reference to stop it.
     on.exit({
       try(parallel::stopCluster(cl), silent = TRUE)
-      foreach::registerDoSEQ()
+      if (is.null(prev_backend) || identical(prev_backend, "doSEQ")) {
+        try(foreach::registerDoSEQ(), silent = TRUE)
+      }
     }, add = TRUE)
+    doParallel::registerDoParallel(cl)
 
     `%dopar%` <- foreach::`%dopar%`
 

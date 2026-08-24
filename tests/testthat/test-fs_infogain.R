@@ -404,3 +404,67 @@ test_that("fs_infogain leaves the caller's RNG state untouched", {
   invisible(fs_infogain(ig_toy(), "target"))
   expect_identical(.Random.seed, rng_before)
 })
+
+test_that("automatic bin count is capped so cut() cannot receive NA", {
+  # REGRESSION: the Freedman-Diaconis count is range / bin_width, which is
+  # unbounded. A near-constant column beside one extreme outlier drove it past
+  # .Machine$integer.max, as.integer() returned NA, and cut() then failed with
+  # "invalid number of intervals". More bins than observations cannot describe
+  # the data anyway, so the count is capped at n.
+  ig_bins <- featR:::ig_bins
+
+  x <- c(as.numeric(1:99), 1e12)
+  # Confirm the fixture really is the pathological case: the raw FD count
+  # overflows integer range.
+  iqr <- stats::IQR(x)
+  raw <- ceiling(diff(range(x)) / (2 * iqr / (length(x)^(1 / 3))))
+  expect_gt(raw, .Machine$integer.max)
+  expect_true(is.na(suppressWarnings(as.integer(raw))))
+
+  b <- ig_bins(x)
+  expect_type(b, "integer")
+  expect_false(is.na(b))
+  expect_lte(b, length(x))
+  expect_gte(b, 2L)
+  # The point of the cap: cut() accepts the result.
+  expect_silent(cut(x, breaks = b))
+
+  # Ordinary and degenerate columns are unaffected.
+  expect_identical(ig_bins(as.numeric(1:10)), 5L)
+  expect_identical(ig_bins(rep(5, 20)), 2L)
+
+  # And it survives the public API on such a column.
+  d <- data.frame(x = x, target = rep(c("a", "b"), 50),
+                  stringsAsFactors = FALSE)
+  res <- fs_infogain(d, "target")
+  expect_true(all(is.finite(res$scores)))
+})
+
+test_that("date expansion refuses to overwrite an existing column", {
+  # REGRESSION: the expansion wrote <col>_year/_month/_day with
+  # data.table::set(), which overwrites in place. `exclude = target` stopped
+  # the target from being EXPANDED but not from being OVERWRITTEN, so a target
+  # named e.g. "when_year" was silently replaced by the year of "when" before
+  # it was discretized.
+  d_clash <- data.frame(
+    when      = as.Date("2020-01-01") + 0:9,
+    when_year = rep(c(1, 2), 5)
+  )
+  expect_error(featR:::ig_expand_dates(d_clash),
+               "would overwrite existing column")
+  expect_error(featR:::ig_expand_dates(d_clash), "when_year")
+
+  # Excluding the clashing column does not make overwriting it safe.
+  expect_error(featR:::ig_expand_dates(d_clash, exclude = "when_year"),
+               "would overwrite existing column")
+
+  # Through the public API, with the clashing name as the target.
+  expect_error(fs_infogain(d_clash, "when_year"),
+               "would overwrite existing column")
+
+  # No clash: expansion proceeds and the original date column is dropped.
+  d_ok <- data.frame(when = as.Date("2020-01-01") + 0:9, v = 1:10)
+  out <- featR:::ig_expand_dates(d_ok)
+  expect_true(all(c("when_year", "when_month", "when_day") %in% names(out)))
+  expect_false("when" %in% names(out))
+})

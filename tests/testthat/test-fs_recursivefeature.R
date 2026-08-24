@@ -341,3 +341,41 @@ test_that("same seed reproduces the selection and leaves the RNG untouched", {
   expect_identical(res1$details$test_index, res2$details$test_index)
   expect_identical(res1$details$test_metrics, res2$details$test_metrics)
 })
+
+test_that("handle_categorical = TRUE one-hot encodes factor predictors", {
+  # COVERAGE: the encoder path (rfe_fit_encoder / rfe_apply_encoder) was only
+  # ever reached by unit tests of the helpers, never through fs_recursivefeature
+  # itself, so the align-then-encode ordering fixed earlier was untested
+  # end to end.
+  skip_on_cran()
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+
+  n <- 60L
+  grp <- rep(c("a", "b", "c"), length.out = n)
+  wobble <- rep(c(-0.3, 0.1, 0.2, -0.1, 0.25, -0.15), 10)
+  d <- data.frame(
+    y     = ifelse(grp == "a", 5, ifelse(grp == "b", 0, -5)) + wobble,
+    grp   = factor(grp),               # informative factor
+    chr   = rep(c("p", "q"), 30),      # character, must be coerced
+    num   = seq(-1, 1, length.out = n),
+    stringsAsFactors = FALSE
+  )
+
+  res <- fs_recursivefeature(
+    d, "y", sizes = c(2, 4), train_ratio = 0.7,
+    handle_categorical = TRUE, seed = 11
+  )
+
+  expect_s3_class(res, "fs_result")
+  expect_type(res$selected, "character")
+  expect_gt(length(res$selected), 0L)
+  # Selected names come from the encoded design, so the factor appears as
+  # dummy columns rather than as "grp" itself.
+  expect_false("grp" %in% res$selected)
+  expect_true(any(grepl("^grp", res$selected)))
+  # The held-out evaluation still happened on rows the selection never saw.
+  expect_true(all(c("RMSE", "Rsquared", "MAE") %in%
+                    names(res$details$test_metrics)))
+  expect_true(is.finite(res$details$test_metrics[["RMSE"]]))
+})

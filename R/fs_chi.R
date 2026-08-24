@@ -335,10 +335,13 @@ fs_chi <- function(
       FALSE
     }
     test <- stats::chisq.test(tab, correct = do_corr)
+    # chisq.test() computes YATES <- min(0.5, abs(x - E)), so a 2x2 table
+    # sitting exactly at expectation gets no correction even when one was
+    # requested. Report what R actually did, not what we asked for.
     list(
       p = test$p.value,
       method = "asymptotic",
-      correction = do_corr,
+      correction = grepl("continuity correction", test$method, fixed = TRUE),
       min_expected = min_expected,
       df = as.numeric(test$parameter)
     )

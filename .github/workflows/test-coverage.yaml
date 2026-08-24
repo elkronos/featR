@@ -42,9 +42,18 @@ jobs:
             clean = FALSE,
             install_path = file.path(normalizePath(Sys.getenv("RUNNER_TEMP"), winslash = "/"), "package")
           )
+          # print.coverage lists overall and per-file percentages.
           print(cov)
-          cat("\n---- Coverage by file ----\n")
-          print(covr::coverage_to_list(cov)$filecoverage)
+          cat(sprintf("\nOverall coverage: %.2f%%\n", covr::percent_coverage(cov)))
+          # Lines never executed, which is the actionable part: these are the
+          # paths that generated defects in this package before.
+          zero <- covr::zero_coverage(cov)
+          if (nrow(zero) == 0L) {
+            cat("\nNo uncovered lines.\n")
+          } else {
+            cat(sprintf("\n---- %d uncovered line(s) ----\n", nrow(zero)))
+            print(utils::head(zero[, c("filename", "first_line")], 100L))
+          }
           covr::to_cobertura(cov, filename = "cobertura.xml")
         shell: Rscript {0}
 

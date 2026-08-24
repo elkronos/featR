@@ -233,8 +233,23 @@ mars_train_control <- function(number, repeats, search, train, target,
 #' other engine), so the caret method string is hardcoded to "earth".
 #' When `search = "random"`, `tuneLength` controls the number of random
 #' hyperparameter combinations and no fixed grid is passed; when
-#' `search = "grid"`, the explicit grid is used.
+#' `search = "grid"`, the explicit grid is used. Predictors are centered and
+#' scaled inside each resample via caret's `preProcess`.
 #'
+#' @param train data.table. Training data, including the target column.
+#' @param target Character. Target column name.
+#' @param ctrl A `caret::trainControl()` object.
+#' @param hyperParameters Data frame grid of `nprune`/`degree` combinations
+#'   (used only when `search = "grid"`).
+#' @param tune_length Integer. Number of random combinations to try (used only
+#'   when `search = "random"`).
+#' @param search Character. "grid" or "random".
+#' @param seed Optional whole number; NULL means no seeding.
+#' @param metric Optional character. When NULL, "ROC" is used for binary
+#'   classification tuned with `caret::twoClassSummary()`, "Accuracy" for any
+#'   other classification, and "RMSE" for regression.
+#' @return A `caret::train` object; errors with "Model training failed: ..."
+#'   when `caret::train()` throws.
 #' @noRd
 mars_train_model <- function(train, target, ctrl, hyperParameters,
                              tune_length, search, seed, metric = NULL) {
@@ -283,6 +298,7 @@ mars_train_model <- function(train, target, ctrl, hyperParameters,
 #' Uses the "Overall" column when present and otherwise averages the numeric
 #' columns (caret reports one column per class for some model types).
 #'
+#' @param vi A `varImp.train` object, its `$importance` data.frame, or NULL.
 #' @return A named numeric vector, or NULL when no importance is available.
 #' @noRd
 mars_importance_vector <- function(vi) {
@@ -350,8 +366,13 @@ mars_predictor_scores <- function(importance, predictors) {
 #' For binary classification trained with `caret::twoClassSummary`, the FIRST
 #' factor level is the positive class. ROC AUC is computed with explicit
 #' `levels = c(negative, positive)` and `direction = "<"` so worse-than-chance
-#' models honestly score below 0.5 instead of being silently flipped.
+#' models honestly score below 0.5 instead of being silently flipped. PR AUC
+#' additionally needs both classes present in the test set.
 #'
+#' @param model A fitted `caret::train` object.
+#' @param test data.table. Held-out rows, including the target column.
+#' @param target Character. Target column name.
+#' @param verbose Logical. Gate the notices about missing optional packages.
 #' @return A list with `predictions`, `metrics`, `confusion_matrix`
 #'   (classification only, else NULL) and `varimp` (NULL when unsupported).
 #' @noRd
@@ -452,44 +473,70 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' with their variable importance.
 #'
 #' @details
+#' Use this when you want a model that discovers non-linear effects and
+#' interactions on its own and then tells you which predictors it used: earth
+#' fits piecewise-linear hinge terms, prunes them back, and the surviving terms
+#' define the selected set. Selection is model-based rather than a filter, so
+#' it reflects one particular fitted model and its tuning.
+#'
+#' The pipeline, in order: rows with any missing value are dropped; the data
+#' are randomly down-sampled to at most `sample_size` rows; for classification
+#' each class must have at least two rows; a stratified
+#' `caret::createDataPartition()` split keeps `train_ratio` of the rows for
+#' training and holds the rest out; near-zero-variance and strongly correlated
+#' predictors (see `remove_nzv` and `corr_cut`) are identified on the training
+#' rows only and dropped from both halves; then `caret::train()` fits earth
+#' under repeated cross-validation with `preProcess = c("center", "scale")`.
+#'
 #' Selection is read off the fitted model: `caret::varImp(model, scale = FALSE)`
-#' is computed on the caret `train` object and every predictor with a non-zero
-#' importance is reported in `selected`. Predictors earth pruned away score 0
-#' and are not selected. caret expands factors into dummy columns before
-#' fitting, so each importance row is attributed back to the source predictor
-#' and a predictor keeps the largest importance of its encoded columns.
+#' is computed on the caret `train` object and every predictor with a strictly
+#' positive importance is reported in `selected`. Predictors earth pruned away
+#' score 0 and are not selected. caret expands factors into dummy columns
+#' before fitting, so each importance row is attributed back to the source
+#' predictor by name (the longest candidate name it starts with) and a
+#' predictor keeps the largest importance of its encoded columns; that
+#' name-based attribution is ambiguous if one predictor's name happens to be a
+#' prefix of another predictor's encoded column name.
 #'
 #' For classification, class imbalance is handled by `sampling = "up"` inside
 #' `caret::trainControl()`, i.e. upsampling happens within each resample; the
 #' data are never upsampled before cross-validation (which would leak
 #' duplicated rows across folds). The FIRST factor level is treated as the
-#' positive class for ROC/PR AUC. Factor levels are sanitized with
+#' positive class for ROC/PR AUC, and the test-set ROC AUC is computed with a
+#' fixed direction, so a worse-than-chance model scores below 0.5 rather than
+#' being silently flipped. Factor levels are sanitized with
 #' `make.names(unique = TRUE)`, so distinct labels can never be merged.
 #'
 #' For regression, the reported `R2` comes from `caret::R2()`, which is the
 #' squared correlation between predictions and observations -- not
 #' `1 - SSE/SST` -- and can be high even for a biased model.
 #'
+#' Everything in `details$metrics` comes from the single held-out split, so on
+#' small data sets these numbers are noisy; the per-resample tuning results are
+#' in `model$resample`.
+#'
 #' `search = "grid"` tunes over `expand.grid(nprune, degree)`;
 #' `search = "random"` ignores that grid and evaluates `tuneLength` random
 #' hyperparameter combinations instead.
 #'
-#' @param data data.frame or data.table with predictors and the target.
+#' @param data data.frame or data.table with predictors and the target. A
+#'   data.table is copied, never modified in place.
 #' @param target Character. Name of the target column in `data`. A factor or
 #'   character target is treated as classification, a numeric one as
 #'   regression.
 #' @param train_ratio Numeric in (0, 1). Training proportion (default 0.8).
-#' @param degree Integer vector. Interaction degrees to tune (default 1:3).
-#'   Used when `search = "grid"`.
-#' @param nprune Integer vector. Numbers of retained terms to tune
-#'   (default `c(5, 10, 15)`). Used when `search = "grid"`.
-#' @param tuneLength Integer. Number of random hyperparameter combinations
+#' @param degree Integer vector, each element >= 1. Interaction degrees to tune
+#'   (default 1:3). Used when `search = "grid"`.
+#' @param nprune Integer vector, each element >= 2. Numbers of retained terms
+#'   to tune (default `c(5, 10, 15)`). Used when `search = "grid"`.
+#' @param tuneLength Integer >= 1. Number of random hyperparameter combinations
 #'   evaluated when `search = "random"` (default 10; ignored for grid search).
 #' @param search Character. "grid" (default) or "random"; see Details.
 #' @param number Integer >= 2. Cross-validation folds (default 5).
 #' @param repeats Integer >= 1. Cross-validation repeats (default 3).
-#' @param sample_size Integer. Maximum number of rows used; larger data sets
-#'   are randomly down-sampled first (default 10000).
+#' @param sample_size Integer >= 1. Maximum number of rows used; larger data
+#'   sets are randomly down-sampled first, after missing rows are dropped and
+#'   before the train/test split (default 10000).
 #' @param corr_cut Numeric between 0 and 1. Correlation cutoff for dropping
 #'   highly correlated numeric predictors (default 0.95; 0 disables).
 #' @param remove_nzv Logical. Remove near-zero-variance predictors
@@ -507,23 +554,28 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' @return An object of class `fs_result` with:
 #' \describe{
 #'   \item{selected}{Character vector of the predictors earth retained
-#'         (non-zero `caret::varImp()` importance).}
+#'         (strictly positive `caret::varImp()` importance), ordered by
+#'         decreasing importance. Empty when no importance is available.}
 #'   \item{scores}{Named numeric vector of unscaled variable importance, one
 #'         entry per candidate predictor that entered training, floored at 0
-#'         (predictors earth pruned away score 0).}
+#'         (predictors earth pruned away score 0). `NULL` when caret cannot
+#'         compute variable importance for the fitted model, in which case
+#'         `selected` is empty.}
 #'   \item{method}{"mars".}
-#'   \item{task}{"classification" for a factor target, "regression" for a
-#'         numeric one.}
+#'   \item{task}{"classification" for a factor or character target (characters
+#'         are coerced to factor), "regression" for a numeric one.}
 #'   \item{model}{The `caret::train` object.}
-#'   \item{details}{A list with `predictions` (test-set predictions),
-#'         `metrics` (RMSE/MAE/R2 for regression; Accuracy/Kappa plus
-#'         ROC_AUC/PR_AUC when the optional 'pROC'/'PRROC' packages are
-#'         installed for binary classification), `confusion_matrix`
-#'         (classification only, else NULL), `varimp` (the `caret::varImp()`
-#'         object, or NULL when unsupported), `removed_predictors` (a list with
-#'         `nzv` and `corr`), `train_index` (training rows of the cleaned and
-#'         optionally down-sampled data), `test_data` (the held-out rows after
-#'         preprocessing) and `n_features` (candidate predictors that entered
+#'   \item{details}{A list with `predictions` (test-set predictions; a factor
+#'         carrying the training levels for classification), `metrics`
+#'         (RMSE/MAE/R2 for regression; Accuracy/Kappa plus ROC_AUC/PR_AUC when
+#'         the optional 'pROC'/'PRROC' packages are installed for binary
+#'         classification), `confusion_matrix` (classification only, else
+#'         NULL), `varimp` (the `caret::varImp()` object, or NULL when
+#'         unsupported), `removed_predictors` (a list with `nzv` and `corr`
+#'         naming the dropped predictors), `train_index` (integer row indices
+#'         of the training rows, into the cleaned and optionally down-sampled
+#'         data), `test_data` (the held-out rows after preprocessing) and
+#'         `n_features` (number of candidate predictors that entered
 #'         training).}
 #'   \item{call}{The matched call.}
 #' }
@@ -532,15 +584,17 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' \donttest{
 #' if (requireNamespace("caret", quietly = TRUE) &&
 #'     requireNamespace("earth", quietly = TRUE)) {
+#'   # x1 and x2 drive y; x3 is noise
 #'   df <- data.frame(
-#'     y  = rnorm(150),
 #'     x1 = rnorm(150),
 #'     x2 = rnorm(150),
 #'     x3 = rnorm(150)
 #'   )
+#'   df$y <- 2 * df$x1 - df$x2 + rnorm(150, sd = 0.5)
 #'   res <- fs_mars(df, "y", degree = 1, nprune = c(5, 10),
 #'                  number = 3, repeats = 1, seed = 42)
 #'   res$selected
+#'   res$scores
 #'   res$details$metrics
 #' }
 #' }

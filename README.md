@@ -24,14 +24,10 @@ library(featR)
 
 res <- fs_lasso(mtcars, "mpg", nfolds = 5, seed = 1)
 
-res
-#> <fs_result> lasso (regression)
-#> Selected 5 of 10 features
-#>   wt, cyl, hp, ...
-
+res               # <fs_result> lasso (regression), with the selected features
 selected(res)     # character vector of chosen features
 res$scores        # per-feature scores, comparable within a method
-res$model         # the fitted model, when the method produced one
+res$model         # the fitted model, when the method produced one and you asked for it
 res$details       # everything method-specific
 summary(res)      # ranked score table, selected features marked
 ```

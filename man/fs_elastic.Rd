@@ -41,9 +41,10 @@ classification.}
 \item{use_pca}{Logical. Whether to project predictors onto principal
 components inside each resample. Default \code{FALSE}.}
 
-\item{nPCs}{Integer. Number of principal components to retain when
+\item{nPCs}{Integer >= 1. Number of principal components to retain when
 \code{use_pca = TRUE}. Must be strictly less than \code{min(nrow, ncol)} of the
-predictor matrix.}
+predictor matrix. Default \code{NULL}, which is an error when
+\code{use_pca = TRUE} and ignored otherwise.}
 
 \item{seed}{Optional integer seed applied locally (and restored on exit)
 before resampling and tuning. Default \code{NULL} (never seeds by default).}
@@ -59,15 +60,20 @@ An \code{fs_result} object with:
 \item{selected}{Predictors (or components, when \code{use_pca = TRUE}) whose
 coefficient at the chosen alpha/lambda is non-zero; for multinomial
 fits, the union across classes.}
-\item{scores}{Named numeric vector of absolute coefficients, or NULL for
-multinomial fits where no single per-predictor score exists.}
+\item{scores}{Named numeric vector of absolute coefficients at the chosen
+alpha/lambda, one entry per column the model saw (predictors shrunk to
+zero are kept, with a score of 0); \code{NULL} for multinomial fits, where a
+predictor has one coefficient per class and no single score exists.}
 \item{method}{\code{"elastic_net"}.}
 \item{task}{\code{"regression"} or \code{"classification"}.}
 \item{model}{The \code{caret::train} object.}
-\item{details}{List of \code{coef} (coefficients at the best lambda: a matrix,
-or a list of them for multinomial fits), \code{best_alpha}, \code{best_lambda},
-\code{metric_name}, \code{metric_value}, \code{use_pca}, and \code{n_features} (number of
-predictors the model saw, i.e. \code{nPCs} when \code{use_pca = TRUE}).}
+\item{details}{List of \code{coef} (coefficients at the best lambda, intercept
+included: a sparse matrix, or a list of them for multinomial fits),
+\code{best_alpha} and \code{best_lambda} (the winning tuning pair), \code{metric_name}
+(the metric optimized), \code{metric_value} (its resampled value for that
+pair, \code{NA} when the metric is absent from caret's results table),
+\code{use_pca}, and \code{n_features} (number of columns the model saw, i.e.
+\code{nPCs} when \code{use_pca = TRUE}).}
 \item{call}{The matched call.}
 }
 \description{
@@ -76,9 +82,32 @@ regularization via \code{caret::train(method = "glmnet")}. Supports regression
 (numeric outcomes) and classification (factor/character outcomes).
 }
 \details{
+Use this when the question is "which predictors survive a jointly tuned
+L1/L2 penalty?". Both alpha and lambda are chosen by resampling, and every
+predictor with a non-zero coefficient at the winning pair is reported. When
+the winning alpha is below 1 the ridge component spreads weight across
+correlated predictors, so a group of collinear columns tends to survive
+together instead of being reduced to a single representative.
+
 The model formula is built internally from \code{data} and \code{target}: every other
 column of \code{data} is a candidate predictor, and non-syntactic names are
-backticked.
+backticked. Predictors then go through \code{stats::model.matrix()} and the
+intercept column is removed, so a k-level factor or character column
+contributes k - 1 dummy columns and \code{selected}, \code{scores} and \code{details$coef}
+name design-matrix columns rather than the original columns.
+
+Rows with a missing response, or a missing value in any predictor, are
+dropped before fitting (an error if that leaves nothing), and a constant
+predictor column is a hard error rather than a silently degenerate fit. A
+logical response is converted to a two-level factor with a message; a
+numeric response with only two distinct values is still treated as
+regression, with a warning telling you to convert it to a factor if you
+meant classification.
+
+\code{scores} are absolute coefficients on the scale of the columns the model
+saw, not standardized ones, so they rank predictors fairly only when those
+columns are on comparable scales -- unlike \code{fs_lasso()}, this function does
+not rescale them for you.
 
 When \code{use_pca = TRUE} the PCA is \strong{not} fitted up front. \code{caret} is asked
 for \code{preProcess = c("center", "scale", "pca")} with \code{pcaComp = nPCs} in
@@ -91,25 +120,30 @@ rows each resample trains on as well as smaller than the number of
 predictors.
 
 \code{lambda_seq = NULL} (the default) tunes over the lambda path
-\code{glmnet::glmnet()} itself proposes at each alpha, which is scaled to the
-data, instead of a fixed sequence that spends most of its fits on
-irrelevant lambdas. With \code{use_pca = TRUE} that path is computed on the
-original predictors, so it is only an approximation of the scale the
-components live on; pass \code{lambda_seq} explicitly if you need to control it.
+\code{glmnet::glmnet()} itself proposes at each alpha (up to 50 values per
+alpha), which is scaled to the data, instead of a fixed sequence that spends
+most of its fits on irrelevant lambdas. Only the candidate values come from
+the full data, exactly as in caret's own default glmnet grid; which pair
+wins is still decided by resampling. With \code{use_pca = TRUE} that path is
+computed on the original predictors, so it is only an approximation of the
+scale the components live on; pass \code{lambda_seq} explicitly if you need to
+control it.
 }
 \examples{
 \donttest{
 if (requireNamespace("caret", quietly = TRUE) &&
     requireNamespace("glmnet", quietly = TRUE) &&
     requireNamespace("Matrix", quietly = TRUE)) {
+  # x1 and x2 drive y; x3 is noise
   df <- data.frame(
-    y  = rnorm(60),
-    x1 = rnorm(60),
-    x2 = rnorm(60),
-    x3 = rnorm(60)
+    x1 = seq(-2, 2, length.out = 60),
+    x2 = rep(c(-1, 0, 1), 20),
+    x3 = cos(seq_len(60))
   )
+  df$y <- 2 * df$x1 - df$x2 + 0.1 * cos(seq_len(60) * 3)
   res <- fs_elastic(df, "y", alpha_seq = c(0.5, 1), seed = 1)
   selected(res)
+  res$scores
   res$details$best_alpha
 }
 }

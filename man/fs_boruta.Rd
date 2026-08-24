@@ -16,22 +16,30 @@ fs_boruta(
 )
 }
 \arguments{
-\item{data}{A data frame (or data-frame-like object, or matrix).}
+\item{data}{A data frame (or data-frame-like object, or matrix). Predictor
+columns may be numeric, factor, character, logical, Date or POSIXt;
+character and logical columns are converted to factors and Date/POSIXt
+columns to numeric, and any other type is an error. Neither the target
+nor the predictors may contain missing values, since Boruta's underlying
+random forest cannot fit them.}
 
 \item{target}{Name of the target column in \code{data}. A factor target is
-treated as classification, a numeric target as regression.}
+treated as classification, a numeric target as regression; any other type
+is an error, as is a target containing NAs.}
 
-\item{maxRuns}{Maximum number of Boruta iterations. Default 250.}
+\item{maxRuns}{Whole number >= 1. Maximum number of Boruta iterations.
+Default 250.}
 
 \item{cutoff_features}{Optional whole number capping the number of returned
 features. When supplied, the top features by median Boruta importance are
-retained. Default NULL (no cap).}
+retained, applied after any correlation pruning. Default NULL (no cap).}
 
 \item{cutoff_cor}{Numeric correlation cutoff between 0 and 1 used to drop
 redundant features from the selected set. Within each group of features
 correlated above the cutoff, the feature with the highest median Boruta
-importance is kept and the rest are dropped. Set NULL to skip this step.
-Default 0.7.}
+importance is kept and the rest are dropped. Only numeric predictors are
+compared (absolute Pearson correlation); factor predictors are never
+pruned. Set NULL to skip this step. Default 0.7.}
 
 \item{resolve_tentative}{Logical; if TRUE, apply \code{Boruta::TentativeRoughFix()}
 and return only confirmed attributes. If FALSE, tentative attributes are
@@ -41,9 +49,10 @@ included in the selected set. Default TRUE.}
 previous RNG state is restored when the function exits. Default NULL
 (the RNG is never seeded unless requested).}
 
-\item{verbose}{Logical; if TRUE, report progress. This maps to Boruta's
-\code{doTrace = 1} (decisions are reported as they are made); FALSE maps to
-\code{doTrace = 0}. Default FALSE.}
+\item{verbose}{Logical; if TRUE, report progress and name any features
+dropped by correlation pruning. This maps to Boruta's \code{doTrace = 1}
+(decisions are reported as they are made); FALSE maps to \code{doTrace = 0}.
+Default FALSE.}
 }
 \value{
 An object of class \code{fs_result} with:
@@ -56,10 +65,13 @@ candidate feature (\code{NA} for attributes with no importance history).}
 \item{method}{"boruta".}
 \item{task}{"classification" for a factor target, "regression" for a
 numeric one.}
-\item{model}{The Boruta object.}
-\item{details}{A list with \code{boruta_obj} (the Boruta object), \code{decisions}
-(the per-feature Confirmed/Tentative/Rejected factor),
-\code{dropped_correlated} (features removed by correlation pruning), and
+\item{model}{The Boruta object, after \code{Boruta::TentativeRoughFix()} when
+\code{resolve_tentative = TRUE} and something was still tentative.}
+\item{details}{A list with \code{boruta_obj} (the same Boruta object as
+\code{model}), \code{decisions} (the per-feature
+Confirmed/Tentative/Rejected factor, as it stands after any
+tentative fix), \code{dropped_correlated} (features removed by
+correlation pruning, empty when \code{cutoff_cor} is NULL), and
 \code{n_features} (the number of candidate features).}
 \item{call}{The matched call.}
 }
@@ -70,6 +82,23 @@ Preprocesses predictors, optionally seeds the RNG locally, optionally
 resolves tentative features, and optionally prunes correlated features from
 the confirmed set. Pruning is importance-aware: within a group of correlated
 features the one with the highest median Boruta importance is kept.
+}
+\details{
+Boruta answers "which features carry any information about the target?",
+not "which minimal subset predicts best". It is an all-relevant selector:
+across up to \code{maxRuns} random-forest fits it compares each feature against
+"shadow" features built by permuting the predictors, and confirms every
+feature that beats the best shadow often enough to be unlikely by chance.
+Redundant-but-informative features are therefore all confirmed. That makes
+it a good fit for understanding a dataset, and a poor fit when you need a
+compact model. It also costs many forest fits, and the outcome varies from
+run to run unless \code{seed} is supplied.
+
+The \code{cutoff_cor} pruning and the \code{cutoff_features} cap are featR additions,
+applied to Boruta's output in that order; both rank features by median
+Boruta importance. Features still undecided when \code{maxRuns} is reached stay
+Tentative; \code{resolve_tentative = TRUE} settles them with the
+\code{Boruta::TentativeRoughFix()} heuristic rather than with further evidence.
 }
 \examples{
 \donttest{

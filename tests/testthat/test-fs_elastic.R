@@ -7,8 +7,8 @@
 # helper-level via featR::: (which needs no Suggests) and again through the
 # public API in gated tests. Anything that reaches caret::train()/glmnet is
 # gated on the caret/glmnet/Matrix Suggests, plus skip_on_cran() when a model
-# is actually fitted. PCA is now done by caret inside each resample, so no
-# test needs irlba any more.
+# is actually fitted. PCA is performed by caret inside each resample, so the
+# PCA tests need no dependency beyond caret itself.
 
 elastic_toy_data <- function() {
   data.frame(

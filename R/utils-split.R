@@ -7,9 +7,14 @@
 #' a data.table with the matrix that `createDataPartition(list = FALSE)`
 #' returns is an error.
 #'
+#' Stratification is caret's: the classes of a factor/character outcome, or
+#' quantile groups of a numeric one. caret is a suggested package, so this
+#' checks for it first. The draw uses the RNG.
+#'
 #' @param y Outcome vector used for stratification.
 #' @param p Proportion of data for the training set (strictly between 0 and 1).
 #' @param seed Optional seed, applied locally and restored (see `local_seed`).
+#'   Default `NULL`, which leaves the RNG alone.
 #' @return Integer vector of training-row indices.
 #' @noRd
 fs_split_index <- function(y, p = 0.8, seed = NULL) {

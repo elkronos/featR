@@ -13,21 +13,24 @@ fs_stepwise(
 )
 }
 \arguments{
-\item{data}{A data.frame containing the target and the candidate
-predictors (all other columns).}
+\item{data}{A data.frame (or data.table) with at least two columns: the
+numeric target and at least one candidate predictor. Every column other
+than \code{target} is offered to the search.}
 
-\item{target}{Character string naming the numeric target column.
-(Unquoted symbols are not accepted.)}
+\item{target}{Single string naming the numeric target column of \code{data}.
+Unquoted symbols and column indices are not accepted. Non-syntactic names
+are backticked into the formula, so they work.}
 
-\item{direction}{Direction of the search: \code{"both"} (default),
-\code{"backward"}, or \code{"forward"}.}
+\item{direction}{Direction of the search: \code{"both"} (the default),
+\code{"backward"}, or \code{"forward"}, matched with \code{match.arg()}.}
 
 \item{verbose}{Logical. If \code{TRUE}, emits progress messages and enables the
-\code{stepAIC()} trace output. Default \code{FALSE}.}
+\code{stepAIC()} trace output on the console. Default \code{FALSE}.}
 
-\item{...}{Additional arguments passed to \code{MASS::stepAIC()} (e.g. \code{k},
-\code{steps}), excluding \code{trace}, which is controlled by \code{verbose} (a
-user-supplied \code{trace} is dropped with a warning).}
+\item{...}{Additional arguments passed to \code{MASS::stepAIC()}, for example \code{k}
+or \code{steps}. \code{trace} is the one exception: it is controlled by \code{verbose},
+and a user-supplied \code{trace} is dropped with a warning. See Details for
+what else \code{...} quietly absorbs.}
 }
 \value{
 An object of class \code{fs_result} with:
@@ -41,25 +44,38 @@ final model's coefficient table, excluding the intercept.
 so they are optimistically biased and are not valid for inference.}
 \item{method}{"stepwise".}
 \item{task}{"regression"; \code{fs_stepwise()} fits linear models only.}
-\item{model}{The \code{lm} selected by \code{stepAIC()}.}
+\item{model}{The \code{lm} selected by \code{stepAIC()}. It carries a copy of the
+complete-case data in a private environment (see Details).}
 \item{details}{A list with \code{final_model} (the same \code{lm}), \code{coefficients}
 (the \code{summary()} coefficient matrix, same caveat as \code{scores}),
-\code{selected_terms} (the selected term labels), \code{direction} (the search
-direction actually used), \code{n_features} (the number of candidate
-predictors offered to the search) and \code{dropped_na_rows} (how many rows
-were removed for missing values).}
+\code{selected_terms} (the same term labels as \code{selected}), \code{direction} (the
+search direction actually used), \code{n_features} (the number of candidate
+predictors offered to the search, i.e. \code{ncol(data) - 1}) and
+\code{dropped_na_rows} (how many rows were removed for missing values, \code{0L}
+when none were).}
 \item{call}{The matched call.}
 }
 }
 \description{
+Answers "which subset of these columns does AIC keep in a linear model?"
 Uses \code{MASS::stepAIC()} to perform forward, backward, or both-direction
 stepwise selection on a linear regression of \code{target} against all other
 columns of \code{data}. For \code{direction = "forward"} and \code{"both"} a proper null
 model and scope are set up so that forward moves are possible.
 }
 \details{
+This is the cheapest wrapper method in featR and the easiest to read: what
+comes back is an ordinary \code{lm} that the usual generics work on. The price is
+that the search is greedy, so it can walk past the AIC-best subset, and
+unstable, so small changes in the data can change the retained set. On top
+of that, the statistics it reports about its own answer are not valid; see
+the post-selection inference caveat below.
+
 Requires the suggested package 'MASS'. The function is
-linear-regression-only: the target must be numeric.
+linear-regression-only: the target must be numeric, and every other column
+of \code{data} is offered to the search as a candidate predictor. There is no
+\code{seed} argument, because \code{stepAIC()} is deterministic: repeating a call on
+the same data returns the same model, and the RNG is never touched.
 
 \strong{Post-selection inference caveat.} The reported \code{scores} (absolute
 t statistics) and the p-values in \code{details$coefficients} are computed on
@@ -67,15 +83,23 @@ the same data that drove the search. They are optimistically biased -- the
 selective-inference problem -- and must not be used for formal inference,
 only as a rough ordering of the retained terms.
 
-The fitted models reference the data through a small private environment
-attached to the model formula, so \code{predict()}, \code{summary()}, \code{anova()},
-\code{add1()}/\code{drop1()}, and similar generics keep working on the returned
-model; nothing is assigned to the global environment and nothing is
-written to disk. To refit the returned model with \code{update()} from another
-environment, pass the data explicitly, e.g.
-\code{update(model, . ~ . - x, data = my_data)} (plain \code{update(model)}
-re-evaluates the call in the caller's environment, where the private data
-object is not visible).
+The fitted models reach their data through a private environment attached to
+the model formula, so \code{predict()}, \code{summary()}, \code{anova()}, \code{add1()}/\code{drop1()}
+and similar generics keep working on the returned model; nothing is assigned
+to the global environment and nothing is written to disk. That environment
+holds a copy of the complete-case \code{data} and is kept alive by the returned
+model, so the result carries the data with it and is correspondingly large.
+To refit the returned model with \code{update()} from another environment, pass
+the data explicitly, e.g. \code{update(model, . ~ . - x, data = my_data)}. Plain
+\code{update(model)} does \emph{not} work: \code{update()} re-evaluates the stored
+call in the \emph{caller's} environment, where the private data object is not
+visible, so it fails with an object-not-found error.
+
+\code{...} is forwarded to \code{MASS::stepAIC()} verbatim, which means it also
+absorbs arguments this function does not have. The removed \code{seed} and
+\code{return_models} are passed through and ignored rather than rejected, so a
+call written against the older API still runs and quietly does nothing with
+them; check your argument names against the list below.
 
 Rows containing missing values in any column are dropped (with a warning)
 before the search, because \code{stepAIC()} cannot compare models fitted on
@@ -85,8 +109,13 @@ differing row sets.
 \donttest{
 if (requireNamespace("MASS", quietly = TRUE)) {
   res <- fs_stepwise(mtcars, target = "mpg", direction = "both")
-  res$selected
-  res$scores
+  print(res$selected)
+  # |t| of the retained terms: a rough ordering, not valid inference
+  print(res$scores)
+
+  # the returned model is an ordinary lm, but update() needs 'data'
+  refit <- stats::update(res$model, . ~ . - wt, data = mtcars)
+  print(stats::formula(refit))
 }
 }
 }

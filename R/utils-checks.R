@@ -1,7 +1,7 @@
 # Internal validation and dependency helpers shared across featR.
 # None of these are exported.
 
-#' Null-coalescing operator
+#' Null-coalescing operator: `x` unless it is NULL, in which case `y`
 #' @noRd
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
@@ -32,7 +32,8 @@ fs_require <- function(pkgs, purpose = NULL) {
   invisible(TRUE)
 }
 
-#' Assert that `x` is a data.frame (optionally allowing a matrix)
+#' Assert that `x` is a data.frame (optionally a matrix) with at least one
+#' row and one column
 #' @noRd
 assert_data_frame <- function(x, arg = "data", allow_matrix = FALSE) {
   ok <- is.data.frame(x) || (allow_matrix && is.matrix(x))
@@ -79,7 +80,10 @@ assert_number <- function(x, arg, lower = -Inf, upper = Inf) {
   invisible(x)
 }
 
-#' Assert that `x` is a single whole number >= `lower`; returns it as integer
+#' Assert that `x` is a single whole number >= `lower`
+#'
+#' Invisibly returns `as.integer(x)`, so callers can write
+#' `n <- assert_count(n, "n")` to validate and coerce in one step.
 #' @noRd
 assert_count <- function(x, arg, lower = 1L) {
   assert_number(x, arg, lower = lower)

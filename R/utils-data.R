@@ -10,7 +10,8 @@
 #' by-reference operations inside featR can never mutate user data.
 #'
 #' @param data data.frame, data.table, or matrix.
-#' @return A data.table copy.
+#' @param arg Argument name used in the error message.
+#' @return A data.table copy. Anything else is an error.
 #' @noRd
 as_dt <- function(data, arg = "data") {
   if (data.table::is.data.table(data)) {

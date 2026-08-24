@@ -4,14 +4,26 @@
 #'
 #' Internal constructor. Every `fs_*()` selection function returns one of
 #' these so that downstream code can rely on a single shape regardless of
-#' which method produced it.
+#' which method produced it. The result is a plain list of exactly seven
+#' elements -- `selected`, `scores`, `method`, `task`, `model`, `details`,
+#' `call`, in that order -- carrying the class `fs_result`. `fs_pca()` and
+#' `fs_svd()` are dimensionality reduction rather than selection and return
+#' their own lists instead.
 #'
-#' @param selected Character vector of selected feature names (possibly empty).
-#' @param scores Optional named numeric vector, or data.frame whose first
-#'   column is the feature name, giving a per-feature score. `NULL` when the
+#' Only `selected` and `method` are required; everything else has a default,
+#' and the checks here are deliberately shallow (type, not content) because
+#' each caller owns the meaning of its own `details`.
+#'
+#' @param selected Character vector of selected feature names (possibly
+#'   empty). `NULL` is accepted and stored as `character(0)`.
+#' @param scores Optional per-feature scores: a named numeric vector, or a
+#'   data.frame with a character/factor column naming the features and a
+#'   numeric column holding the score (the first column of each kind is used
+#'   when the print and summary methods need a plain vector). `NULL` when the
 #'   method does not produce comparable per-feature scores.
 #' @param method Single string naming the method (for example "lasso").
-#' @param task Single string, "classification", "regression", or `NA`.
+#' @param task Single string, "classification", "regression", or `NA`. `NULL`
+#'   is stored as `NA_character_`.
 #' @param model Optional fitted model object.
 #' @param details Named list of method-specific extras.
 #' @param call The matched call of the user-facing function.
@@ -54,6 +66,9 @@ new_fs_result <- function(selected,
 }
 
 #' Number of features considered by a result, when knowable
+#'
+#' Prefers the number of scored features, falling back to
+#' `details$n_features`, and returns `NA_integer_` when neither is recorded.
 #' @noRd
 fs_result_n_considered <- function(x) {
   if (is.data.frame(x$scores)) {
@@ -89,15 +104,30 @@ fs_result_score_vector <- function(x) {
 
 #' Extract the selected features from a featR result
 #'
+#' The generic accessor for the one thing every featR method produces: the
+#' names of the features it kept. Equivalent to `x$selected`, but stable
+#' against future changes in the internal layout, and safe to call on the
+#' result of any `fs_*()` selection function.
+#'
 #' @param x An `fs_result` object.
 #' @param ... Unused, for future methods.
-#' @return A character vector of selected feature names.
+#' @return A character vector of selected feature names, possibly empty when
+#'   nothing met the selection criteria.
 #' @examples
 #' res <- fs_unsupervised(
 #'   data.frame(a = c(1, 5, 2, 8), b = c(1, 1, 1, 1)),
 #'   method = "variance", threshold = 0.5
 #' )
 #' selected(res)
+#'
+#' # Empty selections are returned as character(0), not NULL
+#' none <- suppressWarnings(
+#'   fs_unsupervised(
+#'     data.frame(a = c(1, 5, 2, 8), b = c(1, 1, 1, 1)),
+#'     method = "variance", threshold = 1e6
+#'   )
+#' )
+#' selected(none)
 #' @export
 selected <- function(x, ...) {
   UseMethod("selected")
@@ -111,10 +141,22 @@ selected.fs_result <- function(x, ...) {
 
 #' Print a featR result
 #'
+#' Prints a compact summary of what a selection run kept.
+#'
+#' @details
+#' The output is at most five lines: a `<fs_result>` header naming the method,
+#' followed by the task in parentheses when one is known; a count, either
+#' "Selected k of N features" or, when the number of candidates cannot be
+#' recovered, "Selected k features"; the selected names, truncated to the
+#' first `n` with a "... (m more)" tail; a "Model:" line giving the class of
+#' `x$model` when the method fitted one; and a "Details:" line naming the
+#' elements of `x$details`. Nothing is printed for the names when the
+#' selection is empty.
+#'
 #' @param x An `fs_result` object.
 #' @param n Maximum number of features to list (default 10).
 #' @param ... Unused, for consistency with the generic.
-#' @return `x`, invisibly.
+#' @return `x`, invisibly. Called for its printed output.
 #' @examples
 #' fs_unsupervised(
 #'   data.frame(a = c(1, 5, 2, 8), b = c(1, 1, 1, 1)),
@@ -155,6 +197,18 @@ print.fs_result <- function(x, n = 10L, ...) {
 }
 
 #' Summarize a featR result
+#'
+#' Prints the result, the call that produced it, and a ranked score table.
+#'
+#' @details
+#' Everything `print()` shows, then the recorded call, then -- for methods
+#' that produce per-feature scores -- a table of every scored feature ranked
+#' by decreasing absolute score, with columns `feature`, `score` (four
+#' significant digits) and `selected` (`*` marks the features that were kept).
+#' The table is truncated to `n` rows with a "... (m more)" tail. Ranking by
+#' absolute value keeps signed scores such as regression coefficients in a
+#' sensible order; note that it puts a large p-value ahead of a small one for
+#' methods that score by p-value, where smaller is better.
 #'
 #' @param object An `fs_result` object.
 #' @param n Maximum number of scored features to show (default 20).

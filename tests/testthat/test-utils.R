@@ -56,9 +56,9 @@ test_that("backtick wraps only non-syntactic names", {
   expect_identical(backtick(c("ok", "not ok")), c("ok", "`not ok`"))
 })
 
-# Shared filter machinery from R/utils-filter.R, used by both fs_supervised()
-# (its `out` argument) and fs_unsupervised() (its `output` argument). Both
-# helpers are internal, hence featR:::.
+# Shared filter machinery from R/utils-filter.R, behind the `output` argument
+# of both fs_supervised() and fs_unsupervised(). Both helpers are internal,
+# hence featR:::.
 
 test_that("filter_mask never selects an NA score, under keep or remove", {
   scores <- c(low = 0.1, undefined = NA_real_, high = 0.9)

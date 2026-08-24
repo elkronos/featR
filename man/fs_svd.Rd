@@ -24,12 +24,19 @@ matrix of values, not a table of observations and features.}
 vectors to keep, or NULL (default) for \code{min(dim(x))}. Values
 exceeding \code{min(dim(x))} are an error.}
 
-\item{scale_input}{TRUE (center and scale, the default), FALSE,
-\code{"center"}, or \code{"scale"}. Scaling requires all columns to
-have non-zero variance; offending columns are reported by name.}
+\item{scale_input}{TRUE (center and scale, the default), FALSE (leave the
+matrix alone), \code{"center"} (subtract column means only), or
+\code{"scale"} (divide only). Any other value is an error. The two
+dividing forms (\code{TRUE} and \code{"scale"}) require every column to
+have non-zero variance, and offending columns are reported by name (or by
+position when the matrix has no column names); \code{"center"} has no
+such requirement. Note that \code{"scale"} inherits
+\code{base::scale()}'s semantics: with no centering it divides by the
+root mean square, not by the standard deviation.}
 
 \item{svd_method}{\code{"auto"} (default), \code{"exact"}, or
-\code{"approx"}.}
+\code{"approx"}. See Details for how \code{"auto"} decides and when
+\code{"approx"} falls back to the exact solver.}
 
 \item{svd_threshold}{Positive number; with \code{svd_method = "auto"},
 the approximate solver is considered only when \code{min(dim(x))}
@@ -45,12 +52,20 @@ not include \code{A} or \code{k}, which are set internally.}
 A plain list. \code{fs_svd()} is dimensionality reduction rather
 than feature selection, so it returns its own decomposition structure and
 not the \code{fs_result} object produced by the package's selection
-functions. The components are:
+functions. Writing \code{k} for the number of triplets kept
+(\code{n_singular_values}, or \code{min(dim(x))} by default), the
+components are:
 \itemize{
-\item \code{singular_values}
-\item \code{left_singular_vectors}
-\item \code{right_singular_vectors}
+\item \code{singular_values}: numeric vector of length \code{k}, in
+non-increasing order.
+\item \code{left_singular_vectors}: \code{nrow(x)} by \code{k} matrix
+(the \code{u} of \code{base::svd()}).
+\item \code{right_singular_vectors}: \code{ncol(x)} by \code{k} matrix
+(the \code{v} of \code{base::svd()}).
 }
+Singular vectors are unique only up to sign (and up to rotation within a
+tied block), so column signs may differ between the exact and approximate
+solvers and between platforms.
 }
 \description{
 Computes the SVD of a matrix with options for centering/scaling,
@@ -58,6 +73,16 @@ truncation to the leading singular triplets, and an approximate solver
 for large matrices.
 }
 \details{
+Reach for this when you want a low-rank summary of a numeric matrix -- the
+leading components for compression, denoising, or a latent-factor
+representation -- rather than a subset of the original columns. Because the
+components are linear combinations of every input column, nothing is
+dropped and individual features stay uninterpretable; use one of the
+package's selection functions when you need to name the features you keep.
+\code{\link{fs_pca}} covers the same ground with tidy, labeled output and
+variance-explained figures; \code{fs_svd()} is the lower-level
+decomposition.
+
 The exact path uses \code{base::svd()}. The approximate path uses
 \code{RSpectra::svds()} (package \pkg{RSpectra}, a Suggests dependency,
 required only when that path is actually taken) and is only applicable
@@ -70,7 +95,17 @@ With \code{svd_method = "auto"}, the approximate solver is chosen only
 when \code{n_singular_values < min(dim(x))} and
 \code{min(dim(x)) > svd_threshold}; otherwise the exact solver is used,
 and a message explains why when a large matrix still ends up on the exact
-path because all singular values were requested.
+path because all singular values were requested. Asking for
+\code{svd_method = "approx"} outright when \code{n_singular_values} equals
+\code{min(dim(x))} is not an error: it falls back to the exact solver with
+a message, because \code{RSpectra::svds()} cannot return the full set.
+
+Centering and scaling, when requested, happen \emph{before} the
+decomposition, so the returned triplets factorize the transformed matrix
+rather than the raw input: with the default \code{scale_input = TRUE} they
+reconstruct \code{scale(x)}, not \code{x}. The transformation itself is not
+returned, so keep the column means and standard deviations yourself if you
+need to map results back to the original units.
 }
 \examples{
 m <- matrix(
@@ -82,8 +117,20 @@ m <- matrix(
     0, 4, 3, 2),
   nrow = 6, ncol = 4, byrow = TRUE
 )
+
+# Two leading components of the centered and scaled matrix
 res <- fs_svd(m, n_singular_values = 2, scale_input = TRUE)
 res$singular_values
 res$left_singular_vectors
 res$right_singular_vectors
+
+# Share of the total (scaled) variance captured by those two components
+all_values <- fs_svd(m, scale_input = TRUE)$singular_values
+sum(res$singular_values^2) / sum(all_values^2)
+
+# Untransformed, the full decomposition reconstructs the input exactly
+full <- fs_svd(m, scale_input = FALSE)
+recon <- full$left_singular_vectors \%*\%
+  (full$singular_values * t(full$right_singular_vectors))
+all.equal(recon, m)
 }

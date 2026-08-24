@@ -15,8 +15,15 @@ fs_<method>(data, target, ..., seed = NULL, verbose = FALSE, n_cores = 1L)
 This replaces the previous mix of `response_col`, `target_var`, `target_col`,
 `responseName`, `response_var`, `dependent_var`, and `x`/`y` argument pairs.
 Other renames: `p` -> `train_ratio`, `predictor_cols` -> `predictors`,
-`out` -> `output`, `log_progress`/`show_progress` -> `verbose`,
-`cores`/`split_ratio`/`temp_multisession` -> `n_cores`.
+`out` -> `output`, `log_progress`/`show_progress`/`doTrace` -> `verbose`,
+`cores`/`temp_multisession` -> `n_cores`, and `control$split_ratio` ->
+`control$train_ratio` in `fs_randomforest()`. `fs_randomforest()` also moves
+`seed` and `n_cores` out of its `control` list into real arguments.
+Removed arguments that never worked or had no effect: `early_stop_threshold`
+(`fs_bayes()`), `early_stop` and `feature_funcs` (`fs_recursivefeature()`,
+the latter now passed as `rfe_control$functions`), `seed` and `return_models`
+(`fs_stepwise()`), `memoise_result` (`fs_svd()`), `auto_install`
+(`fs_randomforest()`), and `method` (`fs_mars()`, which is earth-only).
 
 ## Return value
 

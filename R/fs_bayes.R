@@ -32,6 +32,10 @@ bayes_validate_data <- function(data,
     missing_preds <- predictors[!predictors %in% names(data)]
     stop("Missing predictor columns: ", paste(missing_preds, collapse = ", "))
   }
+  if (target %in% predictors) {
+    stop("'target' must not also appear in 'predictors'; otherwise one ",
+         "candidate model regresses '", target, "' on itself.")
+  }
   if (!is.null(date_col) && !date_col %in% names(data)) {
     stop("Date column '", date_col, "' not found in data.")
   }
@@ -154,6 +158,12 @@ bayes_generate_predictor_combinations <- function(predictors,
 }
 
 #' Fit a Bayesian model using brms
+#'
+#' Applies featR's defaults (iter = 2000, adapt_delta = 0.99,
+#' max_treedepth = 15, refresh = 0) and then lets `brm_args` override any of
+#' them; `warmup` is left to brms' own default of iter / 2. Fitting warnings
+#' are logged (when `verbose`) but never abort the fit; a fit that errors
+#' returns NULL so that the remaining combinations still run.
 #'
 #' @param data A data.frame or data.table containing the data.
 #' @param formula_str Character. The model formula as a string.
@@ -398,44 +408,74 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #' `fs_result`.
 #'
 #' @details
+#' Use this when you want the predictor subset itself chosen by out-of-sample
+#' predictive fit under a fully Bayesian model, and you can afford to fit one
+#' model per subset. The search is exhaustive by default: with `p` candidate
+#' predictors it fits every non-empty subset, `2^p - 1` models, and each one
+#' compiles and samples its own Stan program. Use `max_comb_size` or
+#' `sample_combinations` to bound the search.
+#'
 #' Model selection uses `loo::loo_compare()` rather than the raw elpd
 #' maximum. With `rule = "1se"` (the default) the chosen model is the most
 #' parsimonious one -- fewest predictors, ties broken by the higher elpd --
-#' whose elpd difference from the best model is no larger than one standard
-#' error of that difference (the `se_diff` column of the comparison table).
-#' With `rule = "best"` the raw elpd maximum wins, which is the older
-#' behavior and is more prone to over-fitting the comparison. The full
-#' comparison table is always returned in `details$loo_comparison`.
+#' among those whose elpd difference from the best model is no larger in
+#' absolute value than one standard error of that difference (the `se_diff`
+#' column of the comparison table). With `rule = "best"` the raw elpd maximum
+#' wins, which is the older behavior and is more prone to over-fitting the
+#' comparison. When no usable comparison table is available, both rules fall
+#' back to the raw elpd maximum, ties broken by fewer predictors.
 #'
-#' Every candidate model compiles and samples a Stan program, so the number of
-#' combinations grows expensive quickly; use `max_comb_size` or
-#' `sample_combinations` to bound the search.
+#' Combinations whose model fails to fit are excluded from selection and
+#' counted in `details$n_failed_fits`, with a warning. If no fit yields a
+#' finite `elpd_loo` at all, the first successfully fitted model is returned
+#' with a warning; that is an arbitrary fallback, not a selection.
 #'
-#' @param data A data.frame or data.table.
-#' @param target Character. Name of the target (response) column.
+#' Two caveats are worth stating plainly. `details$mae` and `details$rmse` are
+#' in-sample errors computed on the same rows used to fit and to select, so
+#' they are optimistic. And anything read off the returned `brmsfit`
+#' (posterior intervals, effect sizes) is post-selection inference: the model
+#' was chosen by looking at the same data it is reported on.
+#'
+#' @param data A data.frame or data.table. It is copied, never modified. Only
+#'   `target`, `predictors` and `date_col` are carried forward, and rows with a
+#'   missing value in any of them are dropped before any model is fitted.
+#' @param target Character. Name of the target (response) column, which must
+#'   exist in `data` and suit `brm_family` (numeric for `stats::gaussian()`,
+#'   0/1 or logical for `brms::bernoulli()`).
 #' @param predictors Character vector. Names of the candidate predictor
-#'   columns.
+#'   columns; at least one, all present in `data`.
 #' @param date_col Character or NULL. Name of a date column. When provided, an
 #'   `iso_week_id` feature (ISO year * 100 + ISO week) is added to the
 #'   predictors. Note: `iso_week_id` enters the models as a continuous
 #'   covariate, which is a rough encoding of seasonality; a categorical or
-#'   cyclic encoding is deferred to a future version.
+#'   cyclic encoding is deferred to a future version. Default NULL (no date
+#'   feature; the date column itself is never used as a predictor).
 #' @param brm_family A model family accepted by brms::brm(), for example
 #'   stats::gaussian() (default) or brms::bernoulli().
 #' @param prior A brms prior specification (default NULL).
 #' @param brm_args List. Extra arguments for brms::brm() (for example iter,
-#'   warmup, seed). `chains` and `cores` are respected when evaluating
-#'   combinations sequentially (`cores` is capped at the detected core
-#'   count), but both are forced to 1 when `parallel_combinations = TRUE`.
+#'   warmup, seed), overriding featR's defaults of iter = 2000,
+#'   adapt_delta = 0.99, max_treedepth = 15 and refresh = 0. `chains` and
+#'   `cores` are respected when evaluating combinations sequentially (`cores`
+#'   is capped at the detected core count; the defaults are 4 chains on 1
+#'   core), but both are forced to 1 when `parallel_combinations = TRUE`.
+#'   Default `list()`.
 #' @param rule Selection rule: `"1se"` (default) keeps the most parsimonious
 #'   model within one standard error of the best elpd; `"best"` keeps the raw
 #'   elpd maximum.
-#' @param max_comb_size Integer or NULL. Max predictors in any combination.
-#' @param sample_combinations Integer or NULL. Randomly sample this many
-#'   combinations instead of evaluating all of them.
+#' @param max_comb_size Whole number >= 1, or NULL. Largest number of
+#'   predictors allowed in a combination; values above the number of candidate
+#'   predictors are capped rather than rejected. Default NULL (all sizes).
+#' @param sample_combinations Whole number >= 1, or NULL. Randomly sample this
+#'   many combinations instead of evaluating all of them; ignored when fewer
+#'   combinations exist. Pass `seed` to make the draw reproducible. Default
+#'   NULL (evaluate every combination).
 #' @param parallel_combinations Logical. Evaluate predictor combinations in
 #'   parallel via parallel::mclapply(). Not available on Windows (falls back
-#'   to sequential evaluation with a message). Default FALSE.
+#'   to sequential evaluation with a message), and falls back to sequential
+#'   evaluation when `n_cores` resolves to 1. Because each model is then held
+#'   to a single MCMC chain, cross-chain convergence diagnostics such as R-hat
+#'   become unavailable; a warning says so. Default FALSE.
 #' @param seed Optional integer. When supplied, seeds the random sampling of
 #'   combinations (see `sample_combinations`) locally; the previous RNG state
 #'   is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
@@ -444,9 +484,9 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #' @param verbose Logical. Print progress information, and show a progress bar
 #'   for sequential evaluation when the suggested pbapply package is
 #'   installed. Default FALSE.
-#' @param n_cores Integer. Worker count used when
-#'   `parallel_combinations = TRUE`. Default 1 (sequential); requests are
-#'   capped at the detected core count.
+#' @param n_cores Whole number >= 1. Worker count used when
+#'   `parallel_combinations = TRUE`, and ignored otherwise. Default 1
+#'   (sequential); requests are capped at the detected core count.
 #'
 #' @return An object of class `fs_result` with:
 #' \describe{
@@ -458,16 +498,19 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'   \item{task}{"regression", or "classification" when `brm_family` is one of
 #'     the categorical brms families.}
 #'   \item{model}{The selected `brmsfit`.}
-#'   \item{details}{A list with `data` (the modeling data.table with appended
-#'     `fitted_values`, `residuals`, `abs_residuals` and `squared_residuals`
-#'     columns), `mae` and `rmse` (in-sample, post-selection errors computed on
-#'     the same rows used to fit and select, so they are optimistic),
-#'     `formula` (the selected model's formula string), `best_elpd` (the
-#'     selected model's elpd_loo, possibly `NA`), `loo_comparison` (the
-#'     `loo::loo_compare()` table -- a matrix or data.frame depending on the
-#'     loo version -- or `NULL` when fewer than two models could be compared), `n_failed_fits` (how many combinations failed to fit) and
-#'     `n_features` (the number of candidate predictors, including
-#'     `iso_week_id` when `date_col` is supplied).}
+#'   \item{details}{A list with `data` (the complete-case modeling data.table:
+#'     `target`, `predictors`, `date_col` and `iso_week_id` where applicable,
+#'     plus appended `fitted_values`, `residuals`, `abs_residuals` and
+#'     `squared_residuals` columns), `mae` and `rmse` (in-sample,
+#'     post-selection errors computed on the same rows used to fit and select,
+#'     so they are optimistic), `formula` (the selected model's formula
+#'     string), `best_elpd` (the selected model's elpd_loo, possibly `NA`),
+#'     `loo_comparison` (the `loo::loo_compare()` table -- a matrix or
+#'     data.frame depending on the loo version -- or `NULL` when fewer than two
+#'     models could be compared or the comparison failed), `n_failed_fits`
+#'     (how many combinations failed to fit) and `n_features` (the number of
+#'     candidate predictors, including `iso_week_id` when `date_col` is
+#'     supplied).}
 #'   \item{call}{The matched call.}
 #' }
 #'

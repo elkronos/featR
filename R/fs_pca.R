@@ -130,6 +130,22 @@ pca_compute <- function(data,
     }
   }
 
+  if (use_big) {
+    # bigstatsr::big_SVD() reaches RSpectra::eigs_sym(k, n = ncol(K)), which
+    # requires k <= n - 1. max_possible above allows num_pc == n_cols, which
+    # prcomp accepts but this engine does not, so validate before dispatch
+    # rather than letting RSpectra raise the error.
+    if (num_pc > n_cols - 1L) {
+      stop(sprintf(
+        paste0(
+          "Requested %d PCs, but the large-data engine (bigstatsr::big_SVD) ",
+          "can compute at most %d for %d columns. Reduce 'num_pc'."
+        ),
+        num_pc, n_cols - 1L, n_cols
+      ), call. = FALSE)
+    }
+  }
+
   if (!use_big) {
     if (verbose) {
       message("Using prcomp for PCA computation.")
@@ -367,7 +383,11 @@ pca_plot <- function(pca_result, label_col) {
 #'   `max_possible` is `min(nrow - 1, ncol)` of the *usable* numeric data, that
 #'   is after incomplete rows and zero-variance columns have been dropped.
 #'   Explicit values larger than `max_possible` raise an error.
-#' @param scale_data Logical; scale numeric columns to unit variance.
+#' @param scale_data Logical; scale numeric columns to unit variance. Cannot be
+#'   `TRUE` while `center_data` is `FALSE`: `stats::prcomp()` and
+#'   `bigstatsr::big_scale()` treat uncentered scaling differently (the latter
+#'   ignores it), so allowing it would make the decomposition depend on which
+#'   engine the data size selected. That combination is an error.
 #'   Default `TRUE`.
 #' @param center_data Logical; center numeric columns. Default `TRUE`.
 #' @param label_col Optional single string naming a column of `data` used to
@@ -436,6 +456,17 @@ fs_pca <- function(data,
   }
   assert_flag(scale_data, "scale_data")
   assert_flag(center_data, "center_data")
+  # The two engines disagree here: stats::prcomp(center = FALSE, scale. = TRUE)
+  # divides by the root mean square, while bigstatsr::big_scale(center = FALSE,
+  # scale = TRUE) returns sds of 1 and so silently ignores the request. Rather
+  # than let the decomposition depend on whether the data crossed the size
+  # threshold, refuse the combination.
+  if (scale_data && !center_data) {
+    stop("scale_data = TRUE with center_data = FALSE is not supported: the ",
+         "small- and large-data engines scale uncentered data differently, so ",
+         "the result would depend on the size of your input. Use ",
+         "center_data = TRUE, or scale_data = FALSE.", call. = FALSE)
+  }
   if (!is.null(label_col)) {
     assert_target(data, label_col, arg = "label_col")
   }

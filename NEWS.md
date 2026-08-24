@@ -102,6 +102,29 @@ their own decomposition structure.
 * The `fs_result` constructor rejects an unnamed numeric `scores` vector and a
   zero-length `task`, both of which `print()` and `summary()` could not
   display.
+* `fs_bayes()` samples predictor combinations without enumerating them, so
+  `sample_combinations` now works at the scale it exists for: previously every
+  subset was materialized first, which exhausted memory past roughly 25
+  predictors. An unbounded search over a very large subset space now errors
+  with instructions instead of dying on allocation.
+* `fs_bayes()` validates `brm_family`, so passing a family generator without
+  parentheses reports the mistake instead of "object of type 'closure' is not
+  subsettable".
+* `fs_bayes()` supports families whose `fitted()` is a 3-D array (categorical,
+  multinomial, multivariate). Selection proceeds; the in-sample MAE and RMSE,
+  which are undefined for those responses, are reported as `NA` rather than
+  causing an error that was previously mislabelled as a sampling failure.
+* `fs_svm()` errors rather than ranking features from a partially recovered
+  weight vector, and reports a degenerate elimination-step fit as a featR
+  error naming the likely cause instead of surfacing kernlab's.
+* `fs_recursivefeature()` sets reproducible RNG streams on its parallel
+  workers, so two seeded parallel runs agree, and stops its cluster if
+  backend registration fails.
+* `fs_pca()` rejects `scale_data = TRUE` with `center_data = FALSE`, which the
+  two engines handled differently, and validates `num_pc` against the
+  large-data engine's own limit.
+* `fs_randomforest()` replaces only the `NA` entries of a per-class
+  `control$sampsize`, instead of discarding the sizes that were supplied.
 
 * `fs_mars()` no longer fails on every call (a data.table was indexed with the
   matrix returned by `caret::createDataPartition()`).

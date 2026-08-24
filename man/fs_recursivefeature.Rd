@@ -68,10 +68,11 @@ Default \code{FALSE}.}
 \item{seed}{Optional single finite number, truncated to an integer with
 \code{as.integer()}. It covers the split and the RFE resampling, is applied for
 the duration of the call only (the previous RNG state is restored on
-exit), and defaults to \code{NULL}, which never seeds. Note that
-\code{parallel = TRUE} runs resamples on PSOCK workers with their own RNG
-streams, so a seeded parallel run is not guaranteed to reproduce a seeded
-sequential one.}
+exit), and defaults to \code{NULL}, which never seeds. Under
+\code{parallel = TRUE} the seed is also used to set reproducible
+L'Ecuyer-CMRG streams on the workers, so two seeded parallel runs agree
+with each other; because the workers draw from their own streams, a
+seeded parallel run need not equal a seeded sequential one.}
 
 \item{verbose}{Logical; print progress messages and let \code{caret::rfe()}
 report its own progress, unless \code{rfe_control$verbose} overrides the

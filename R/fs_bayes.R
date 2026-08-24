@@ -40,6 +40,20 @@ bayes_validate_data <- function(data,
     stop("Date column '", date_col, "' not found in data.")
   }
 
+  # A family object is a list carrying a single character `family`. Passing the
+  # generator without parentheses (brms::bernoulli rather than
+  # brms::bernoulli()) is a common slip and otherwise dies with the opaque
+  # "object of type 'closure' is not subsettable".
+  if (!is.list(brm_family) ||
+      !is.character(brm_family$family) ||
+      length(brm_family$family) != 1L ||
+      is.na(brm_family$family)) {
+    stop("'brm_family' must be a family object carrying a single character ",
+         "'family' element, such as stats::gaussian() or brms::bernoulli(). ",
+         "Note the parentheses: the function itself (for example ",
+         "brms::bernoulli) is not a family object.", call. = FALSE)
+  }
+
   # Minimal sanity checks re: family/response
   fam <- brm_family$family
   y <- data[[target]]
@@ -112,22 +126,35 @@ bayes_add_week_feature <- function(data, date_col, predictors) {
 
 #' Generate predictor combinations
 #'
-#' Generates all non-empty combinations up to a maximum size and, optionally,
-#' randomly samples a fixed number of combinations.
+#' Enumerates every non-empty subset up to `max_comb_size` when that is
+#' feasible, and otherwise draws a random sample of distinct subsets *without*
+#' enumerating them.
+#'
+#' The distinction matters: the number of subsets is `sum(choose(n, k))` over
+#' the allowed sizes, which passes a billion by about 30 predictors. Building
+#' that list only to sample a few hundred from it exhausts memory, so
+#' `sample_combinations` would fail at exactly the scale it exists to handle.
+#' The sampled path instead draws a size `k` with probability proportional to
+#' `choose(n, k)` -- which makes every subset equally likely -- then draws the
+#' `k` members directly, keying each draw to reject duplicates.
 #'
 #' @param predictors Character vector of predictor names.
-#' @param max_comb_size Integer or NULL. Maximum size of combinations.
-#'   If NULL, uses length(predictors). Must be at least 1 if non-NULL.
-#' @param sample_combinations Integer or NULL. If not NULL, randomly sample
-#'   this many combinations (must be >= 1).
+#' @param max_comb_size Integer or NULL. Maximum subset size. If NULL, uses
+#'   `length(predictors)`. Must be at least 1 if non-NULL.
+#' @param sample_combinations Integer or NULL. If not NULL, return at most this
+#'   many subsets, sampled without enumeration when the full set is larger.
 #' @param seed Optional seed for the sampling step, applied locally and
 #'   restored on exit (see local_seed()). Default NULL: never seeds.
+#' @param max_enumerate Ceiling on how many subsets will be materialized when
+#'   no sample size was requested. Above it the caller is told to set a bound
+#'   rather than being allowed to exhaust memory.
 #' @return A list of character vectors (predictor subsets).
 #' @noRd
 bayes_generate_predictor_combinations <- function(predictors,
                                                   max_comb_size = NULL,
                                                   sample_combinations = NULL,
-                                                  seed = NULL) {
+                                                  seed = NULL,
+                                                  max_enumerate = 1e5) {
   n <- length(predictors)
   if (n < 1L) {
     stop("'predictors' must contain at least one predictor.")
@@ -139,22 +166,72 @@ bayes_generate_predictor_combinations <- function(predictors,
   } else {
     max_comb_size <- n
   }
-
-  comb_list <- lapply(
-    X = seq_len(max_comb_size),
-    FUN = function(i) utils::combn(predictors, i, simplify = FALSE)
-  )
-  combinations <- unlist(comb_list, recursive = FALSE)
-
   if (!is.null(sample_combinations)) {
-    sample_combinations <- assert_count(sample_combinations, "sample_combinations")
-    if (length(combinations) > sample_combinations) {
-      local_seed(seed)
-      combinations <- sample(combinations, sample_combinations)
-    }
+    sample_combinations <- assert_count(sample_combinations,
+                                        "sample_combinations")
   }
 
-  combinations
+  sizes <- seq_len(max_comb_size)
+  # choose() returns doubles, so this stays finite far past the point where
+  # the subsets themselves could be held in memory.
+  size_counts <- choose(n, sizes)
+  total <- sum(size_counts)
+
+  # Exhaustive path: the caller wants everything, or everything is fewer than
+  # the sample they asked for. Preserves the historical enumeration order.
+  if (is.null(sample_combinations) || total <= sample_combinations) {
+    if (total > max_enumerate) {
+      stop(sprintf(
+        paste0(
+          "%.0f predictor combinations would have to be enumerated, which ",
+          "will exhaust memory. Reduce 'max_comb_size' (currently %d) or set ",
+          "'sample_combinations' to search a random subset instead."
+        ),
+        total, max_comb_size
+      ), call. = FALSE)
+    }
+    comb_list <- lapply(
+      X = sizes,
+      FUN = function(i) utils::combn(predictors, i, simplify = FALSE)
+    )
+    return(unlist(comb_list, recursive = FALSE))
+  }
+
+  # Sampled path: draw distinct subsets directly, never building the full set.
+  local_seed(seed)
+  out <- vector("list", sample_combinations)
+  seen <- new.env(hash = TRUE, parent = emptyenv())
+  found <- 0L
+  attempts <- 0L
+  max_attempts <- 50L * sample_combinations + 1000L
+
+  while (found < sample_combinations && attempts < max_attempts) {
+    attempts <- attempts + 1L
+    # sample.int() on the index avoids sample()'s length-1 "sample from 1:x"
+    # trap, and normalizes `prob` itself.
+    k <- sizes[sample.int(length(sizes), size = 1L, prob = size_counts)]
+    idx <- sort(sample.int(n, size = k))
+    key <- paste(idx, collapse = ",")
+    if (exists(key, envir = seen, inherits = FALSE)) {
+      next
+    }
+    assign(key, TRUE, envir = seen)
+    found <- found + 1L
+    out[[found]] <- predictors[idx]
+  }
+
+  if (found < sample_combinations) {
+    stop(sprintf(
+      paste0(
+        "Could only draw %d distinct predictor combinations out of the %d ",
+        "requested in %d attempts. Lower 'sample_combinations' or raise ",
+        "'max_comb_size' to widen the pool."
+      ),
+      found, sample_combinations, attempts
+    ), call. = FALSE)
+  }
+
+  out
 }
 
 #' Fit a Bayesian model using brms
@@ -225,18 +302,57 @@ bayes_fit_model <- function(data,
   model
 }
 
+#' Is this a two-dimensional draws summary with an Estimate column?
+#'
+#' `fitted.brmsfit()` returns an n x summary matrix for univariate families,
+#' but a 3-D array for categorical, multinomial, and multivariate responses.
+#' Only the matrix form can be reduced to one fitted value per row.
+#'
+#' @param x The result of `fitted()` or `residuals()` on a brmsfit.
+#' @return `TRUE` when `x[, "Estimate"]` is meaningful.
+#' @noRd
+bayes_is_estimate_matrix <- function(x) {
+  d <- dim(x)
+  !is.null(d) && length(d) == 2L &&
+    !is.null(colnames(x)) && "Estimate" %in% colnames(x)
+}
+
 #' Append fitted metrics to data
 #'
 #' Adds fitted values and residual-based metrics to the data.table.
 #'
+#' For families whose `fitted()` is a 3-D array -- categorical, multinomial,
+#' and multivariate responses -- there is no single fitted value per row on the
+#' response scale, so no residual can be formed and in-sample MAE/RMSE are
+#' undefined. Those families are supported: the columns are simply not added
+#' and the caller reports `NA` metrics, rather than the function failing.
+#'
 #' @param data A data.table (modified by reference).
 #' @param model A brmsfit object.
-#' @return The data.table with added columns: fitted_values, residuals,
-#'   abs_residuals, squared_residuals.
+#' @param verbose Logical; explain when metrics are unavailable.
+#' @return The data.table. When the family permits it, with the added columns
+#'   `fitted_values`, `residuals`, `abs_residuals`, `squared_residuals`;
+#'   otherwise unchanged.
 #' @noRd
-bayes_add_metrics_to_data <- function(data, model) {
-  fitted_vals <- as.numeric(stats::fitted(model)[, "Estimate"])
-  resid_vals  <- as.numeric(stats::residuals(model)[, "Estimate"])
+bayes_add_metrics_to_data <- function(data, model, verbose = FALSE) {
+  fitted_raw <- stats::fitted(model)
+  resid_raw  <- stats::residuals(model)
+
+  if (!bayes_is_estimate_matrix(fitted_raw) ||
+      !bayes_is_estimate_matrix(resid_raw)) {
+    if (isTRUE(verbose)) {
+      message(
+        "This family's fitted values are not a single draws summary per row ",
+        "(categorical, multinomial, and multivariate responses give a 3-D ",
+        "array), so residuals and in-sample MAE/RMSE are undefined and are ",
+        "reported as NA. Model selection is unaffected."
+      )
+    }
+    return(data)
+  }
+
+  fitted_vals <- as.numeric(fitted_raw[, "Estimate"])
+  resid_vals  <- as.numeric(resid_raw[, "Estimate"])
 
   data[, `:=`(
     fitted_values     = fitted_vals,
@@ -795,17 +911,37 @@ fs_bayes <- function(data,
   # (bad brm_args, divergent initialisation); fitted() would then fail deep
   # inside brms, so surface an actionable error here instead.
   data_with_metrics <- tryCatch(
-    bayes_add_metrics_to_data(data.table::copy(data), best$model),
+    bayes_add_metrics_to_data(data.table::copy(data), best$model,
+                              verbose = verbose),
     error = function(e) {
-      stop("The selected model contains no usable posterior draws, so ",
-           "fitted values could not be computed (", conditionMessage(e),
-           "). This usually means sampling failed for every candidate model; ",
-           "check 'brm_args' (for example that 'warmup' is smaller than ",
-           "'iter') and the model specification.", call. = FALSE)
+      msg <- conditionMessage(e)
+      # Only claim a draws problem when that is what brms actually reported;
+      # relabelling every error here once disguised a shape mismatch as a
+      # sampling failure.
+      if (grepl("draws", msg, ignore.case = TRUE)) {
+        stop("The selected model contains no usable posterior draws, so ",
+             "fitted values could not be computed (", msg, "). This usually ",
+             "means sampling failed for every candidate model; check ",
+             "'brm_args' (for example that 'warmup' is smaller than 'iter') ",
+             "and the model specification.", call. = FALSE)
+      }
+      stop("Could not compute fitted values for the selected model: ", msg,
+           call. = FALSE)
     }
   )
-  mae  <- mean(data_with_metrics$abs_residuals, na.rm = TRUE)
-  rmse <- sqrt(mean(data_with_metrics$squared_residuals, na.rm = TRUE))
+
+  # NULL when the family has no single fitted value per row (see
+  # bayes_add_metrics_to_data), in which case these metrics are undefined.
+  mae <- if (is.null(data_with_metrics$abs_residuals)) {
+    NA_real_
+  } else {
+    mean(data_with_metrics$abs_residuals, na.rm = TRUE)
+  }
+  rmse <- if (is.null(data_with_metrics$squared_residuals)) {
+    NA_real_
+  } else {
+    sqrt(mean(data_with_metrics$squared_residuals, na.rm = TRUE))
+  }
 
   if (verbose) {
     message("MAE: ", signif(mae, 6), " | RMSE: ", signif(rmse, 6))

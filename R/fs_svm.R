@@ -289,7 +289,10 @@ svm_rfe_weights <- function(fit, features) {
       updated <- add_block(crit, pooled_x, pooled_c)
       if (!is.null(updated)) {
         crit <- updated
-        used <- 1L
+        # The pooled matrices carry every block's support vectors, so this
+        # path covers all of them; count it as complete so the
+        # partial-recovery check below does not misread it as a gap.
+        used <- min(length(xm), length(cf))
       }
     }
   }
@@ -300,6 +303,23 @@ svm_rfe_weights <- function(fit, features) {
              "fit; SVM-RFE needs a linear ('vanilladot') kernel."),
       call. = FALSE
     )
+  }
+
+  # Every block must contribute. A partially summed criterion omits whole
+  # pairwise problems, which yields a ranking that is wrong rather than
+  # merely imprecise -- the one failure mode a selection function must never
+  # have silently.
+  n_blocks <- min(length(xm), length(cf))
+  if (used < n_blocks) {
+    stop(sprintf(
+      paste0(
+        "Recovered the weight vector from only %d of %d kernlab blocks, so ",
+        "the SVM-RFE criterion would omit %d pairwise problem(s) and rank ",
+        "features incorrectly. This indicates an unexpected kernlab fit ",
+        "layout; use select_method = \"rf_rfe\" as an alternative."
+      ),
+      used, n_blocks, n_blocks - used
+    ), call. = FALSE)
   }
 
   crit[!is.finite(crit)] <- 0
@@ -446,7 +466,25 @@ svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
   criterion <- NULL
 
   while (length(remaining) > 1L) {
-    fit <- svm_rfe_ksvm(x[, remaining, drop = FALSE], y, task)
+    # The CV scorer already guards this same call. Without a guard here, a
+    # degenerate matrix (svm_center_scale() collapses constant columns to
+    # zeros, so an all-constant encoding arrives as zeros) aborts the whole
+    # call with kernlab's "No Support Vectors found" after the split, the
+    # encoding and possibly a cluster are already set up.
+    fit <- tryCatch(
+      svm_rfe_ksvm(x[, remaining, drop = FALSE], y, task),
+      error = function(e) {
+        stop(sprintf(
+          paste0(
+            "SVM-RFE could not fit a linear SVM on %d surviving predictor(s): ",
+            "%s. This usually means the encoded predictors are constant or ",
+            "near-constant, which carries no signal for a linear SVM; check ",
+            "for zero-variance columns or use select_method = \"rf_rfe\"."
+          ),
+          length(remaining), conditionMessage(e)
+        ), call. = FALSE)
+      }
+    )
     crit <- svm_rfe_weights(fit, remaining)
     if (is.null(criterion)) {
       criterion <- crit

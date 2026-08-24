@@ -45,7 +45,10 @@ their own decomposition structure.
   stronger member of a correlated group instead of deferring to a blind
   correlation heuristic.
 * `fs_bayes()` selects with `loo::loo_compare()` and a 1-SE parsimony rule
-  (`rule = "1se"`, default) instead of the raw elpd maximum.
+  (`rule = "1se"`, default) instead of the raw elpd maximum. The rule accepts
+  either container `loo_compare()` may return (matrix or data.frame); an
+  earlier `is.matrix()` guard would have silently disabled it under any loo
+  release that returns a data.frame.
 * `fs_infogain()` gained `normalize = "gain_ratio"` to correct information
   gain's bias toward high-cardinality predictors, and now discretizes the
   target once so scores are comparable across features.

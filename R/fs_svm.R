@@ -395,8 +395,18 @@ svm_rfe_cv_score <- function(x, y, task, folds) {
 #' linear SVM, keeping the size with the highest mean accuracy
 #' (classification) or the lowest mean RMSE (regression); ties go to the
 #' smaller size. The folds are drawn once and shared by every candidate size,
-#' so the comparison is paired, and drawing them consumes the RNG. If no
-#' candidate size could be scored at all (every fold failed), the full feature
+#' so the comparison is paired, and drawing them consumes the RNG.
+#'
+#' Two honest caveats about that size search. The ranking it scores was
+#' derived from all the training rows, including each fold's held-out rows, so
+#' the cross-validated scores are optimistic and should not be read as
+#' estimates of out-of-sample performance -- they are only used to compare
+#' sizes against each other. Fully nested RFE would re-rank inside every fold,
+#' at a cost of one full elimination run per fold. The predictor matrix is
+#' also centred and scaled once up front rather than per fold; that transform
+#' is unsupervised, but it does see every row. The test-set metrics that
+#' `fs_svm()` reports are unaffected: they come from rows held out before any
+#' of this runs. If no candidate size could be scored at all (every fold failed), the full feature
 #' set is kept.
 #'
 #' @param x Data frame or matrix of encoded (numeric) predictors. It is

@@ -27,7 +27,8 @@ random forest cannot fit them.}
 treated as classification, a numeric target as regression; any other type
 is an error, as is a target containing NAs.}
 
-\item{maxRuns}{Whole number >= 1. Maximum number of Boruta iterations.
+\item{maxRuns}{Whole number of at least 11 (the minimum Boruta itself
+accepts). Maximum number of Boruta iterations.
 Default 250.}
 
 \item{cutoff_features}{Optional whole number capping the number of returned

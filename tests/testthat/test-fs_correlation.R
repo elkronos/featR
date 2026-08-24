@@ -141,6 +141,22 @@ test_that("prune keeps the member with the lowest mean absolute correlation", {
   expect_setequal(res$details$redundant, c("x1", "x2"))
 })
 
+test_that("duplicated column names are rejected rather than silently resolved", {
+  # REGRESSION: pruning subsets the correlation matrix by name, so with names
+  # c("a", "a", "b") the second "a"'s correlations were replaced by a copy of
+  # the first's and setdiff() then dropped BOTH "a" columns.
+  d <- data.frame(first = c(1, 2, 3, 4), second = c(2, 4, 6, 8),
+                  third = c(1, 0, 1, 0))
+  names(d) <- c("a", "a", "b")
+
+  expect_error(fs_correlation(d, threshold = 0.9),
+               "unique column names; duplicated: a")
+  # Unique names are unaffected.
+  names(d) <- c("a", "a2", "b")
+  expect_silent(res <- fs_correlation(d, threshold = 0.9))
+  expect_s3_class(res, "fs_result")
+})
+
 test_that("fs_correlation accepts the inclusive threshold bounds", {
   d <- data.frame(a = c(1, 2, 3, 4), b = c(1.5, 0.5, 2.5, 1.0))
 

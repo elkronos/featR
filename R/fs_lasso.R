@@ -186,7 +186,17 @@ lasso_prepare <- function(x, impute) {
     stop("Internal error: predictors are not numeric after preparation.")
   }
   if (any(!is.finite(mm))) {
-    stop("Internal error: predictors contain non-finite values after preparation.")
+    # Not an internal error: Inf/-Inf/NaN in the user's data reaches here
+    # intact, so name the columns and say what to do about them.
+    bad <- colnames(mm)[apply(mm, 2L, function(col) any(!is.finite(col)))]
+    if (length(bad) == 0L) {
+      bad <- "(unnamed column)"
+    }
+    stop("Predictors contain non-finite values (Inf, -Inf, or NaN) in: ",
+         paste(utils::head(bad, 5L), collapse = ", "),
+         if (length(bad) > 5L) sprintf(" (and %d more)", length(bad) - 5L) else "",
+         ". Remove or replace those values before calling fs_lasso().",
+         call. = FALSE)
   }
 
   mm

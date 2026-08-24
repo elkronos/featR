@@ -50,6 +50,16 @@ new_fs_result <- function(selected,
     stop("'scores' must be a named numeric vector, a data.frame, or NULL.",
          call. = FALSE)
   }
+  # print() and summary() key the score table by name, so an unnamed numeric
+  # would produce a malformed table rather than a clear error.
+  if (is.numeric(scores) && length(scores) > 0L && is.null(names(scores))) {
+    stop("'scores' must be named when supplied as a numeric vector.",
+         call. = FALSE)
+  }
+  if (!is.null(task) &&
+      (length(task) != 1L || !(is.character(task) || is.na(task)))) {
+    stop("'task' must be a single string or NA.", call. = FALSE)
+  }
 
   structure(
     list(
@@ -67,18 +77,41 @@ new_fs_result <- function(selected,
 
 #' Number of features considered by a result, when knowable
 #'
-#' Prefers the number of scored features, falling back to
-#' `details$n_features`, and returns `NA_integer_` when neither is recorded.
+#' Prefers `details$n_features`, which the method records explicitly, and
+#' falls back to the number of scored features. The order matters: some
+#' methods score only a subset of the candidates (for example
+#' `caret::varImp()` on an `rfe` object reports just the optimal-size
+#' variables), so counting scores would understate how many features were
+#' actually considered and make `print()` say "Selected 2 of 2".
+#'
+#' @param x An `fs_result` object.
+#' @return A single integer, or `NA_integer_` when neither source is recorded.
 #' @noRd
 fs_result_n_considered <- function(x) {
+  n <- x$details$n_features
+  if (!is.null(n) && length(n) == 1L && is.finite(n)) {
+    return(as.integer(n))
+  }
   if (is.data.frame(x$scores)) {
     return(nrow(x$scores))
   }
   if (!is.null(x$scores)) {
     return(length(x$scores))
   }
-  n <- x$details$n_features
-  if (is.null(n)) NA_integer_ else as.integer(n)
+  NA_integer_
+}
+
+#' Do smaller scores mean stronger features for this method?
+#'
+#' Most featR methods report an importance or an association strength, where
+#' larger is better. `fs_chi()` reports adjusted p-values, where smaller is
+#' better, so the ranked display has to invert for it.
+#'
+#' @param x An `fs_result` object.
+#' @return `TRUE` when smaller scores are better.
+#' @noRd
+fs_result_lower_is_better <- function(x) {
+  identical(x$method, "chi")
 }
 
 #' Scores as a named numeric vector, when possible
@@ -205,10 +238,13 @@ print.fs_result <- function(x, n = 10L, ...) {
 #' that produce per-feature scores -- a table of every scored feature ranked
 #' by decreasing absolute score, with columns `feature`, `score` (four
 #' significant digits) and `selected` (`*` marks the features that were kept).
-#' The table is truncated to `n` rows with a "... (m more)" tail. Ranking by
-#' absolute value keeps signed scores such as regression coefficients in a
-#' sensible order; note that it puts a large p-value ahead of a small one for
-#' methods that score by p-value, where smaller is better.
+#' The table is truncated to `n` rows with a "... (m more)" tail.
+#'
+#' The ranking direction follows the method. For most methods a larger score
+#' means a stronger feature, and rows are ordered by decreasing absolute score
+#' so that signed scores such as regression coefficients sort sensibly. For
+#' methods that score by p-value, where smaller is better, rows are ordered
+#' ascending instead, so the most significant feature is listed first.
 #'
 #' @param object An `fs_result` object.
 #' @param n Maximum number of scored features to show (default 20).
@@ -231,7 +267,11 @@ summary.fs_result <- function(object, n = 20L, ...) {
 
   sv <- fs_result_score_vector(object)
   if (!is.null(sv) && length(sv) > 0L) {
-    ord <- order(abs(sv), decreasing = TRUE, na.last = TRUE)
+    ord <- if (fs_result_lower_is_better(object)) {
+      order(sv, decreasing = FALSE, na.last = TRUE)
+    } else {
+      order(abs(sv), decreasing = TRUE, na.last = TRUE)
+    }
     sv <- sv[ord]
     shown <- utils::head(sv, n)
     cat("\nScores (", length(sv), " feature",

@@ -299,7 +299,11 @@ elastic_select_best <- function(fit, metric) {
   idx <- rep(TRUE, nrow(res))
   for (nm in names(bt)) {
     if (nm %in% names(res)) {
-      idx <- idx & res[[nm]] == bt[[nm]]
+      # A tuning column can carry NA (caret records NA for a metric a fold
+      # could not compute), and `NA & TRUE` would propagate into the if()
+      # below as "missing value where TRUE/FALSE needed".
+      matched <- res[[nm]] == bt[[nm]]
+      idx <- idx & !is.na(matched) & matched
     }
   }
   if (!any(idx)) {

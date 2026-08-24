@@ -58,6 +58,77 @@ test_that("backtick wraps only non-syntactic names", {
   expect_identical(backtick(c("ok", "not ok")), c("ok", "`not ok`"))
 })
 
+# The shared fs_result container from R/fs-result.R.
+
+test_that("new_fs_result rejects inputs that print() and summary() cannot show", {
+  new_res <- featR:::new_fs_result
+
+  # An unnamed numeric scores vector would make summary()'s score table
+  # malformed rather than raise a clear error.
+  expect_error(new_res(selected = "a", scores = c(1, 2), method = "m"),
+               "must be named")
+  expect_silent(new_res(selected = "a", scores = c(a = 1, b = 2), method = "m"))
+  # Zero-length scores need no names.
+  expect_silent(new_res(selected = character(0), scores = numeric(0),
+                        method = "m"))
+
+  # A length-0 task would reach `if (is.na(x$task))` inside print().
+  expect_error(new_res(selected = "a", method = "m", task = character(0)),
+               "single string or NA")
+  expect_silent(new_res(selected = "a", method = "m", task = NA))
+  expect_silent(new_res(selected = "a", method = "m", task = NULL))
+})
+
+test_that("fs_result_n_considered prefers the recorded candidate count", {
+  n_cons <- featR:::fs_result_n_considered
+
+  # REGRESSION: some methods score only a subset of the candidates (caret's
+  # varImp on an rfe object returns just the optimal-size variables), so
+  # counting scores understated the candidate pool and print() reported
+  # "Selected 2 of 2 features" when 4 were offered.
+  partial <- featR:::new_fs_result(
+    selected = c("a", "b"), scores = c(a = 2, b = 1), method = "rfe",
+    details = list(n_features = 4L)
+  )
+  expect_identical(n_cons(partial), 4L)
+
+  # Without a recorded count, fall back to the score count.
+  no_count <- featR:::new_fs_result(
+    selected = "a", scores = c(a = 2, b = 1), method = "m"
+  )
+  expect_identical(n_cons(no_count), 2L)
+
+  # Neither available.
+  expect_true(is.na(n_cons(featR:::new_fs_result(selected = "a", method = "m"))))
+})
+
+test_that("summary() ranks p-value scores ascending and others descending", {
+  # fs_chi scores are adjusted p-values, where SMALLER is better; every other
+  # method reports a strength, where larger is better.
+  expect_true(featR:::fs_result_lower_is_better(
+    featR:::new_fs_result(selected = "a", method = "chi")
+  ))
+  expect_false(featR:::fs_result_lower_is_better(
+    featR:::new_fs_result(selected = "a", method = "boruta")
+  ))
+
+  chi <- featR:::new_fs_result(
+    selected = "sig", method = "chi",
+    scores = c(weak = 0.9, sig = 0.001, mid = 0.2)
+  )
+  chi_out <- utils::capture.output(summary(chi))
+  score_rows <- grep("^\\s*(weak|sig|mid)\\s", chi_out, value = TRUE)
+  expect_match(score_rows[1L], "sig")
+
+  imp <- featR:::new_fs_result(
+    selected = "big", method = "boruta",
+    scores = c(small = 0.1, big = 9, mid = 1)
+  )
+  imp_out <- utils::capture.output(summary(imp))
+  imp_rows <- grep("^\\s*(small|big|mid)\\s", imp_out, value = TRUE)
+  expect_match(imp_rows[1L], "big")
+})
+
 # Shared filter machinery from R/utils-filter.R, behind the `output` argument
 # of both fs_supervised() and fs_unsupervised(). Both helpers are internal,
 # hence featR:::.

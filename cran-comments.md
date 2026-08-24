@@ -19,8 +19,9 @@ Checked via GitHub Actions (r-lib/actions), all passing:
 * Ubuntu latest, R release
 * Ubuntu latest, R oldrel-1
 
-Also checked locally on macOS 26.5 (aarch64-apple-darwin23), R 4.6.1, with all
-Suggests installed except brms.
+Also checked locally on macOS 26.5 (aarch64-apple-darwin23), R 4.6.1, with
+every suggested package installed and a working Stan toolchain, so the full
+test suite runs with no skipped tests (2013 passing assertions).
 
 ## R CMD check results
 

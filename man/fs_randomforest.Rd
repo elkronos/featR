@@ -102,7 +102,7 @@ feature types are messy. The main caveat is that a forest \emph{ranks}
 rather than \emph{selects}: unless you supply \code{control$feature_select},
 \code{selected} is every predictor that reached the forest, ordered by
 importance, and choosing the cutoff is left to you. Permutation importance
-also tends to favour predictors with many distinct values and to split
+also tends to favor predictors with many distinct values and to split
 credit between correlated predictors, so treat close scores as ties.
 
 \strong{control list (every accepted entry, with its default)}:

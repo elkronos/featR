@@ -32,10 +32,11 @@ numeric and free of NA/NaN/Inf.}
 for elastic-net. \code{alpha = 0} (pure ridge) is rejected: it never sets a
 coefficient to exactly zero, so it cannot select.}
 
-\item{nfolds}{Integer > 1; default 5. Number of cross-validation folds
-passed to \code{glmnet::cv.glmnet()}. When \code{custom_folds} is supplied those
-fold IDs define the folds instead, and \code{nfolds} only bounds which IDs are
-valid.}
+\item{nfolds}{Integer >= 3; default 5. Number of cross-validation folds
+passed to \code{glmnet::cv.glmnet()}, which rejects anything smaller than 3.
+When \code{custom_folds} is supplied those fold IDs define the folds instead,
+and \code{nfolds} only bounds which IDs are valid (so \code{custom_folds} must also
+define at least 3 folds).}
 
 \item{standardize}{Logical; default TRUE. Passed to \code{glmnet::cv.glmnet()}
 and also controls the scale \code{scores} is ranked on (see Details).}

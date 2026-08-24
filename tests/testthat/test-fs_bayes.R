@@ -236,6 +236,46 @@ test_that("bayes_pick_model applies the 1se rule to a data.frame comparison", {
   expect_identical(pick(results, idx, bad_df, "1se"), 1L)
 })
 
+test_that("bayes_pick_model reads model labels from loo >= 2.10's 'model' column", {
+  # REGRESSION: loo 2.10.0 changed loo_compare() to return a data.frame that
+  # ends with `rownames(comp) <- NULL`, moving the model labels into a new
+  # "model" column. Reading rownames() there yields "1", "2", ... -- the
+  # positions of the elpd-sorted rows, not the positions in `results` -- which
+  # passed every guard and made both rules pick the wrong model. The mock below
+  # mirrors that real shape; do not give it rownames.
+  pick <- featR:::bayes_pick_model
+
+  results <- list(
+    list(preds = c("x1", "x2", "x3"), loo_val = -10.0), # highest elpd
+    list(preds = "x1",                loo_val = -10.8), # within 1 se, smallest
+    list(preds = c("x1", "x2"),       loo_val = -10.4), # within 1 se
+    list(preds = "x2",                loo_val = -30.0)  # far worse
+  )
+  idx <- 1:4
+
+  cmp <- data.frame(
+    model     = c("model1", "model3", "model2", "model4"),
+    elpd_diff = c(0, -0.4, -0.8, -20),
+    se_diff   = c(0,  1.0,  1.2,   2),
+    stringsAsFactors = FALSE
+  )
+  # loo >= 2.10.0 leaves the automatic row labels, so rownames() carries no
+  # model information at all. Assert that, so the mock cannot drift back to
+  # the pre-2.10 shape and start passing for the wrong reason.
+  expect_identical(rownames(cmp), as.character(1:4))
+
+  expect_identical(pick(results, idx, cmp, "best"), 1L)
+  expect_identical(pick(results, idx, cmp, "1se"), 2L)
+
+  # Labels that are not the "model<i>" names bayes_loo_comparison() assigns are
+  # not an invertible mapping, so both rules fall back to the raw elpd maximum
+  # rather than guessing.
+  cmp_unknown <- cmp
+  cmp_unknown$model <- c("a", "b", "c", "d")
+  expect_identical(pick(results, idx, cmp_unknown, "1se"), 1L)
+  expect_identical(pick(results, idx, cmp_unknown, "best"), 1L)
+})
+
 test_that("bayes_loo_comparison declines to compare fewer than two loo objects", {
   cmp <- featR:::bayes_loo_comparison
   results <- list(list(loo = NULL), list(loo = NULL))

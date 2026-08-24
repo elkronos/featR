@@ -50,7 +50,15 @@ unsup_scores <- function(dt,
 
     "iqr" = vapply(
       dt,
-      function(col) stats::IQR(col, na.rm = na_rm),
+      function(col) {
+        # stats::IQR() delegates to stats::quantile(), which *errors* on NAs
+        # when na.rm = FALSE instead of returning NA the way var() and mad()
+        # do. Keep the documented NA policy: an undefined score, not a crash.
+        if (!na_rm && anyNA(col)) {
+          return(NA_real_)
+        }
+        stats::IQR(col, na.rm = na_rm)
+      },
       numeric(1L)
     ),
 
@@ -110,7 +118,7 @@ unsup_scores <- function(dt,
 #' before a train/test split, since nothing about the outcome informs it. It
 #' says nothing about whether a feature is \emph{useful}: a high-variance
 #' column can be pure noise, and a low-variance one can be the best predictor
-#' you have. Use [fs_supervised()] or a model-based method for that judgement.
+#' you have. Use [fs_supervised()] or a model-based method for that judgment.
 #'
 #' Supported methods:
 #' \itemize{

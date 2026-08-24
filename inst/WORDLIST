@@ -7,8 +7,10 @@ CMRG
 Guyon
 L'Ecuyer
 MASS
+MLmetrics
 NZV
 OOB
+POSIXt
 PRROC
 PSOCK
 Preprocesses
@@ -29,12 +31,17 @@ brm
 brms
 cardinality
 casewise
+collinear
+computable
 cv
+denoising
 df
 doParallel
+downsampled
 downsamples
 downsampling
 elpd
+featR's
 foreach
 fs
 furrr
@@ -45,6 +52,7 @@ glmnet
 glmnet's
 impute
 iter
+kernlab
 mclapply
 mtcars
 pROC
@@ -57,6 +65,10 @@ randomforest
 resampled
 rfe
 sig
+treedepth
+uninterpretable
 unpruned
+unvalidated
 upsampled
 upsampling
+withr

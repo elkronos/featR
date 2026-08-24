@@ -33,7 +33,11 @@ exactly the mistake this argument exists to prevent.}
 \item{train_ratio}{Training set proportion, strictly between 0 and 1
 (default \code{0.7}).}
 
-\item{nfolds}{Number of CV folds for hyperparameter tuning, a whole number1 (default \code{5}). Also the number of folds used by the SVM-RFEsubset-size search (clamped there to at most the number of trainingrows); \code{select_method = "rf_rfe"} ignores it and uses 10 folds.}
+\item{nfolds}{Number of CV folds for hyperparameter tuning, a whole number
+greater than 1 (default \code{5}). Also the number of folds used by the
+SVM-RFE subset-size search (clamped there to at most the number of
+training rows); \code{select_method = "rf_rfe"} ignores it and uses 10
+folds.}
 
 \item{kernel}{One of \code{"linear"} (default), \code{"radial"}, or
 \code{"polynomial"}.}

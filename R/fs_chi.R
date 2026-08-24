@@ -53,8 +53,12 @@
 #'   corrected.
 #' @param p_adjust_method Character: one of `stats::p.adjust.methods`
 #'   (default "bonferroni"). Set to "none" to disable multiple-testing
-#'   correction. Matching is case-insensitive. Adjustment spans every candidate
-#'   feature, including skipped ones (whose p-value is NA and so stays NA).
+#'   correction. Matching is case-insensitive. The correction counts only the
+#'   features that were actually tested: a skipped feature has an `NA` p-value,
+#'   and `stats::p.adjust()` drops NAs before its default `n = length(p)` is
+#'   evaluated, so skipped features keep an `NA` adjusted p-value and do not
+#'   inflate the multiplier for the others. With `k` tested and `s` skipped
+#'   features, "bonferroni" therefore multiplies by `k`, not by `k + s`.
 #' @param simulation_B Whole number >= 100: replicates for the simulation-based
 #'   p-value used when any expected cell count is < 5 (default 2000).
 #' @param seed Optional integer. Seeds the RNG locally (the previous RNG state
@@ -401,8 +405,13 @@ fs_chi <- function(
 #'
 #' Matches `method` against stats::p.adjust.methods ignoring case and passes
 #' the canonical spelling on, so "bh" works as well as "BH"; anything else is
-#' an error rather than a silent fallback. NA p-values stay NA and still count
-#' towards the number of tests.
+#' an error rather than a silent fallback.
+#'
+#' NA policy: NA p-values stay NA and are NOT counted as tests. `p.adjust()`
+#' reassigns `p <- p[!is.na(p)]` before its lazily-evaluated default
+#' `n = length(p)` is first forced, so the effective number of tests is the
+#' number of non-NA p-values. Pass `n = length(pvals)` explicitly if skipped
+#' features should ever count towards the correction.
 #' @noRd
 .fs_adjust_pvalues <- function(pvals, method = "bonferroni") {
   choices <- stats::p.adjust.methods

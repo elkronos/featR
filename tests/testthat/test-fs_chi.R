@@ -143,6 +143,34 @@ test_that("fs_chi p-value adjustment is controllable and case-insensitive", {
   expect_false(any(out_nocorr$details$results$correction_applied))
 })
 
+test_that("p-value adjustment counts only the features actually tested", {
+  # Three candidate features, two of them testable. stats::p.adjust() strips
+  # NA p-values before its lazily-evaluated default n = length(p) is forced,
+  # so the bonferroni multiplier is the number of TESTS (2), not the number of
+  # candidates (3). Deterministic: every expected count is 25, so both
+  # testable features take the asymptotic path and no RNG is involved.
+  d <- data.frame(
+    f1     = factor(rep(c("A", "B"), each = 50)),  # mirrors the target
+    f2     = factor(rep(c("X", "Y"), times = 50)), # independent of the target
+    f_skip = factor(rep("only", 100)),             # one level -> skipped
+    target = factor(rep(c("Y", "N"), each = 50))
+  )
+
+  out <- fs_chi(d, "target")
+  res <- out$details$results
+
+  expect_identical(out$details$n_features, 3L)
+  expect_true(all(res$method[!is.na(res$method)] == "asymptotic"))
+
+  skipped <- res[res$feature == "f_skip", , drop = FALSE]
+  expect_true(is.na(skipped$p_value))
+  expect_true(is.na(skipped$adj_p_value))
+
+  tested <- res[!is.na(res$p_value), , drop = FALSE]
+  expect_identical(nrow(tested), 2L)
+  expect_equal(tested$adj_p_value, pmin(1, 2 * tested$p_value))
+})
+
 test_that("fs_chi simulation path is triggered, seeded, and skips degenerate features", {
   n <- 20
   d <- data.frame(

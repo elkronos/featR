@@ -10,7 +10,8 @@
 #' @param y The extracted target vector.
 #' @param target Name of the target column, used in error messages.
 #' @param alpha A numeric value in (0, 1]; 1 = lasso, (0, 1) = elastic net.
-#' @param nfolds Integer > 1 specifying the number of CV folds.
+#' @param nfolds Integer >= 3 specifying the number of CV folds (the smallest
+#'   value `glmnet::cv.glmnet()` accepts).
 #' @param standardize Logical; whether glmnet should standardize predictors.
 #' @param custom_folds Optional integer vector of fold IDs (one per row of
 #'   `data`).
@@ -40,7 +41,9 @@ lasso_validate <- function(y, target, alpha, nfolds, standardize, custom_folds,
     stop("'alpha' must be a numeric value in (0, 1].", call. = FALSE)
   }
 
-  assert_count(nfolds, "nfolds", lower = 2L)
+  # glmnet::cv.glmnet() itself refuses nfolds < 3 ("nfolds must be bigger than
+  # 3"), so reject it here with a message that names featR's own argument.
+  assert_count(nfolds, "nfolds", lower = 3L)
 
   assert_flag(standardize, "standardize")
   assert_flag(parallel, "parallel")
@@ -375,10 +378,11 @@ lasso_importance <- function(coefs) {
 #' @param alpha Numeric in (0, 1]; default 1 (lasso). Use values in (0, 1)
 #'   for elastic-net. `alpha = 0` (pure ridge) is rejected: it never sets a
 #'   coefficient to exactly zero, so it cannot select.
-#' @param nfolds Integer > 1; default 5. Number of cross-validation folds
-#'   passed to `glmnet::cv.glmnet()`. When `custom_folds` is supplied those
-#'   fold IDs define the folds instead, and `nfolds` only bounds which IDs are
-#'   valid.
+#' @param nfolds Integer >= 3; default 5. Number of cross-validation folds
+#'   passed to `glmnet::cv.glmnet()`, which rejects anything smaller than 3.
+#'   When `custom_folds` is supplied those fold IDs define the folds instead,
+#'   and `nfolds` only bounds which IDs are valid (so `custom_folds` must also
+#'   define at least 3 folds).
 #' @param standardize Logical; default TRUE. Passed to `glmnet::cv.glmnet()`
 #'   and also controls the scale `scores` is ranked on (see Details).
 #' @param custom_folds Optional integer vector of fold IDs (one per row of
@@ -494,7 +498,15 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
   if (isTRUE(standardize)) {
     sds <- apply(x_dense, 2L, stats::sd)
     sds[!is.finite(sds)] <- 0
-    scores_df <- lasso_importance(coefs_raw * sds[names(coefs_raw)])
+    # Multiply positionally, not by name: model.matrix() can emit duplicate
+    # column names (a factor's level dummy colliding with another column), and
+    # sds[names(coefs_raw)] would then hand the first match's SD to every
+    # duplicate. Both vectors are in design-matrix column order by
+    # construction, so position is the reliable key.
+    if (length(sds) != length(coefs_raw)) {
+      stop("Internal error: standard-deviation and coefficient vectors have different lengths.")
+    }
+    scores_df <- lasso_importance(coefs_raw * unname(sds))
   } else {
     scores_df <- importance_raw
   }

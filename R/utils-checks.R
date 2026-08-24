@@ -84,11 +84,20 @@ assert_number <- function(x, arg, lower = -Inf, upper = Inf) {
 #'
 #' Invisibly returns `as.integer(x)`, so callers can write
 #' `n <- assert_count(n, "n")` to validate and coerce in one step.
+#'
+#' Wholeness is tested with `trunc()`, not `as.integer()`: a value beyond
+#' `.Machine$integer.max` coerces to `NA` (with a coercion warning) and would
+#' otherwise put `NA` into `if ()`. Such values are rejected with their own
+#' message, since the return value has to be a representable integer.
 #' @noRd
 assert_count <- function(x, arg, lower = 1L) {
   assert_number(x, arg, lower = lower)
-  if (x != as.integer(x)) {
+  if (x != trunc(x)) {
     stop(sprintf("'%s' must be a whole number.", arg), call. = FALSE)
+  }
+  if (abs(x) > .Machine$integer.max) {
+    stop(sprintf("'%s' must be at most %d.", arg, .Machine$integer.max),
+         call. = FALSE)
   }
   invisible(as.integer(x))
 }

@@ -1,3 +1,4 @@
+ANOVA
 AbsCoefficient
 Barnhill
 Boruta
@@ -5,6 +6,7 @@ Boruta's
 CMRG
 Guyon
 L'Ecuyer
+MASS
 NZV
 OOB
 PRROC
@@ -25,6 +27,7 @@ bonferroni
 boruta
 brm
 brms
+cardinality
 casewise
 cv
 df
@@ -40,8 +43,10 @@ generalizable
 ggplot
 glmnet
 glmnet's
+impute
 iter
 mclapply
+mtcars
 pROC
 pbapply
 pearson
@@ -49,6 +54,7 @@ prcomp
 preprocesses
 randomForest
 randomforest
+resampled
 rfe
 sig
 unpruned

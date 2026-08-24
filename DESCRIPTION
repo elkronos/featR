@@ -15,7 +15,9 @@ Description: Filter, wrapper, and embedded feature-selection methods behind a
     functions that use them.
 License: MIT + file LICENSE
 Encoding: UTF-8
+Language: en-US
 Roxygen: list(markdown = TRUE)
+RoxygenNote: 8.1.0
 Config/roxygen2/version: 8.1.0
 Depends:
     R (>= 4.1.0)

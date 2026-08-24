@@ -51,7 +51,7 @@ for \code{"pearson"}/\code{"spearman"}/\code{"kendall"}, per pair
 for \code{"polychoric"}. If \code{FALSE} (default), missing values
 propagate NA into the affected correlations, except for
 \code{"polychoric"}, which stops with an error when missing values are
-present (silently deleting cases would contradict the behaviour of the
+present (silently deleting cases would contradict the behavior of the
 other methods). Default \code{FALSE}.}
 
 \item{sample_frac}{Numeric in (0, 1]. Fraction of rows to sample before computing

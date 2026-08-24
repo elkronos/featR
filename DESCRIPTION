@@ -50,5 +50,5 @@ Suggests:
     RSpectra,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
-URL: https://github.com/elkronos/feature_selection
-BugReports: https://github.com/elkronos/feature_selection/issues
+URL: https://github.com/elkronos/featR
+BugReports: https://github.com/elkronos/featR/issues

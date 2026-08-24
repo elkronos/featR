@@ -104,10 +104,22 @@ test_that("fs_chi separates associated from independent features (asymptotic pat
   expect_setequal(names(out$scores), c("f_strong", "f_noise"))
   expect_identical(unname(out$scores), res$adj_p_value)
 
-  # deterministic 2x2 tables with large counts: asymptotic test, df = 1,
-  # auto Yates correction, all expected cell counts exactly 50
+  # deterministic 2x2 tables with large counts: asymptotic test, df = 1, all
+  # expected cell counts exactly 50.
   expect_true(all(res$method == "asymptotic"))
-  expect_true(all(res$correction_applied))
+  # correction_applied reports what stats::chisq.test() actually did, not what
+  # was requested. It computes YATES <- min(0.5, abs(x - E)), so:
+  #   f_strong is 100/0/0/100 against expectations of 50, giving |x - E| = 50,
+  #     so the 0.5 correction is applied; while
+  #   f_noise alternates against a blocked target, giving a 50/50/50/50 table
+  #     that sits exactly at expectation, so |x - E| = 0 and R corrects by
+  #     nothing at all.
+  # An earlier all(correction_applied) assertion passed only because the flag
+  # echoed the request rather than the outcome.
+  expect_identical(
+    res$correction_applied[match(c("f_strong", "f_noise"), res$feature)],
+    c(TRUE, FALSE)
+  )
   expect_identical(res$df, c(1, 1))
   expect_identical(res$n, c(200L, 200L))
   expect_identical(res$min_expected, c(50, 50))
@@ -232,4 +244,41 @@ test_that("fs_chi returns an empty, well-formed fs_result without factor feature
   expect_identical(out$selected, character(0))
   expect_length(out$scores, 0L)
   expect_output(print(out), "Selected 0 of 0")
+})
+
+test_that("correction_applied reports what chisq.test actually did", {
+  # REGRESSION: the flag echoed what featR requested. stats::chisq.test()
+  # computes YATES <- min(0.5, abs(x - E)), so a 2x2 table sitting exactly at
+  # expectation gets no correction even when one is asked for, and the row
+  # claimed correction_applied = TRUE beside an uncorrected p-value.
+  at_expectation <- data.frame(
+    f      = factor(rep(c("A", "B"), each = 50)),
+    target = factor(rep(c("Y", "N"), 50))
+  )
+  # Every cell is 25, so observed equals expected exactly.
+  expect_identical(
+    as.vector(table(at_expectation$f, at_expectation$target)),
+    c(25L, 25L, 25L, 25L)
+  )
+
+  out <- fs_chi(at_expectation, "target")
+  row <- out$details$results[out$details$results$feature == "f", ]
+  expect_identical(row$method, "asymptotic")
+  # R applied no correction here, so featR must not claim one.
+  expect_false(row$correction_applied)
+  expect_equal(row$p_value, 1)
+
+  # A 2x2 table away from expectation does get corrected, and says so.
+  skewed <- data.frame(
+    f      = factor(rep(c("A", "B"), each = 50)),
+    target = factor(c(rep("Y", 40), rep("N", 10), rep("Y", 10), rep("N", 40)))
+  )
+  out2 <- fs_chi(skewed, "target")
+  row2 <- out2$details$results[out2$details$results$feature == "f", ]
+  expect_true(row2$correction_applied)
+  expect_lt(row2$p_value, 0.05)
+  # Disabling it is still honoured.
+  out3 <- fs_chi(skewed, "target", continuity_correction = FALSE)
+  row3 <- out3$details$results[out3$details$results$feature == "f", ]
+  expect_false(row3$correction_applied)
 })

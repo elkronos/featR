@@ -56,6 +56,12 @@ ig_bins <- function(x) {
 
   fd_bins <- ceiling(range_x / fd_bin_width)
   bins <- max(fd_bins, ig_sturges_bins(n))
+  # A tiny IQR beside a large range (a near-constant column with one extreme
+  # outlier) drives the Freedman-Diaconis count arbitrarily high. Unbounded,
+  # as.integer() would return NA past .Machine$integer.max and cut() would
+  # then fail with "invalid number of intervals". More bins than observations
+  # cannot describe the data anyway, so cap there.
+  bins <- min(bins, max(2L, n))
   max(2L, as.integer(bins))
 }
 
@@ -110,6 +116,21 @@ ig_expand_dates <- function(df, exclude = character(), remove_original = TRUE) {
   date_cols <- cand[vapply(dt[, cand, with = FALSE], ig_is_date_like, logical(1L))]
 
   if (length(date_cols) > 0L) {
+    # The expansion writes <col>_year/_month/_day. If any of those names is
+    # already taken, data.table::set() would overwrite that column in place --
+    # silently, and including the target, whose discretization happens
+    # afterwards. Refuse instead of corrupting the input.
+    new_names <- as.vector(outer(date_cols, c("_year", "_month", "_day"),
+                                 paste0))
+    clashes <- intersect(new_names, names(dt))
+    if (length(clashes) > 0L) {
+      stop("Expanding the date column(s) ",
+           paste(date_cols, collapse = ", "),
+           " would overwrite existing column(s): ",
+           paste(utils::head(clashes, 5L), collapse = ", "),
+           if (length(clashes) > 5L) ", ..." else "",
+           ". Rename them before calling fs_infogain().", call. = FALSE)
+    }
     for (col in date_cols) {
       lt <- as.POSIXlt(dt[[col]])
       data.table::set(dt, j = paste0(col, "_year"), value = lt$year + 1900L)

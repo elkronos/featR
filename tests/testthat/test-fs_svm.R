@@ -560,3 +560,42 @@ test_that("select_method = 'rf_rfe' keeps the random-forest screening path", {
   expect_null(res$details$selection$sizes)
   expect_s3_class(res$details$performance, "confusionMatrix")
 })
+
+test_that("SVM-RFE ranks a regression target (eps-svr weight extraction)", {
+  # COVERAGE: every prior SVM-RFE test used a factor target, so the eps-svr
+  # branch of svm_rfe_weights() -- where kernlab returns a bare xmatrix and
+  # coef rather than one block per pairwise problem -- had never executed.
+  skip_on_cran()
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+
+  t <- svm_rfe_toy()
+  d <- data.frame(
+    y  = 3 * t$x1 - 2 * t$x2,   # driven entirely by x1 and x2
+    x1 = t$x1,
+    x2 = t$x2,
+    n1 = t$n1,                  # pure noise by construction
+    n2 = t$n2
+  )
+
+  res <- fs_svm(
+    d, "y", "regression",
+    nfolds = 3, kernel = "linear",
+    tune_grid = data.frame(C = 1),
+    feature_select = TRUE, select_method = "svm_rfe",
+    seed = 5
+  )
+
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$task, "regression")
+  sel <- res$details$selection
+  expect_identical(sel$method, "svm_rfe")
+  # The two genuine drivers must outrank the two noise columns.
+  expect_setequal(sel$ranking[1:2], c("x1", "x2"))
+  expect_setequal(sel$ranking[3:4], c("n1", "n2"))
+  # Weights are real numbers for every predictor, not NA from a failed
+  # extraction, and the criterion is non-negative (it is w^2).
+  expect_true(all(is.finite(sel$scores)))
+  expect_true(all(sel$scores >= 0))
+  expect_identical(names(res$details$performance), c("RMSE", "Rsquared", "MAE"))
+})

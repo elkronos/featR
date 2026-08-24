@@ -594,6 +594,10 @@ fs_elastic <- function(data,
       list(pcaComp = nPCs)
     )
   }
+  # caret defaults allowParallel to TRUE, which would dispatch resamples to
+  # whatever foreach backend the caller happens to have registered even when
+  # featR created no cluster. Tie it to what featR actually set up.
+  trControl$allowParallel <- n_cores > 1L
 
   elastic_message(
     if (n_cores > 1L) "Training models (parallel)..." else "Training models...",

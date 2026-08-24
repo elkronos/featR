@@ -125,6 +125,27 @@ their own decomposition structure.
   large-data engine's own limit.
 * `fs_randomforest()` replaces only the `NA` entries of a per-class
   `control$sampsize`, instead of discarding the sizes that were supplied.
+* `fs_infogain()` refuses to expand a date column when the resulting
+  `<col>_year`/`_month`/`_day` name already exists. Previously that column was
+  overwritten in place, silently, including when it was the target.
+* `fs_infogain()` caps the automatic bin count at the number of observations.
+  A near-constant column beside one extreme outlier drove the
+  Freedman-Diaconis count past the integer range, which became `NA` and made
+  `cut()` fail with "invalid number of intervals".
+* `fs_chi()` reports `correction_applied` from what `stats::chisq.test()`
+  actually did. A 2x2 table sitting exactly at expectation receives no Yates
+  correction even when one is requested, and the row previously claimed
+  otherwise.
+* `fs_correlation()` registers its cluster teardown before registering the
+  parallel backend, so a failure there cannot leak the cluster, and restores
+  the caller's own foreach backend instead of forcing sequential execution.
+* `fs_elastic()` sets `allowParallel` from whether featR created a cluster.
+  caret's default of `TRUE` meant a single-worker call would dispatch
+  resamples to whatever backend the caller had registered elsewhere.
+* `fs_svm()`'s `min_keep` is a floor rather than a quota: when random-forest
+  RFE fails, the fallback keeps every predictor with positive impurity
+  importance and only drops to `min_keep` top-ranked predictors if fewer
+  qualify. It previously returned exactly one predictor.
 
 * `fs_mars()` no longer fails on every call (a data.table was indexed with the
   matrix returned by `caret::createDataPartition()`).

@@ -1,8 +1,9 @@
 # Tests for fs_pca(). The decomposition runs through stats::prcomp() for
 # anything under 1e7 cells, and the tidying only needs data.table (an Import),
 # so every test below runs unconditionally except the blocks that build a
-# ggplot, which are gated on the 'ggplot2' Suggest. The bigstatsr branch is
-# unreachable with fixtures this small.
+# ggplot, which are gated on the 'ggplot2' Suggest. The bigstatsr branch needs
+# a 1e7-cell input, so it has its own block at the end of this file, gated on
+# bigstatsr and skipped on CRAN because of the memory and time it takes.
 #
 # Post-unification conventions exercised here: verbose defaults to FALSE and is
 # the last argument, and plot defaults to FALSE unconditionally (it no longer
@@ -242,9 +243,9 @@ test_that("fs_pca validates data, num_pc and label_col", {
   # request, so the decomposition would depend on the size of the input.
   expect_error(fs_pca(d, scale_data = TRUE, center_data = FALSE),
                "not supported")
-  # Either half alone is fine.
-  expect_silent(fs_pca(d, scale_data = FALSE, center_data = FALSE))
-  expect_silent(fs_pca(d, scale_data = TRUE, center_data = TRUE))
+  # Either half alone is fine, and both still produce a usable result.
+  expect_type(fs_pca(d, scale_data = FALSE, center_data = FALSE), "list")
+  expect_type(fs_pca(d, scale_data = TRUE, center_data = TRUE), "list")
   expect_error(fs_pca(d, label_col = "absent"),
                "Column 'absent' not found in 'data'")
   expect_error(fs_pca(d, label_col = 1), "'label_col' must be a single non-empty")
@@ -348,4 +349,69 @@ test_that("fs_pca leaves the caller's RNG state untouched", {
   rng_before <- .Random.seed
   invisible(fs_pca(pca_toy(), num_pc = 2, verbose = FALSE))
   expect_identical(.Random.seed, rng_before)
+})
+
+test_that("the bigstatsr branch reports variance against TOTAL variance", {
+  skip_on_cran()
+  skip_if_not_installed("bigstatsr")
+
+  # The large-data engine is chosen at >= 1e7 cells, so this is the smallest
+  # input that reaches it: 10000 x 1000 = 1e7 doubles, about 80 MB.
+  #
+  # REGRESSION: big_SVD() returns only the top-k singular values, so the
+  # original code divided by sum(d^2) over the RETAINED components. That made
+  # every proportion inflated and forced them to sum to exactly 1 no matter how
+  # few components were kept. Two of 1000 components cannot account for all the
+  # variance of data built like this, so the sum being well under 1 is the
+  # assertion that catches it.
+  n <- 10000L
+  p <- 1000L
+  set.seed(42)
+  # Two structured directions (loadings 10 and 5) over isotropic noise loud
+  # enough that they cannot account for nearly all the variance: each rank-1
+  # term contributes about loading^2 * p to the total column variance
+  # (1e5 and 2.5e4), and the noise contributes sd^2 * p = 1e5. So the two
+  # retained components should land near 125000 / 225000, comfortably clear of
+  # both 0 and 1.
+  u1 <- stats::rnorm(n); u2 <- stats::rnorm(n)
+  v1 <- stats::rnorm(p); v2 <- stats::rnorm(p)
+  X <- 10 * outer(u1, v1) + 5 * outer(u2, v2) +
+    matrix(stats::rnorm(n * p, sd = 10), nrow = n)
+  d <- as.data.frame(X)
+  rm(X, u1, u2, v1, v2)
+
+  res2 <- fs_pca(d, num_pc = 2, scale_data = FALSE, center_data = TRUE,
+                 verbose = FALSE)
+
+  # It really took the large-data path: loadings keep their feature names,
+  # which the original big-branch code dropped.
+  expect_identical(rownames(res2$pc_loadings), names(d))
+  expect_identical(dim(res2$pc_loadings), c(p, 2L))
+  expect_identical(nrow(res2$pc_scores), n)
+
+  ve2 <- res2$var_explained
+  expect_length(ve2, 2L)
+  expect_true(all(ve2 > 0 & ve2 <= 1))
+  expect_gt(ve2[1L], ve2[2L])           # ordered by decreasing variance
+  # PC1 carries roughly four times PC2 (loadings 10 vs 5).
+  expect_gt(ve2[1L] / ve2[2L], 2)
+
+  # THE REGRESSION ASSERTION. The original code divided by the sum of squares
+  # of the RETAINED singular values only, which forced the shares to sum to
+  # exactly 1 however few components were kept. Two properties separate that
+  # from a correct total-variance denominator, and neither depends on knowing
+  # the variance structure:
+  #   (a) the sum is strictly below 1 when components are left out, and
+  #   (b) it strictly increases as more components are retained.
+  # Under the bug, both sums would be exactly 1 and (b) would fail.
+  res4 <- fs_pca(d, num_pc = 4, scale_data = FALSE, center_data = TRUE,
+                 verbose = FALSE)
+  ve4 <- res4$var_explained
+  expect_length(ve4, 4L)
+  expect_lt(sum(ve2), 1)
+  expect_lt(sum(ve4), 1)
+  expect_gt(sum(ve4), sum(ve2))
+  # The first two shares must agree between the two runs: they are proportions
+  # of the same total, not of whatever was retained.
+  expect_equal(ve4[1:2], ve2, tolerance = 1e-6)
 })

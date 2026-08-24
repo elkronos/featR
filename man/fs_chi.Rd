@@ -35,8 +35,12 @@ corrected.}
 
 \item{p_adjust_method}{Character: one of \code{stats::p.adjust.methods}
 (default "bonferroni"). Set to "none" to disable multiple-testing
-correction. Matching is case-insensitive. Adjustment spans every candidate
-feature, including skipped ones (whose p-value is NA and so stays NA).}
+correction. Matching is case-insensitive. The correction counts only the
+features that were actually tested: a skipped feature has an \code{NA} p-value,
+and \code{stats::p.adjust()} drops NAs before its default \code{n = length(p)} is
+evaluated, so skipped features keep an \code{NA} adjusted p-value and do not
+inflate the multiplier for the others. With \code{k} tested and \code{s} skipped
+features, "bonferroni" therefore multiplies by \code{k}, not by \code{k + s}.}
 
 \item{simulation_B}{Whole number >= 100: replicates for the simulation-based
 p-value used when any expected cell count is < 5 (default 2000).}

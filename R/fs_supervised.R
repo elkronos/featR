@@ -46,7 +46,9 @@ sup_score_correlation <- function(dt, y, na_rm) {
 #'
 #' @param dt data.table of numeric feature columns.
 #' @param y Categorical target vector (coerced to factor).
-#' @param na_rm Single flag; drop NA pairs per feature before scoring.
+#' @param na_rm Single flag; drop NA pairs per feature before scoring. When
+#'   `FALSE`, an NA anywhere in the feature or the target makes that feature's
+#'   score `NA`.
 #' @return Numeric vector of F statistics, NA where undefined.
 #' @noRd
 sup_score_anova <- function(dt, y, na_rm) {
@@ -59,6 +61,14 @@ sup_score_anova <- function(dt, y, na_rm) {
         col2 <- col[idx]
         y2 <- y_fac[idx]
       } else {
+        # stats::lm()'s default na.action drops incomplete rows silently, so
+        # handing it the raw column would make na_rm = FALSE behave exactly
+        # like na_rm = TRUE. The documented contract is that an NA anywhere in
+        # the feature or the target makes the score undefined, which is what
+        # stats::cor(use = "everything") already does on the correlation path.
+        if (anyNA(col) || anyNA(y_fac)) {
+          return(NA_real_)
+        }
         col2 <- col
         y2 <- y_fac
       }

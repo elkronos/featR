@@ -125,7 +125,13 @@ rfe_importance_scores <- function(var_imp) {
 #' (the target is excluded). Uses `fullRank = TRUE` so downstream models do
 #' not receive a rank-deficient all-levels design.
 #'
-#' @param train_df Training data.frame.
+#' Categorical predictors must already be factors: `dummyVars()` stores levels
+#' only for columns where `is.factor()` is TRUE, and anything else is re-levelled
+#' from the data passed to `predict()`, which would defeat the point of fitting
+#' the encoder on the training rows.
+#'
+#' @param train_df Training data.frame, character/logical predictors already
+#'   converted to factors carrying the training levels.
 #' @param target Target column name.
 #' @return A fitted `dummyVars` object.
 #' @noRd
@@ -582,6 +588,29 @@ fs_recursivefeature <- function(data,
   rfe_message(sprintf("Training on %d rows; holding out %d rows.",
                       length(train_idx), length(test_idx)), verbose)
 
+  # Coerce character/logical predictors to factor (levels from the training
+  # rows) and align the test columns to those levels, so RFE, prediction, and
+  # final training all see consistent types.
+  #
+  # This must happen BEFORE the one-hot encoder is fitted:
+  # `caret::dummyVars()` records levels (its `lvls` field) only for columns
+  # that are already factors -- it tests `is.factor()` on the raw data -- and
+  # `predict.dummyVars()` passes exactly those levels to `model.frame(xlev =)`.
+  # A character or logical column handed over un-coerced therefore has its
+  # levels re-derived from whatever `newdata` happens to contain, so the "fitted
+  # on the training rows only" encoder would silently be refitted on the test
+  # rows: different dummy columns, a different base level, or a different width,
+  # all with an unchanged row count.
+  for (nm in setdiff(colnames(train_raw), target)) {
+    if (is.character(train_raw[[nm]]) || is.logical(train_raw[[nm]])) {
+      train_raw[[nm]] <- factor(train_raw[[nm]])
+    }
+    if (is.factor(train_raw[[nm]])) {
+      test_raw[[nm]] <- factor(test_raw[[nm]],
+                               levels = levels(train_raw[[nm]]))
+    }
+  }
+
   preproc <- NULL
   if (handle_categorical) {
     preproc <- rfe_fit_encoder(train_raw, target = target)
@@ -591,18 +620,6 @@ fs_recursivefeature <- function(data,
     pred_names <- setdiff(colnames(train_raw), target)
     train_df <- train_raw[, c(target, pred_names), drop = FALSE]
     test_df <- test_raw[, c(target, pred_names), drop = FALSE]
-  }
-
-  # Coerce character/logical predictors to factor (levels from the training
-  # rows) and align the test columns to those levels, so RFE, prediction, and
-  # final training all see consistent types.
-  for (nm in setdiff(colnames(train_df), target)) {
-    if (is.character(train_df[[nm]]) || is.logical(train_df[[nm]])) {
-      train_df[[nm]] <- factor(train_df[[nm]])
-    }
-    if (is.factor(train_df[[nm]])) {
-      test_df[[nm]] <- factor(test_df[[nm]], levels = levels(train_df[[nm]]))
-    }
   }
 
   n_features <- length(setdiff(colnames(train_df), target))

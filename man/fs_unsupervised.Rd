@@ -106,7 +106,7 @@ missing, or columns with too few distinct values -- and it is safe to run
 before a train/test split, since nothing about the outcome informs it. It
 says nothing about whether a feature is \emph{useful}: a high-variance
 column can be pure noise, and a low-variance one can be the best predictor
-you have. Use \code{\link[=fs_supervised]{fs_supervised()}} or a model-based method for that judgement.
+you have. Use \code{\link[=fs_supervised]{fs_supervised()}} or a model-based method for that judgment.
 
 Supported methods:
 \itemize{

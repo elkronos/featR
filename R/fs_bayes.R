@@ -325,9 +325,11 @@ bayes_evaluate_combination <- function(preds,
 #' @param idx Integer positions in `results` that are usable (fitted model and
 #'   a finite elpd).
 #' @return The `loo::loo_compare()` table (a matrix or data.frame depending on
-#'   the loo version), whose rownames are `"model<i>"` for the corresponding
-#'   position `i` in `results`, or NULL when fewer than two comparable models
-#'   exist or the comparison fails.
+#'   the loo version), labelled `"model<i>"` for the corresponding position `i`
+#'   in `results`. Where those labels live is version dependent: loo <= 2.9 put
+#'   them in the rownames, loo >= 2.10.0 returns a data.frame with no rownames
+#'   and a `"model"` column instead. Returns NULL when fewer than two
+#'   comparable models exist or the comparison fails.
 #' @noRd
 bayes_loo_comparison <- function(results, idx) {
   if (length(idx) < 2L) {
@@ -352,7 +354,8 @@ bayes_loo_comparison <- function(results, idx) {
 #'
 #' @param results List of `bayes_evaluate_combination()` results.
 #' @param idx Integer positions in `results` that are usable.
-#' @param comparison A `loo::loo_compare()` matrix, or NULL.
+#' @param comparison A `loo::loo_compare()` table (matrix or data.frame,
+#'   depending on the loo version), or NULL.
 #' @param rule "1se" or "best".
 #' @return A single integer position in `results`, or `NA_integer_` when
 #'   `idx` is empty.
@@ -380,10 +383,25 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
     return(raw_best)
   }
 
-  row_idx <- suppressWarnings(
-    as.integer(sub("^model", "", rownames(comparison)))
-  )
-  if (length(row_idx) == 0L || anyNA(row_idx) || !all(row_idx %in% idx)) {
+  # Which position in `results` each comparison row refers to. loo <= 2.9
+  # carried bayes_loo_comparison()'s "model<i>" labels in the rownames; loo
+  # >= 2.10.0 returns a data.frame that ends with `rownames(comp) <- NULL`
+  # and puts the labels in a "model" column instead. Reading rownames() there
+  # yields "1", "2", ... -- positions in the elpd-sorted table, not positions
+  # in `results` -- which passed every guard below and made both rules select
+  # the wrong model. So take the labels from the "model" column when it is
+  # present, and insist they really are "model<i>" names before trusting them:
+  # anything else is not a mapping we can invert, so fall back to raw_best.
+  labels <- if ("model" %in% colnames(comparison)) {
+    as.character(comparison[, "model"])
+  } else {
+    rownames(comparison)
+  }
+  if (length(labels) == 0L || !all(grepl("^model[0-9]+$", labels))) {
+    return(raw_best)
+  }
+  row_idx <- as.integer(sub("^model", "", labels))
+  if (anyNA(row_idx) || !all(row_idx %in% idx)) {
     return(raw_best)
   }
 

@@ -185,16 +185,24 @@ mars_train_control <- function(number, repeats, search, train, target,
   is_class <- is.factor(y)
   is_binary <- is_class && length(levels(y)) == 2L
 
-  # Select summary function
+  # Select summary function. caret::multiClassSummary() calls
+  # requireNamespaceQuietStop("MLmetrics") whenever class probabilities are
+  # available (they always are here, since classProbs is TRUE for
+  # classification), and MLmetrics is only a Suggests of caret -- so its
+  # availability, not caret's export list, is what decides whether that summary
+  # can be used at all.
   if (is_binary && requireNamespace("pROC", quietly = TRUE)) {
     summary_fun <- caret::twoClassSummary
   } else if (is_class &&
              !is_binary &&
-             "multiClassSummary" %in% getNamespaceExports("caret")) {
+             requireNamespace("MLmetrics", quietly = TRUE) &&
+             requireNamespace("pROC", quietly = TRUE)) {
     summary_fun <- caret::multiClassSummary
   } else {
     if (is_binary) {
       mars_message("Optional package 'pROC' not installed; using accuracy-based resampling summary instead of ROC.", verbose)
+    } else if (is_class) {
+      mars_message("Optional package 'MLmetrics' not installed; using accuracy-based resampling summary instead of caret::multiClassSummary().", verbose)
     }
     summary_fun <- caret::defaultSummary
   }

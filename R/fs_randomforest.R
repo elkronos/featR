@@ -98,7 +98,7 @@ rf_apply_feature_select <- function(train_df, target, fun) {
 #' rather than \emph{selects}: unless you supply `control$feature_select`,
 #' `selected` is every predictor that reached the forest, ordered by
 #' importance, and choosing the cutoff is left to you. Permutation importance
-#' also tends to favour predictors with many distinct values and to split
+#' also tends to favor predictors with many distinct values and to split
 #' credit between correlated predictors, so treat close scores as ties.
 #'
 #' @param data A data.frame or data.table with at least one row and one column,

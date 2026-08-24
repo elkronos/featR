@@ -54,7 +54,10 @@ test_that("validation rejects bad data/target/alpha/nfolds before any Suggests a
 
   expect_error(fs_lasso(d, "y", alpha = 0), "numeric value in \\(0, 1\\]")
   expect_error(fs_lasso(d, "y", alpha = 1.5), "numeric value in \\(0, 1\\]")
-  expect_error(fs_lasso(d, "y", nfolds = 1), "between 2 and Inf")
+  # glmnet::cv.glmnet() refuses nfolds < 3, so featR rejects it up front rather
+  # than letting glmnet complain about an argument the caller did not set.
+  expect_error(fs_lasso(d, "y", nfolds = 1), "between 3 and Inf")
+  expect_error(fs_lasso(d, "y", nfolds = 2), "between 3 and Inf")
   expect_error(fs_lasso(d, "y", seed = 1.5), "single whole number")
   expect_error(fs_lasso(d, "y", return_model = "yes"), "TRUE or FALSE")
   expect_error(fs_lasso(d, "y", standardize = NA), "TRUE or FALSE")

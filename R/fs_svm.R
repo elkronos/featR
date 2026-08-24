@@ -815,9 +815,10 @@ svm_stop_parallel <- function(cl) {
 #' @param train_ratio Training set proportion, strictly between 0 and 1
 #'   (default \code{0.7}).
 #' @param nfolds Number of CV folds for hyperparameter tuning, a whole number
-#'   > 1 (default \code{5}). Also the number of folds used by the SVM-RFE
-#'   subset-size search (clamped there to at most the number of training
-#'   rows); \code{select_method = "rf_rfe"} ignores it and uses 10 folds.
+#'   greater than 1 (default \code{5}). Also the number of folds used by the
+#'   SVM-RFE subset-size search (clamped there to at most the number of
+#'   training rows); \code{select_method = "rf_rfe"} ignores it and uses 10
+#'   folds.
 #' @param kernel One of \code{"linear"} (default), \code{"radial"}, or
 #'   \code{"polynomial"}.
 #' @param tune_grid Optional tuning grid data frame. If \code{NULL}, a

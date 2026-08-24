@@ -8,6 +8,8 @@ test_that("assert helpers validate correctly", {
   expect_error(assert_number(2, "n", upper = 1), "between")
   expect_identical(assert_count(3, "k"), 3L)
   expect_error(assert_count(2.5, "k"), "whole number")
+  # beyond the integer range: a clear error, not NA reaching if ()
+  expect_error(assert_count(3e9, "k"), "must be at most")
   expect_error(assert_data_frame(1, "data"), "data.frame")
   expect_error(assert_target(data.frame(a = 1), "b"), "not found")
 })

@@ -66,6 +66,26 @@ their own decomposition structure.
 
 ## Bug fixes
 
+* `fs_bayes()` reads the model labels `loo::loo_compare()` produces from its
+  `model` column when present, falling back to row names. loo 2.10.0 moved
+  those labels out of the row names, which would otherwise have made the
+  selection rule map comparison rows to the wrong candidate models.
+* `fs_recursivefeature()` coerces character and logical predictors to factors
+  *before* fitting the one-hot encoder, so the encoder is not silently refitted
+  on the test rows (`caret::dummyVars()` records levels only for columns that
+  are already factors).
+* `fs_supervised()` honors `na_rm = FALSE` on the ANOVA path, where
+  `stats::lm()`'s own NA handling previously made it behave like
+  `na_rm = TRUE`.
+* `fs_unsupervised()` returns an undefined score rather than an error for
+  `method = "iqr"` with `na_rm = FALSE`.
+* `fs_lasso()` computes standardized scores by position rather than by column
+  name, so a design matrix with duplicated names cannot pair a coefficient with
+  the wrong standard deviation. Its `nfolds` minimum is now 3, matching glmnet.
+* `fs_mars()` checks for MLmetrics before selecting caret's multi-class
+  summary, instead of a test that could never fail; multi-class targets no
+  longer fail after the resamples have been computed.
+
 * `fs_mars()` no longer fails on every call (a data.table was indexed with the
   matrix returned by `caret::createDataPartition()`).
 * `fs_mars()` sanitizes factor levels with `make.names(unique = TRUE)`, so

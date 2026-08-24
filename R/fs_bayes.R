@@ -368,8 +368,15 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
   n_pred <- vapply(results[idx], function(x) length(x$preds), integer(1L))
   raw_best <- idx[order(-elpd, n_pred)][1L]
 
-  if (is.null(comparison) || !is.matrix(comparison) ||
-      !all(c("elpd_diff", "se_diff") %in% colnames(comparison))) {
+  # loo::loo_compare() has returned a matrix in some loo versions and a
+  # data.frame in others. Test for a two-dimensional object with the columns
+  # we need rather than for a specific container class: gating on is.matrix()
+  # here silently disabled the whole 1se rule under any loo release that
+  # returns a data.frame.
+  usable <- !is.null(comparison) &&
+    !is.null(dim(comparison)) &&
+    all(c("elpd_diff", "se_diff") %in% colnames(comparison))
+  if (!usable) {
     return(raw_best)
   }
 

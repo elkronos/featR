@@ -205,6 +205,37 @@ test_that("bayes_pick_model implements the 1se and best rules", {
   expect_identical(pick(results, integer(0), comparison, "1se"), NA_integer_)
 })
 
+test_that("bayes_pick_model applies the 1se rule to a data.frame comparison", {
+  # REGRESSION: loo::loo_compare() returns a matrix in some loo versions and a
+  # data.frame in others. An earlier is.matrix() guard silently disabled the
+  # whole 1se rule whenever loo returned a data.frame, so the documented
+  # default behaved exactly like rule = "best". Both containers must work.
+  pick <- featR:::bayes_pick_model
+
+  results <- list(
+    list(preds = c("x1", "x2", "x3"), loo_val = -10.0),
+    list(preds = "x1",                loo_val = -10.8),
+    list(preds = c("x1", "x2"),       loo_val = -10.4),
+    list(preds = "x2",                loo_val = -30.0)
+  )
+  idx <- 1:4
+
+  cmp_df <- data.frame(
+    elpd_diff = c(0, -0.4, -0.8, -20),
+    se_diff   = c(0,  1.0,  1.2,   2),
+    row.names = c("model1", "model3", "model2", "model4")
+  )
+
+  # The parsimonious-within-1-SE model, not the raw elpd maximum
+  expect_identical(pick(results, idx, cmp_df, "1se"), 2L)
+  expect_identical(pick(results, idx, cmp_df, "best"), 1L)
+
+  # A two-dimensional object missing the required columns still falls back
+  bad_df <- data.frame(a = 1:2, b = 3:4,
+                       row.names = c("model1", "model2"))
+  expect_identical(pick(results, idx, bad_df, "1se"), 1L)
+})
+
 test_that("bayes_loo_comparison declines to compare fewer than two loo objects", {
   cmp <- featR:::bayes_loo_comparison
   results <- list(list(loo = NULL), list(loo = NULL))

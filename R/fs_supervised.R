@@ -193,6 +193,15 @@ sup_scores <- function(dt,
 #' column of `data` except `target` is scored against the target, and
 #' features are selected or dropped by comparing that score to `threshold`.
 #'
+#' This is one of the cheapest supervised screens in featR: no predictive
+#' model is fitted, each feature is scored on its own, and the cost is linear
+#' in the number of columns, so it scales to wide data. The flip side is that
+#' scoring is strictly univariate: it cannot see interactions between
+#' features, and it will happily keep a whole group of near-duplicate columns
+#' that all correlate with the target. Use [fs_correlation()] to prune that
+#' redundancy afterwards, or a wrapper such as [fs_recursivefeature()] or
+#' [fs_svm()] when the joint contribution is what matters.
+#'
 #' Supported methods:
 #' \itemize{
 #'   \item \code{"correlation"}: Absolute Pearson correlation (numeric
@@ -214,36 +223,50 @@ sup_scores <- function(dt,
 #'
 #' @param data A data.frame, data.table, or matrix containing `target` and
 #'   the candidate feature columns. Every column other than `target` must be
-#'   numeric.
+#'   numeric. The input is copied, never modified in place.
 #' @param target Character. Name of the target column in `data`. It is
-#'   removed from the candidate features and used as the scoring target.
-#' @param method One of \code{"auto"}, \code{"correlation"}, \code{"anova"}.
+#'   removed from the candidate features and used as the scoring target. The
+#'   target column itself may be numeric, factor, character, or logical; any
+#'   other type is an error.
+#' @param method One of \code{"auto"} (default), \code{"correlation"},
+#'   \code{"anova"}.
 #' @param threshold Non-negative, finite numeric scalar threshold applied to
-#'   the feature scores (not to the target directly). Default 0.
-#' @param direction One of \code{"above"}, \code{"below"}; compares scores to
-#'   \code{threshold}.
-#' @param action One of \code{"keep"}, \code{"remove"}; determines whether
-#'   features meeting the condition are retained or dropped.
+#'   the feature scores (not to the target directly). Default 0. Note that the
+#'   two methods put scores on different scales: \code{[0, 1]} for
+#'   \code{"correlation"} and \code{[0, Inf)} for \code{"anova"}.
+#' @param direction One of \code{"above"} (default), \code{"below"}; compares
+#'   scores to \code{threshold}.
+#' @param action One of \code{"keep"} (default), \code{"remove"}; determines
+#'   whether features meeting the condition are retained or dropped.
 #' @param include_equal Logical; if TRUE, comparisons are inclusive
-#'   (greater/less than or equal) instead of strict.
-#' @param na_rm Logical; if TRUE, rows with NA in a feature or in the target
-#'   are dropped when computing that feature's score.
+#'   (greater/less than or equal) instead of strict. Default FALSE.
+#' @param na_rm Logical; if TRUE (the default), rows with NA in a feature or
+#'   in the target are dropped when computing that feature's score. If FALSE,
+#'   an NA anywhere in a feature or the target makes that feature's score
+#'   undefined.
 #' @param output One of \code{"result"} (default), \code{"matrix"},
 #'   \code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
-#'   \code{"names"}, \code{"list"}.
+#'   \code{"names"}, \code{"list"}. Throughout, "candidate features" means the
+#'   columns of `data` other than `target`, in their original order.
 #'   \itemize{
 #'     \item \code{"result"} (default): an \code{fs_result} object (see
 #'       Value).
-#'     \item \code{"matrix"}: numeric matrix of selected features.
-#'     \item \code{"dt"}: data.table of selected features.
-#'     \item \code{"data.frame"}: data.frame of selected features.
-#'     \item \code{"mask"}: logical vector, one element per candidate feature.
-#'     \item \code{"indices"}: integer vector of selected column indices,
-#'       indexing the candidate features (that is, `data` without `target`).
-#'     \item \code{"names"}: character vector of selected column names.
-#'     \item \code{"list"}: list with components:
-#'       \code{filtered} (matrix), \code{mask}, \code{indices}, \code{names},
-#'       \code{scores}, and \code{meta}.
+#'     \item \code{"matrix"}: numeric matrix of the selected features.
+#'     \item \code{"dt"}: data.table of the selected features.
+#'     \item \code{"data.frame"}: data.frame of the selected features.
+#'     \item \code{"mask"}: logical vector, one element per candidate feature,
+#'       named after the candidate features; TRUE marks a selected column.
+#'     \item \code{"indices"}: integer vector of the selected column indices,
+#'       indexing the candidate features (that is, `data` without `target`),
+#'       named after the selected columns.
+#'     \item \code{"names"}: character vector of the selected column names.
+#'     \item \code{"list"}: list with components \code{filtered} (matrix),
+#'       \code{mask}, \code{indices}, \code{names}, \code{scores} (all as
+#'       above), and \code{meta}, a list recording \code{method_arg} (the
+#'       method as requested), \code{method_used} (the method after
+#'       \code{"auto"} was resolved), \code{threshold}, \code{direction},
+#'       \code{action}, \code{include_equal}, \code{na_rm},
+#'       \code{n_input_cols}, and \code{n_kept_cols}.
 #'   }
 #' @param verbose Logical; emit progress messages. Default FALSE.
 #'
@@ -258,16 +281,21 @@ sup_scores <- function(dt,
 #'     \item `task`: `"regression"` for a numeric target,
 #'       `"classification"` for a factor target, `NA` otherwise.
 #'     \item `model`: `NULL`.
-#'     \item `details`: a list holding `mask`, `indices`, `filtered` (the
-#'       filtered data.table), `threshold`, `direction`, `action`, and
-#'       `n_features` (the number of candidate features).
+#'     \item `details`: a list holding, in this order, `mask` (the logical
+#'       keep-mask over the candidate features), `indices` (the selected
+#'       column indices, named after the selected columns), `filtered` (the
+#'       selected columns as a data.table), `threshold`, `direction`,
+#'       `action`, and `n_features` (the number of candidate features, that
+#'       is `ncol(data) - 1`).
 #'     \item `call`: the matched call.
 #'   }
 #'   Any other `output` returns that shape instead, exactly as documented
 #'   above. When no feature meets the selection criteria, a warning is issued
-#'   and the tabular shapes (\code{"matrix"}, \code{"dt"},
-#'   \code{"data.frame"}) are returned with zero columns while preserving the
-#'   input row count.
+#'   and the tabular shapes come back empty: \code{"matrix"} and
+#'   \code{"data.frame"} have zero columns and keep the input row count, while
+#'   the \code{"dt"} shape (and `details$filtered`) is only guaranteed to have
+#'   zero columns -- data.table represents a zero-column table as having zero
+#'   rows, so its row count is not preserved.
 #'
 #' @examples
 #' df <- data.frame(

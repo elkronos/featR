@@ -10,9 +10,10 @@
 #' meet the condition, `"remove"` selects the features that do not.
 #'
 #' NA policy: features with undefined (NA) scores are NEVER selected, under
-#' both `action = "keep"` and `action = "remove"`. When any score is NA a
+#' both `action = "keep"` and `action = "remove"` -- negating the comparison
+#' must not turn an unknown score into a selection. When any score is NA a
 #' single warning reports how many features were excluded, listing up to five
-#' of their names.
+#' of their names (or their positions, when `scores` is unnamed).
 #'
 #' All scalar arguments are validated by the exported callers before this
 #' helper runs.
@@ -59,13 +60,21 @@ filter_mask <- function(scores, threshold, direction, action,
 
 #' Shape the result of a filter-based feature selection
 #'
-#' Single implementation of the seven output shapes shared by
-#' `fs_supervised()` (its `out` argument) and `fs_unsupervised()` (its
-#' `output` argument). Columns are subset by integer index, never by name, so
-#' duplicated column names cannot select the wrong columns. Empty selections
-#' preserve the input row count: an `nrow(dt)` x 0 result for the `"matrix"`,
-#' `"dt"`, and `"data.frame"` shapes alike (for `"dt"`, subject to
-#' data.table's own representation of zero-column tables).
+#' Single implementation of the seven output shapes shared by the `output`
+#' argument of `fs_supervised()` and `fs_unsupervised()`. Those front ends
+#' handle their eighth shape, `"result"`, themselves; they call this helper
+#' twice on the way (for `"names"` and `"dt"`) to fill the `fs_result`.
+#'
+#' Columns are subset by integer index, never by name, so duplicated column
+#' names cannot select the wrong columns, and `mask` is trusted to be aligned
+#' to `dt` positionally.
+#'
+#' Empty selections: `"matrix"` and `"data.frame"` (and the `filtered` element
+#' of `"list"`) are `nrow(dt)` x 0, so the input row count survives. The `"dt"`
+#' shape is only guaranteed to have zero columns, because data.table
+#' represents a zero-column table as having zero rows. `"mask"` comes back
+#' all-FALSE, and `"indices"` and `"names"` come back as empty integer and
+#' character vectors.
 #'
 #' @param dt data.table holding all candidate feature columns.
 #' @param scores Named numeric vector of per-feature scores.

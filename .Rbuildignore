@@ -2,8 +2,6 @@
 ^CRAN_REVIEW\.md$
 ^CHANGES\.md$
 ^cran-comments\.md$
-^API_SPEC\.md$
-^legacy-tests$
 ^\.Rproj\.user$
 ^.*\.Rproj$
 ^\.github$

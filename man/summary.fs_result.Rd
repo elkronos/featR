@@ -17,7 +17,17 @@
 \code{object}, invisibly. Called for its printed output.
 }
 \description{
-Summarize a featR result
+Prints the result, the call that produced it, and a ranked score table.
+}
+\details{
+Everything \code{print()} shows, then the recorded call, then -- for methods
+that produce per-feature scores -- a table of every scored feature ranked
+by decreasing absolute score, with columns \code{feature}, \code{score} (four
+significant digits) and \code{selected} (\code{*} marks the features that were kept).
+The table is truncated to \code{n} rows with a "... (m more)" tail. Ranking by
+absolute value keeps signed scores such as regression coefficients in a
+sensible order; note that it puts a large p-value ahead of a small one for
+methods that score by p-value, where smaller is better.
 }
 \examples{
 res <- fs_unsupervised(

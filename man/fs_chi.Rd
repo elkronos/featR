@@ -21,20 +21,25 @@ fs_chi(
 \item{data}{A data.frame or data.table with features and target. Character
 columns are coerced to factor. The input object is never modified.}
 
-\item{target}{Character scalar: name of the target column.}
+\item{target}{Character scalar: name of the target column. It is coerced to
+a factor if necessary and must have at least 2 non-NA levels.}
 
 \item{sig_level}{Numeric threshold for significance, strictly between 0
 and 1 (default 0.05).}
 
-\item{continuity_correction}{NULL/TRUE/FALSE: apply Yates correction for 2x2.
-If NULL (default), auto-apply when table is 2x2.}
+\item{continuity_correction}{NULL/TRUE/FALSE: apply Yates correction to 2x2
+tables tested asymptotically. If NULL (default), auto-apply to every such
+table; TRUE is equivalent, FALSE disables it. It has no effect on tables
+larger than 2x2 or on simulation-based p-values, neither of which is ever
+corrected.}
 
 \item{p_adjust_method}{Character: one of \code{stats::p.adjust.methods}
 (default "bonferroni"). Set to "none" to disable multiple-testing
-correction. Matching is case-insensitive.}
+correction. Matching is case-insensitive. Adjustment spans every candidate
+feature, including skipped ones (whose p-value is NA and so stays NA).}
 
-\item{simulation_B}{Whole number >= 100: replicates for simulation-based
-p-values when expected counts are low (default 2000).}
+\item{simulation_B}{Whole number >= 100: replicates for the simulation-based
+p-value used when any expected cell count is < 5 (default 2000).}
 
 \item{seed}{Optional integer. Seeds the RNG locally (the previous RNG state
 is restored on exit), which makes simulation-based p-values reproducible
@@ -43,7 +48,8 @@ L'Ecuyer-CMRG parallel streams (\code{furrr_options(seed = TRUE)}), so for the
 same \code{seed} parallel results are internally reproducible but differ from
 sequential results. Default NULL (never seeds).}
 
-\item{verbose}{Logical; if TRUE, prints informative messages. Default FALSE.}
+\item{verbose}{Logical; if TRUE, emits informative messages (target
+coercion, skipped features, worker count). Default FALSE.}
 
 \item{parallel}{Logical; if TRUE, run features in parallel using the
 suggested furrr and future packages. Default FALSE (sequential).}
@@ -58,20 +64,26 @@ An object of class \code{fs_result} with:
 \describe{
 \item{selected}{Character vector of features with
 adj_p_value < sig_level.}
-\item{scores}{Named numeric vector of adjusted p-values, one per tested
-feature (smaller is stronger evidence of association).}
+\item{scores}{Named numeric vector of adjusted p-values, one per candidate
+categorical feature and \code{NA} for any feature that had to be skipped
+(smaller is stronger evidence of association).}
 \item{method}{"chi".}
 \item{task}{"classification".}
 \item{model}{NULL; the chi-square filter fits no model.}
-\item{details}{A list with \code{results} (the full results data.frame: one
-row per feature with feature; n (for tested features, the number of
-complete feature-target pairs; for skipped features, the feature's
-non-NA row count); df (NA for simulation-based tests, where the
-asymptotic degrees of freedom do not apply); p_value; adj_p_value;
-significant; method ("asymptotic" or "simulation");
-correction_applied (TRUE/FALSE); min_expected (minimum expected cell
-count)), plus \code{sig_level}, \code{p_adjust_method}, and \code{n_features} (the
-number of categorical features tested).}
+\item{details}{A list with \code{results} (the full results data.frame, one row
+per candidate categorical feature, ordered by adj_p_value then
+p_value so that skipped features sort last, with columns: feature;
+n (for tested features, the number of complete feature-target pairs;
+for skipped features, the feature's non-NA row count); df (NA for
+simulation-based tests, where the asymptotic degrees of freedom do
+not apply, and for skipped features); p_value; adj_p_value;
+significant (TRUE only when adj_p_value < sig_level, so FALSE for
+skipped features); method ("asymptotic" or "simulation", NA when
+skipped); correction_applied (TRUE/FALSE, NA when skipped);
+min_expected (minimum expected cell count, NA when skipped)), plus
+\code{sig_level}, \code{p_adjust_method} (the method string as supplied), and
+\code{n_features} (the number of candidate categorical features,
+including any that were skipped).}
 \item{call}{The matched call.}
 }
 }
@@ -81,6 +93,32 @@ via the chi-square test of independence. Character columns are automatically
 coerced to factors, and only factor features (excluding the target) are tested.
 Handles missing values per-feature, switches to simulation-based p-values
 when any expected cell count is < 5, and supports multiple-testing correction.
+}
+\details{
+The question this answers is, per feature: does the joint distribution of
+that feature and the target differ from what independence would predict?
+Features are examined one at a time, so the result describes marginal
+association only. It says nothing about interactions, and two features
+carrying the same information are both reported as significant. Only factor
+features are tested: numeric, logical and date columns are ignored entirely,
+so convert or discretize them first if you want them included.
+
+Each feature is tested on its own complete cases (rows where both the
+feature and the target are observed), so \code{n} can differ between features.
+Levels left empty after that filtering are dropped; if either the feature or
+the target then has fewer than two levels, the feature is skipped with an
+\code{NA} p-value rather than tested.
+
+A feature is tested with the asymptotic chi-square statistic when every
+expected cell count is at least 5. Otherwise the p-value comes from a
+Monte-Carlo simulation with \code{simulation_B} replicates, which makes it
+stochastic unless \code{seed} is set and leaves \code{df} as \code{NA}. Yates' continuity
+correction applies only on the asymptotic path and only to 2x2 tables; it is
+never applied to a simulated p-value or to a larger table, whatever
+\code{continuity_correction} says.
+
+Finally, a p-value is evidence against independence, not an effect size:
+with enough rows a negligible association still clears any \code{sig_level}.
 }
 \examples{
 d <- data.frame(

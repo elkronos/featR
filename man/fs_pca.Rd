@@ -18,25 +18,30 @@ fs_pca(
 \item{data}{A data.frame or data.table with at least two rows and at least
 one numeric column.}
 
-\item{num_pc}{Number of principal components to retain, or \code{NULL} (the
-default) to retain \code{min(2, max_possible)} where \code{max_possible} is
-\code{min(nrow - 1, ncol)} of the usable numeric data. Explicit values larger
-than \code{max_possible} raise an error.}
+\item{num_pc}{Number of principal components to retain: a whole number
+\verb{>= 1}, or \code{NULL} (the default) to retain \code{min(2, max_possible)}.
+\code{max_possible} is \code{min(nrow - 1, ncol)} of the \emph{usable} numeric data, that
+is after incomplete rows and zero-variance columns have been dropped.
+Explicit values larger than \code{max_possible} raise an error.}
 
 \item{scale_data}{Logical; scale numeric columns to unit variance.
 Default \code{TRUE}.}
 
 \item{center_data}{Logical; center numeric columns. Default \code{TRUE}.}
 
-\item{label_col}{Optional name of a column used to label and color points;
-the column is excluded from the PCA features.}
+\item{label_col}{Optional single string naming a column of \code{data} used to
+label and color points. The column is excluded from the PCA features but
+carried into \code{pca_df}. Default \code{NULL}, which means no labels and therefore
+no plot.}
 
 \item{plot}{Logical; if \code{TRUE}, the PC1 vs PC2 scatterplot is printed.
-Default \code{FALSE}, unconditionally: it no longer depends on whether
+Default \code{FALSE}, unconditionally: it does not depend on whether
 \code{label_col} was supplied. The plot object is returned in \verb{$plot} either
 way whenever one can be built (see Details).}
 
-\item{verbose}{Logical; emit progress messages. Default \code{FALSE}.}
+\item{verbose}{Logical; emit progress messages (the non-numeric columns held
+back as labels, which engine was chosen, and any fallback from
+'bigstatsr'). Default \code{FALSE}.}
 }
 \value{
 A plain list. \code{fs_pca()} is dimensionality reduction rather than
@@ -44,35 +49,60 @@ feature selection, so it returns its own PCA structure and not the
 \code{fs_result} object produced by the package's selection functions. The
 components are:
 \itemize{
-\item \code{pc_loadings}: matrix of variable loadings (features x PCs).
-\item \code{pc_scores}: matrix of observation scores (rows kept x PCs).
-\item \code{var_explained}: proportion of total variance per retained PC
-(see Details for the large-data engine).
-\item \code{pca_df}: data.table of scores plus label columns.
-\item \code{meta}: list with \code{numeric_cols}, \code{rows_kept}, \code{n_rows_used},
-\code{n_cols_used}.
-\item \code{plot}: the ggplot object; present only when a plot could be built.
+\item \code{pc_loadings}: numeric matrix of variable loadings, one row per
+surviving numeric feature and one column per retained PC, with the
+feature names as row names and \code{PC1}, \code{PC2}, ... as column names.
+\item \code{pc_scores}: numeric matrix of observation scores, one row per kept
+observation and one column per retained PC.
+\item \code{var_explained}: numeric vector of length \code{num_pc}, the proportion
+of total variance carried by each retained PC (see Details, especially
+for the large-data engine).
+\item \code{pca_df}: data.table of the scores with the label columns (every
+character/factor column, plus \code{label_col}) bound alongside, restricted
+to the rows that were kept.
+\item \code{meta}: list with \code{numeric_cols} (the features actually
+decomposed), \code{rows_kept} (logical vector over the rows of \code{data}),
+\code{n_rows_used}, and \code{n_cols_used}.
+\item \code{plot}: the ggplot object. Present only when a plot could be built,
+that is when \code{label_col} was supplied, at least two PCs were retained,
+and 'ggplot2' is available. Absent otherwise, so test for it with
+\code{"plot" \%in\% names(res)} rather than assuming it is there.
 }
 }
 \description{
-Runs a PCA on the numeric columns of \code{data}. Character and factor columns
-are excluded from the feature set and kept as label candidates; an
-explicitly supplied \code{label_col} (numeric or not) is likewise excluded from
-the features and only used for labeling. Rows with missing values in the
-numeric columns and zero-variance columns are dropped before the
-decomposition.
+Answers "how much of the spread in these numeric columns lives in a handful
+of directions, and which columns drive them?" Runs a PCA on the numeric
+columns of \code{data}. Character and factor columns are excluded from the
+feature set and kept as label candidates; an explicitly supplied \code{label_col}
+(numeric or not) is likewise excluded from the features and only used for
+labeling. Rows with missing values in the numeric columns and zero-variance
+columns are dropped before the decomposition.
 }
 \details{
-For small data (fewer than 1e7 cells) the decomposition uses
-\code{stats::prcomp()}. For larger data it uses \code{bigstatsr::big_SVD()} on a
-temporary file-backed matrix (the backing file is deleted on exit) when the
-suggested package 'bigstatsr' is installed; otherwise it falls back to
-\code{prcomp()} with a message.
+The caveat is what PCA is. This is unsupervised dimensionality reduction,
+not feature selection: every component is a linear combination of \emph{all} the
+retained numeric columns, chosen without reference to any outcome. A PCA
+therefore does not shorten the list of variables you have to measure, and
+the leading components are the highest-variance directions, which need not
+be the ones related to a response.
 
-\code{var_explained} always reports the proportion of \emph{total} variance
-explained by each retained component. With the 'bigstatsr' engine only the
-retained components are computed, so the entries do not sum to 1 (they sum
-to the fraction of variance captured by those components).
+Data with fewer than 1e7 cells is decomposed with \code{stats::prcomp()}. From
+1e7 cells up, \code{bigstatsr::big_SVD()} runs on a temporary file-backed matrix
+(the backing file is deleted when the call returns) if the suggested package
+'bigstatsr' is installed; otherwise the call falls back to \code{prcomp()}, which
+is reported only when \code{verbose = TRUE}.
+
+\code{var_explained} reports the proportion of \emph{total} variance explained by each
+retained component under both engines, so it sums to 1 only when every
+available component is retained; with the default two components it sums to
+the fraction those two capture. The engines obtain that denominator
+differently. \code{prcomp()} computes every component, so the total is the sum of
+all the eigenvalues. \code{big_SVD()} computes only the top \code{num_pc} singular
+values, which are \emph{not} the whole spectrum, so the total variance is
+recovered separately from the column statistics of the (implicitly centered
+and scaled) matrix. Under the 'bigstatsr' engine in particular, read the
+entries as shares of the whole and never as shares of the components that
+happened to be computed.
 
 \code{plot} controls printing only, never construction. Whenever a plot can be
 built at all (a \code{label_col} was supplied, at least two components were
@@ -90,11 +120,11 @@ head(res$pca_df)
 
 \donttest{
 if (requireNamespace("ggplot2", quietly = TRUE)) {
-  # nothing is printed, but the ggplot object is still there
+  # plot = FALSE (the default) draws nothing, but $plot is built anyway
   res <- fs_pca(iris, label_col = "Species", verbose = TRUE)
-  res$plot
+  print(inherits(res$plot, "ggplot"))
 
-  # plot = TRUE prints it as well
+  # plot = TRUE draws it as well
   res <- fs_pca(iris, label_col = "Species", plot = TRUE)
 }
 }

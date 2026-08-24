@@ -91,6 +91,8 @@ test_that("bayes_validate_data catches missing or mistyped columns (helper-level
                "At least one predictor column")
   expect_error(featR:::bayes_validate_data(d, "y", c("x1", "zz")),
                "Missing predictor columns: zz")
+  expect_error(featR:::bayes_validate_data(d, "y", c("y", "x1")),
+               "must not also appear in 'predictors'")
   expect_error(featR:::bayes_validate_data(d, "y", "x1", date_col = "when"),
                "Date column 'when' not found")
 

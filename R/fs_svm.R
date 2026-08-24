@@ -4,8 +4,8 @@
 
 #' Validate inputs for the SVM workflow
 #'
-#' `task` and `kernel` are validated in fs_svm() before this runs, so a typo
-#' fails immediately rather than after expensive work.
+#' `task`, `kernel`, and `select_method` are validated in fs_svm() before this
+#' runs, so a typo fails immediately rather than after expensive work.
 #'
 #' @param data Data frame with predictors and the target.
 #' @param target String naming the target column.
@@ -394,19 +394,28 @@ svm_rfe_cv_score <- function(x, y, task, folds) {
 #' ladder of candidate sizes with `nfolds`-fold cross-validation on the same
 #' linear SVM, keeping the size with the highest mean accuracy
 #' (classification) or the lowest mean RMSE (regression); ties go to the
-#' smaller size.
+#' smaller size. The folds are drawn once and shared by every candidate size,
+#' so the comparison is paired, and drawing them consumes the RNG. If no
+#' candidate size could be scored at all (every fold failed), the full feature
+#' set is kept.
 #'
 #' @param x Data frame or matrix of encoded (numeric) predictors. It is
 #'   centered and scaled internally.
 #' @param y Factor (classification) or numeric (regression) outcome.
 #' @param task "classification" or "regression".
-#' @param nfolds Number of folds for the subset-size search.
+#' @param nfolds Number of folds for the subset-size search, clamped to at
+#'   least 2 and at most `length(y)`.
 #' @param n_features Optional whole number; when supplied the top
-#'   `n_features` ranked features are kept and no size search is run.
+#'   `n_features` ranked features are kept (capped at the number available)
+#'   and no size search is run.
 #' @param verbose Logical; report each elimination step.
-#' @return A list with `selected`, `ranking` (most to least important),
-#'   `scores` (the `w^2` criterion from the full-feature fit), `sizes`,
-#'   `size_scores`, and `size_metric`.
+#' @return A list with `selected` (the retained features, most important
+#'   first), `ranking` (every feature, most to least important), `scores` (the
+#'   `w^2` criterion from the first, full-feature fit, in the original column
+#'   order), `sizes` and `size_scores` (the candidate sizes and their CV
+#'   scores) and `size_metric` ("accuracy" or "RMSE"). The last three are
+#'   `NULL`, `NULL`, and `NA_character_` when `n_features` was supplied and no
+#'   size search ran.
 #' @noRd
 svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
                          verbose = FALSE) {
@@ -541,17 +550,27 @@ svm_rf_importance <- function(rfe_obj, features) {
 #' Random-forest recursive feature elimination on encoded predictors
 #'
 #' Note: this is random-forest RFE (`caret::rfFuncs`) used as a screening step
-#' for the SVM; it is NOT SVM-RFE (see `svm_rfe_rank()`). When `rfe()` errors
-#' or selects nothing, it falls back with a warning to the top random-forest
-#' importance features.
+#' for the SVM; it is NOT SVM-RFE (see `svm_rfe_rank()`). Every subset size
+#' from 1 to `ncol(x_enc)` is offered to `rfe()`, and the reported scores are
+#' the per-resample importances it recorded, averaged per predictor.
+#'
+#' When `rfe()` errors or selects nothing, it falls back with a warning to a
+#' plain `randomForest` fit and keeps the `min_keep` most important predictors
+#' by mean decrease in node impurity (`randomForest::importance(type = 2)`);
+#' the scores reported in that case are those impurity values, not the
+#' resampled ones.
 #'
 #' @param x_enc Data frame of encoded (numeric) predictors.
 #' @param y Outcome vector.
-#' @param rfe_folds Number of CV folds for RFE.
-#' @param min_keep Minimum number of predictors returned by the fallback.
+#' @param rfe_folds Number of CV folds for RFE. Default 10; `fs_svm()` does
+#'   not pass its own `nfolds` here.
+#' @param min_keep Number of predictors the fallback keeps: the top `min_keep`
+#'   by importance, capped at the number available. It does not constrain the
+#'   `rfe()` path, which ignores it.
 #' @param allow_parallel Logical; let RFE use a registered foreach backend.
 #' @return A list with `selected` (character), `scores` (named numeric aligned
-#'   to the encoded predictors) and `fallback` (logical).
+#'   to the encoded predictors, `NA` where no importance was recorded) and
+#'   `fallback` (logical).
 #' @noRd
 svm_feature_selection <- function(x_enc,
                                   y,
@@ -716,21 +735,48 @@ svm_stop_parallel <- function(cl) {
 #' via cross-validation. Optional parallel training uses an explicit worker
 #' count.
 #'
+#' This is the wrapper to reach for when the selector and the final model
+#' should belong to the same family: SVM-RFE ranks features by the weights of
+#' a linear SVM rather than by an external proxy criterion, and the returned
+#' object carries the tuned model and its held-out performance alongside the
+#' chosen features. That comes at a price -- a full SVM fit at every
+#' elimination step, plus a cross-validated size search -- so on wide data
+#' screen first with a filter such as \code{\link{fs_supervised}}.
+#'
 #' @details
 #' \itemize{
 #'   \item Feature selection (\code{feature_select = TRUE}) defaults to
 #'     \strong{SVM-RFE} (Guyon, Weston, Barnhill and Vapnik, 2002). A linear
 #'     SVM is fitted on the centered and scaled encoded training matrix, the
-#'     features are ranked by the squared primal weight \code{w^2}, the
-#'     lowest-ranked feature is dropped (the lowest 10\% while more than 50
-#'     features remain), and the SVM is \emph{refitted} on the reduced set
-#'     until one feature is left. Reversing the elimination order gives the
-#'     ranking, so rank 1 is the feature eliminated last. SVM-RFE requires
-#'     \code{kernel = "linear"}; combining it with another kernel is an error.
+#'     features are ranked by the squared primal weight \code{w^2} (recovered
+#'     from the fit's support vectors and coefficients, summed over the
+#'     pairwise problems of a multi-class fit), the lowest-ranked feature is
+#'     dropped (the lowest 10\% while more than 50 features remain), and the
+#'     SVM is \emph{refitted} on the reduced set until one feature is left.
+#'     Reversing the elimination order gives the ranking, so rank 1 is the
+#'     feature eliminated last. SVM-RFE requires \code{kernel = "linear"},
+#'     because the ranking criterion is the primal weight vector, which only
+#'     exists for a linear kernel; combining it with another kernel is an
+#'     error that points at \code{select_method = "rf_rfe"}. The elimination
+#'     and size-search fits use a fixed cost of \code{C = 1} and are separate
+#'     from the final model, which is tuned over \code{tune_grid}.
+#'   \item How many features SVM-RFE keeps: with \code{n_features} supplied,
+#'     exactly that many (the top of the ranking). Otherwise a short ladder of
+#'     candidate sizes -- the powers of two up to the number of features, plus
+#'     the full size, trimmed to at most six entries but always including 1
+#'     and the full size -- is scored by \code{nfolds}-fold cross-validation
+#'     with the same linear SVM, on folds shared by every candidate size. The
+#'     winner is the size with the highest mean accuracy (classification) or
+#'     the lowest mean RMSE (regression), ties going to the smaller size; if
+#'     no size could be scored, all features are kept.
 #'   \item \code{select_method = "rf_rfe"} keeps the older random-forest
-#'     screening (\code{caret::rfFuncs}) and works with every kernel. If
-#'     \code{rfe()} fails or selects nothing, the top random-forest importance
-#'     features are used instead, with a warning.
+#'     screening (\code{caret::rfFuncs}) and works with every kernel. It runs
+#'     its own 10-fold cross-validation over subset sizes 1 to p, independent
+#'     of \code{nfolds}. If \code{rfe()} fails or selects nothing, a plain
+#'     random forest is fitted and its most important features are used
+#'     instead, with a warning -- and because the fallback keeps exactly
+#'     \code{n_features} of them, a failure with \code{n_features = NULL}
+#'     leaves a single feature.
 #'   \item Selection always runs on the training split only, so the test set
 #'     never informs which features survive.
 #'   \item Class-imbalance handling (\code{class_imbalance = TRUE},
@@ -754,10 +800,14 @@ svm_stop_parallel <- function(cl) {
 #' @param data A data frame containing predictors and the target.
 #' @param target A string naming the target variable.
 #' @param task Either \code{"classification"} or \code{"regression"}.
+#'   Required; there is no default, because guessing it from the target is
+#'   exactly the mistake this argument exists to prevent.
 #' @param train_ratio Training set proportion, strictly between 0 and 1
 #'   (default \code{0.7}).
-#' @param nfolds Number of CV folds, a whole number > 1 (default \code{5}).
-#'   Also the number of folds used by the SVM-RFE subset-size search.
+#' @param nfolds Number of CV folds for hyperparameter tuning, a whole number
+#'   > 1 (default \code{5}). Also the number of folds used by the SVM-RFE
+#'   subset-size search (clamped there to at most the number of training
+#'   rows); \code{select_method = "rf_rfe"} ignores it and uses 10 folds.
 #' @param kernel One of \code{"linear"} (default), \code{"radial"}, or
 #'   \code{"polynomial"}.
 #' @param tune_grid Optional tuning grid data frame. If \code{NULL}, a
@@ -766,12 +816,18 @@ svm_stop_parallel <- function(cl) {
 #'   dummy-encoded training predictors (default \code{FALSE}).
 #' @param select_method Which selector to run when
 #'   \code{feature_select = TRUE}: \code{"svm_rfe"} (default, true SVM-RFE,
-#'   linear kernel only) or \code{"rf_rfe"} (random-forest screening).
-#' @param n_features Optional whole number of features to keep. For
-#'   \code{"svm_rfe"} the top \code{n_features} ranked features are kept and
-#'   the cross-validated size search is skipped; for \code{"rf_rfe"} the
-#'   selection is truncated to the \code{n_features} most important. Default
-#'   \code{NULL} (the size is chosen automatically).
+#'   linear kernel only) or \code{"rf_rfe"} (random-forest screening, any
+#'   kernel). Ignored when \code{feature_select = FALSE}, and so is the
+#'   linear-kernel requirement, which is only enforced when SVM-RFE will
+#'   actually run. An unrecognized value is always an error.
+#' @param n_features Optional whole number of features to keep, capped at the
+#'   number of encoded predictors. For \code{"svm_rfe"} the top
+#'   \code{n_features} ranked features are kept and the cross-validated size
+#'   search is skipped; for \code{"rf_rfe"} it truncates the selection to its
+#'   first \code{n_features} entries and sets how many features the
+#'   random-forest fallback keeps. Ignored when
+#'   \code{feature_select = FALSE}. Default \code{NULL} (the size is chosen
+#'   automatically).
 #' @param class_imbalance Logical; if \code{TRUE} and the task is
 #'   classification, up-samples classes within CV resampling (default
 #'   \code{FALSE}).
@@ -788,13 +844,18 @@ svm_stop_parallel <- function(cl) {
 #' @return An object of class \code{fs_result} with:
 #' \describe{
 #'   \item{selected}{Character vector of selected encoded feature names. When
-#'     \code{feature_select = FALSE} this is every encoded predictor;
-#'     otherwise it is the surviving subset, ordered from most to least
-#'     important.}
-#'   \item{scores}{Named numeric vector of the SVM-RFE criterion (the squared
-#'     primal weights \code{w^2} of the first, full-feature fit) or, for
-#'     \code{select_method = "rf_rfe"}, the mean random-forest importance.
-#'     \code{NULL} when \code{feature_select = FALSE}.}
+#'     \code{feature_select = FALSE} this is every encoded predictor. With
+#'     \code{"svm_rfe"} it is the surviving subset, ordered from most to least
+#'     important; with \code{"rf_rfe"} it is the subset in the order
+#'     \code{caret::rfe()} reports it.}
+#'   \item{scores}{Named numeric vector covering every encoded predictor, not
+#'     just the survivors: the SVM-RFE criterion (the squared primal weights
+#'     \code{w^2} of the first, full-feature fit) or, for
+#'     \code{select_method = "rf_rfe"}, the mean random-forest importance
+#'     recorded across resamples (\code{NA} for predictors \code{rfe()} never
+#'     scored, or the mean decrease in node impurity when the fallback ran).
+#'     \code{NULL} when \code{feature_select = FALSE}, because no selector
+#'     produced comparable scores.}
 #'   \item{method}{\code{"svm_"} followed by the kernel, for example
 #'     \code{"svm_linear"}. The selector that ran, if any, is reported in
 #'     \code{details$selection$method}.}
@@ -807,9 +868,12 @@ svm_stop_parallel <- function(cl) {
 #'     \code{selection} (\code{NULL} when no selection ran, otherwise a list
 #'     with \code{method}, \code{ranking} from most to least important,
 #'     \code{scores}, and the size search's \code{sizes}, \code{size_scores}
-#'     and \code{size_metric}), \code{encoder} (the fitted
+#'     and \code{size_metric} -- those last three being \code{NULL},
+#'     \code{NULL} and \code{NA} whenever no size search ran, which is always
+#'     the case for \code{"rf_rfe"} and for \code{"svm_rfe"} with an explicit
+#'     \code{n_features}), \code{encoder} (the fitted
 #'     \code{caret::dummyVars} object) and \code{n_features} (the number of
-#'     encoded predictors considered).}
+#'     encoded predictors considered, counted before any were dropped).}
 #'   \item{call}{The matched call.}
 #' }
 #' @examples

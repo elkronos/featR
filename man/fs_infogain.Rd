@@ -15,26 +15,31 @@ fs_infogain(
 )
 }
 \arguments{
-\item{data}{A data.frame, or a list of data.frames each containing \code{target}.}
+\item{data}{A data.frame (a data.table is accepted and is copied, never
+modified in place), or a list of data.frames each containing \code{target}.}
 
 \item{target}{Character. Name of the target column.}
 
-\item{numeric_bins}{Optional integer (>= 2 after clamping) overriding the
-automatic bin calculation for numeric columns. Default \code{NULL}.}
+\item{numeric_bins}{Optional whole number >= 1 (values below 2 are clamped
+to 2) overriding the automatic bin count for numeric predictors and for a
+numeric target. Default \code{NULL} (bins chosen per column).}
 
 \item{normalize}{One of \code{"none"} (default, raw information gain in bits)
 or \code{"gain_ratio"} (gain divided by the predictor's split entropy). See
 the section on cardinality bias.}
 
-\item{top_n}{Optional positive integer. When supplied, \code{selected} holds
-the \code{top_n} highest-scoring features (fewer if there are fewer scored
-features). When \code{NULL} (default), \code{selected} holds every feature whose
-score is strictly greater than 0.}
+\item{top_n}{Optional whole number >= 1. When supplied, \code{selected} holds
+the \code{top_n} highest-scoring features (fewer if fewer were scored). This
+is a rank cut, not a score floor: a zero-scoring feature is selected if
+the ranking reaches it. When \code{NULL} (default), \code{selected} instead holds
+every feature whose score is strictly greater than 0.}
 
 \item{remove_na}{Logical. If \code{TRUE} (default), rows with NA in the target
 are removed up front. See Details for its narrow practical effect.}
 
-\item{verbose}{Logical. If \code{TRUE}, emit progress messages. Default \code{FALSE}.}
+\item{verbose}{Logical. If \code{TRUE}, report how many features were scored,
+how many names collided across data.frames, and how many were selected.
+Default \code{FALSE}.}
 }
 \value{
 An object of class \code{fs_result} with elements:
@@ -48,14 +53,16 @@ last. For list input this is the union of features across data.frames;
 a name occurring in several data.frames keeps its highest score.
 \item \code{method}: \code{"infogain"}.
 \item \code{task}: \code{"classification"} (the target is always discretized).
-\item \code{model}: \code{NULL}.
-\item \code{details}: a list holding \code{table} (the full scored table: \code{Variable},
-\code{InfoGain}, plus \code{SplitEntropy} and \code{GainRatio} when
-\code{normalize = "gain_ratio"}, plus \code{Origin} for list input),
-\code{normalize}, \code{numeric_bins}, \code{n_features} (the number of candidate
-features), and, for list input, \code{collisions} (a table of the feature
-names found in more than one data.frame, with \code{Kept} marking the row
-whose score won; zero rows when there are none).
+\item \code{model}: \code{NULL} (this is a filter; nothing is fitted).
+\item \code{details}: a list holding \code{table} (the full scored table, one row per
+scored column of each input: \code{Variable}, \code{InfoGain}, plus \code{SplitEntropy}
+and \code{GainRatio} when \code{normalize = "gain_ratio"}, plus \code{Origin} for list
+input), \code{normalize} (as resolved), \code{numeric_bins} (the requested bin
+count as an integer, \code{NULL} when automatic), \code{n_features} (the number of
+distinct scored features, i.e. \code{length(scores)}), and, for list input,
+\code{collisions} (a table of the feature names found in more than one
+data.frame, with \code{Kept} marking the row whose score won; zero rows when
+there are none).
 \item \code{call}: the matched call.
 }
 }
@@ -65,10 +72,19 @@ every predictor by its information gain (in bits) with respect to the
 target, optionally normalized to a gain ratio.
 }
 \details{
+Use this to rank candidate predictors cheaply, before any model is fitted:
+it answers "how many bits of uncertainty about the target does knowing this
+one predictor remove?". It needs no distributional assumptions and handles
+mixed column types, but it is a univariate filter -- each predictor is
+scored on its own, so two redundant copies of the same information both
+score highly, and a predictor that only matters in combination with another
+scores low. Treat the ranking as a shortlist, not a final feature set.
 \itemize{
-\item Numeric predictors are discretized into
-\code{max(Freedman-Diaconis, Sturges)} bins (never fewer than 2), unless
-\code{numeric_bins} overrides the count.
+\item Numeric predictors are discretized into \code{max(Freedman-Diaconis, Sturges)}
+equal-width bins (never fewer than 2), unless \code{numeric_bins} overrides
+the count. Under the automatic rule, a column with a zero range or a zero
+interquartile range falls back to 2 bins; a column with a single distinct
+value becomes a single-level factor either way and scores 0.
 \item The target is always treated categorically, so \code{task} is always
 \code{"classification"}. Numeric targets are discretized the same way, ONCE
 on all rows with a non-NA target, so bin breaks are shared and scores
@@ -119,7 +135,8 @@ res$selected
 res$scores
 res$details$table
 
-# Correct the bias toward many-leveled predictors, and keep the best two:
+# Normalize by split entropy to offset the bias toward many-leveled
+# predictors, and keep the two best-ranked features:
 fs_infogain(df, target = "target", normalize = "gain_ratio", top_n = 2)
 
 # List of data.frames:

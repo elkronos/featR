@@ -248,7 +248,9 @@ rfe_perform <- function(train_df, target, sizes, rfe_control_params,
 
   X <- train_df[, setdiff(colnames(train_df), target), drop = FALSE]
 
-  # Mirror the final-model coercions so RFE sees the same predictor types.
+  # Defensive: fs_recursivefeature() already turns character/logical predictors
+  # into factors before calling this helper, so in the normal path there is
+  # nothing left to convert. Repeat it here so the helper is safe on its own.
   for (nm in colnames(X)) {
     if (is.character(X[[nm]]) || is.logical(X[[nm]])) {
       X[[nm]] <- factor(X[[nm]])
@@ -321,6 +323,9 @@ rfe_train_final <- function(data_df, target, optimal_vars,
   }
 
   # Reasonable predictor types: logical -> integer, character -> factor.
+  # fs_recursivefeature() has already turned both into factors by the time it
+  # calls this, so neither branch fires on the normal path; they only matter
+  # when the helper is handed data from somewhere else.
   pred_names <- setdiff(colnames(df), target)
   for (nm in pred_names) {
     if (is.logical(df[[nm]])) {
@@ -379,13 +384,21 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 
 #' Recursive feature elimination with held-out evaluation
 #'
-#' Splits the data into stratified train/test partitions, optionally one-hot
-#' encodes the predictors (encoder fitted on the training rows only), runs
-#' `caret::rfe()` on the training set, evaluates the selected feature set on
-#' the held-out test rows, and optionally trains a final caret model on the
-#' training rows.
+#' Answers "how few predictors can I keep before resampled performance starts
+#' to fall off?" Splits the data into stratified train/test partitions,
+#' optionally one-hot encodes the predictors (encoder fitted on the training
+#' rows only), runs `caret::rfe()` on the training set, evaluates the fitted
+#' RFE model on the held-out test rows, and optionally trains a final caret
+#' model on the training rows.
 #'
 #' @details
+#' RFE is a wrapper method: it refits the underlying model once per candidate
+#' subset size per resample, so it is by far the most expensive method here,
+#' and its answer is specific to the model family in `rfe_control$functions`
+#' rather than being a general statement about the features. In exchange, the
+#' subset it reports is tuned to the model you actually intend to use, and the
+#' subset size is chosen by resampling instead of by a threshold you invent.
+#'
 #' Requires the suggested package 'caret'. The RFE function set comes from
 #' `rfe_control$functions` and defaults to `caret::rfFuncs`, which fits random
 #' forests, so the suggested package 'randomForest' must also be installed
@@ -394,60 +407,106 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #' Parallel execution additionally requires 'foreach' and 'doParallel';
 #' classification metrics use `caret::postResample()`, which needs 'e1071'.
 #'
-#' `details$test_metrics` is computed by predicting on the held-out test rows
-#' with the fitted RFE model and summarizing with `caret::postResample()`.
-#' When `return_final_model = TRUE`, the final model is trained on the
-#' \emph{training rows only} (not the full data), so those metrics remain an
-#' honest estimate. Predictors containing missing values are rejected; impute
-#' before calling.
+#' Everything that could leak is fitted on the training rows: the one-hot
+#' encoder, the factor levels the test columns are aligned to, the elimination
+#' itself, and the final model. `details$test_metrics` is therefore a genuine
+#' held-out estimate. It applies `caret::postResample()` to the predictions of
+#' the fitted `rfe` object (caret's own refit on all the training rows,
+#' restricted to the optimal subset) on test rows that took no part in choosing
+#' either the features or the subset size.
 #'
-#' @param data A data.frame (or data.table) with the target and predictors.
-#' @param target Character. Name of the target column in `data`.
-#' @param sizes Numeric vector of feature-subset sizes to evaluate; `NULL`
-#'   uses `1:p`. Out-of-range values are dropped with a warning.
-#' @param train_ratio Numeric in (0, 1). Training proportion of the stratified
-#'   split (default 0.8).
+#' Two other summaries on the result are \emph{not} held-out estimates, by
+#' construction. `details$resampling_results` summarizes resampling performed
+#' inside the training rows across candidate subset sizes, and, when
+#' `return_final_model = TRUE`, `model$results` reports `train_control`
+#' resampling inside those same training rows on features that were already
+#' selected. Only `details$test_metrics` is computed on data the search never
+#' saw.
+#'
+#' Missing values in the \emph{training} predictors are rejected with an error;
+#' impute or drop incomplete rows before calling. NAs in the held-out rows are
+#' not checked here and will propagate through `predict()` into
+#' `details$test_metrics`. With `handle_categorical = TRUE` the encoded test
+#' rows are row-count checked against their input, so an encoding that quietly
+#' loses rows becomes an error rather than a silently misaligned metric.
+#'
+#' @param data A data.frame or data.table with at least one row and one column,
+#'   holding the target and the candidate predictors (every other column). It
+#'   is converted to a plain data.frame on entry.
+#' @param target Single string naming the target column of `data`; a column
+#'   index is not accepted. A factor, character, or logical target means
+#'   classification, anything else regression.
+#' @param sizes Numeric vector of feature-subset sizes to evaluate. Default
+#'   `NULL`, which uses `1:p`, where `p` is the predictor count after any
+#'   one-hot encoding. Values outside `[1, p]` are dropped with a warning; if
+#'   that leaves nothing, the call is an error rather than a silent empty run.
+#' @param train_ratio Numeric, strictly between 0 and 1: the training
+#'   proportion of the stratified split. Default 0.8.
 #' @param rfe_control List of arguments for `caret::rfeControl()`; must contain
-#'   at least `method` and `number`. `functions` selects the caret RFE function
-#'   set (default `caret::rfFuncs`). Any `allowParallel` entry is dropped with
-#'   a warning; use the `parallel` argument instead.
-#' @param train_control List of arguments for `caret::trainControl()` used when
-#'   `return_final_model = TRUE`.
-#' @param model_method caret model key for the final model (e.g. `"rf"`,
-#'   `"lm"`).
+#'   at least `method` and `number`. Default `list(method = "cv", number = 5)`.
+#'   `functions` selects the caret RFE function set and defaults to
+#'   `caret::rfFuncs`. An `allowParallel` entry is dropped with a warning (use
+#'   the `parallel` argument instead), while a `verbose` entry, if present,
+#'   overrides the `verbose` argument for `caret::rfe()`. With
+#'   `method = "repeatedcv"` and no `repeats`, caret's default of 1 is used and
+#'   a warning says so.
+#' @param train_control List of arguments for `caret::trainControl()`, used
+#'   only when `return_final_model = TRUE`. Must contain `method`, and also
+#'   `number` unless `method = "none"`. Default
+#'   `list(method = "cv", number = 5)`.
+#' @param model_method Single string; the caret model key used for the final
+#'   model, for example `"rf"` or `"lm"`. Used only when
+#'   `return_final_model = TRUE`. Default `"rf"`.
 #' @param handle_categorical Logical; one-hot encode predictors with full-rank
 #'   dummies (fitted on the training rows, applied to the test rows).
+#'   Default `FALSE`.
 #' @param return_final_model Logical; train a final caret model on the training
-#'   rows using the selected features, and return it as `model`.
-#' @param seed Optional whole number seed. Applied for the duration of the call
-#'   only (previous RNG state is restored on exit); default `NULL` never seeds.
+#'   rows using the selected features and return it as `model`, with the `rfe`
+#'   object still available in `details$rfe`. Near-zero-variance and linearly
+#'   dependent predictors are dropped from the selected set first, each with a
+#'   warning, and what survives is recorded in `details$final_model_variables`.
+#'   Default `FALSE`.
+#' @param seed Optional single finite number, truncated to an integer with
+#'   `as.integer()`. It covers the split and the RFE resampling, is applied for
+#'   the duration of the call only (the previous RNG state is restored on
+#'   exit), and defaults to `NULL`, which never seeds. Note that
+#'   `parallel = TRUE` runs resamples on PSOCK workers with their own RNG
+#'   streams, so a seeded parallel run is not guaranteed to reproduce a seeded
+#'   sequential one.
 #' @param verbose Logical; print progress messages and let `caret::rfe()`
-#'   report its own progress. Default `FALSE`.
+#'   report its own progress, unless `rfe_control$verbose` overrides the
+#'   latter. Default `FALSE`.
 #' @param parallel Logical. If `TRUE`, registers a two-worker PSOCK cluster
-#'   (capped at the available cores) for the duration of the call; requires the
-#'   suggested packages 'foreach' and 'doParallel'.
+#'   (capped at the detected core count) for the duration of the call and stops
+#'   it again when the call returns; requires the suggested packages 'foreach'
+#'   and 'doParallel'. Default `FALSE`.
 #'
 #' @return An object of class `fs_result` with:
 #' \describe{
 #'   \item{selected}{Character vector of the variables RFE kept
 #'         (`optVariables` at the optimal subset size).}
 #'   \item{scores}{Named numeric vector of resample-averaged importance from
-#'         `caret::varImp()` on the `rfe` object (its "Overall" column), or
-#'         `NULL` when caret reports none.}
+#'         `caret::varImp()` on the `rfe` object: its "Overall" column when
+#'         caret supplies one, otherwise the row means of whatever numeric
+#'         columns it did supply. `NULL` when there is nothing usable.}
 #'   \item{method}{"rfe".}
-#'   \item{task}{"classification" or "regression".}
+#'   \item{task}{"classification" or "regression", inferred from the target.}
 #'   \item{model}{The final `caret::train` model when
 #'         `return_final_model = TRUE`, otherwise the `rfe` object.}
 #'   \item{details}{A list, in snake_case, with `rfe` (the caret `rfe` object,
 #'         always present even when `model` holds the final model),
 #'         `optimal_size` (the subset size RFE chose), `test_metrics`
-#'         (`caret::postResample()` on the held-out rows), `resampling_results`
-#'         (the RFE resampling summary), `variable_importance` (the
-#'         `caret::varImp()` data.frame), `preprocessor` (the `dummyVars`
-#'         encoder, or `NULL`), `train_index` and `test_index` (row indices of
-#'         the two partitions), `final_model_variables` (predictors the final
-#'         model actually used after NZV/linear-combination filtering, or
-#'         `NULL`) and `n_features` (candidate predictors offered to RFE).}
+#'         (`caret::postResample()` on the held-out rows -- the only held-out
+#'         estimate on the object), `resampling_results` (the RFE resampling
+#'         summary over candidate sizes, computed inside the training rows),
+#'         `variable_importance` (the `caret::varImp()` data.frame),
+#'         `preprocessor` (the `dummyVars` encoder, or `NULL` when
+#'         `handle_categorical = FALSE`), `train_index` and `test_index` (row
+#'         indices into `data` for the two partitions), `final_model_variables`
+#'         (predictors the final model actually used after
+#'         NZV/linear-combination filtering, or `NULL` when no final model was
+#'         requested) and `n_features` (candidate predictors offered to RFE,
+#'         counted after one-hot encoding when `handle_categorical = TRUE`).}
 #'   \item{call}{The matched call.}
 #' }
 #'
@@ -463,8 +522,10 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #'     rfe_control = list(method = "cv", number = 3),
 #'     seed = 42
 #'   )
-#'   res$selected
-#'   res$details$test_metrics
+#'   print(res$selected)
+#'   print(res$details$optimal_size)
+#'   # the only held-out estimate on the object
+#'   print(res$details$test_metrics)
 #' }
 #' }
 #' @export
@@ -585,7 +646,8 @@ fs_recursivefeature <- function(data,
   final_model_vars <- NULL
 
   if (return_final_model) {
-    # Train on the TRAINING rows only, so the test metrics stay honest.
+    # Train on the TRAINING rows only, so the held-out rows stay unseen by
+    # every model this function returns.
     rfe_message("Training the final model on the training rows only...",
                 verbose)
     final_model <- rfe_train_final(

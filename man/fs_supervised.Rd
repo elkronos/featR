@@ -20,44 +20,58 @@ fs_supervised(
 \arguments{
 \item{data}{A data.frame, data.table, or matrix containing \code{target} and
 the candidate feature columns. Every column other than \code{target} must be
-numeric.}
+numeric. The input is copied, never modified in place.}
 
 \item{target}{Character. Name of the target column in \code{data}. It is
-removed from the candidate features and used as the scoring target.}
+removed from the candidate features and used as the scoring target. The
+target column itself may be numeric, factor, character, or logical; any
+other type is an error.}
 
-\item{method}{One of \code{"auto"}, \code{"correlation"}, \code{"anova"}.}
+\item{method}{One of \code{"auto"} (default), \code{"correlation"},
+\code{"anova"}.}
 
 \item{threshold}{Non-negative, finite numeric scalar threshold applied to
-the feature scores (not to the target directly). Default 0.}
+the feature scores (not to the target directly). Default 0. Note that the
+two methods put scores on different scales: \code{[0, 1]} for
+\code{"correlation"} and \code{[0, Inf)} for \code{"anova"}.}
 
-\item{direction}{One of \code{"above"}, \code{"below"}; compares scores to
-\code{threshold}.}
+\item{direction}{One of \code{"above"} (default), \code{"below"}; compares
+scores to \code{threshold}.}
 
-\item{action}{One of \code{"keep"}, \code{"remove"}; determines whether
-features meeting the condition are retained or dropped.}
+\item{action}{One of \code{"keep"} (default), \code{"remove"}; determines
+whether features meeting the condition are retained or dropped.}
 
 \item{include_equal}{Logical; if TRUE, comparisons are inclusive
-(greater/less than or equal) instead of strict.}
+(greater/less than or equal) instead of strict. Default FALSE.}
 
-\item{na_rm}{Logical; if TRUE, rows with NA in a feature or in the target
-are dropped when computing that feature's score.}
+\item{na_rm}{Logical; if TRUE (the default), rows with NA in a feature or
+in the target are dropped when computing that feature's score. If FALSE,
+an NA anywhere in a feature or the target makes that feature's score
+undefined.}
 
 \item{output}{One of \code{"result"} (default), \code{"matrix"},
 \code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
-\code{"names"}, \code{"list"}.
+\code{"names"}, \code{"list"}. Throughout, "candidate features" means the
+columns of \code{data} other than \code{target}, in their original order.
 \itemize{
 \item \code{"result"} (default): an \code{fs_result} object (see
 Value).
-\item \code{"matrix"}: numeric matrix of selected features.
-\item \code{"dt"}: data.table of selected features.
-\item \code{"data.frame"}: data.frame of selected features.
-\item \code{"mask"}: logical vector, one element per candidate feature.
-\item \code{"indices"}: integer vector of selected column indices,
-indexing the candidate features (that is, \code{data} without \code{target}).
-\item \code{"names"}: character vector of selected column names.
-\item \code{"list"}: list with components:
-\code{filtered} (matrix), \code{mask}, \code{indices}, \code{names},
-\code{scores}, and \code{meta}.
+\item \code{"matrix"}: numeric matrix of the selected features.
+\item \code{"dt"}: data.table of the selected features.
+\item \code{"data.frame"}: data.frame of the selected features.
+\item \code{"mask"}: logical vector, one element per candidate feature,
+named after the candidate features; TRUE marks a selected column.
+\item \code{"indices"}: integer vector of the selected column indices,
+indexing the candidate features (that is, \code{data} without \code{target}),
+named after the selected columns.
+\item \code{"names"}: character vector of the selected column names.
+\item \code{"list"}: list with components \code{filtered} (matrix),
+\code{mask}, \code{indices}, \code{names}, \code{scores} (all as
+above), and \code{meta}, a list recording \code{method_arg} (the
+method as requested), \code{method_used} (the method after
+\code{"auto"} was resolved), \code{threshold}, \code{direction},
+\code{action}, \code{include_equal}, \code{na_rm},
+\code{n_input_cols}, and \code{n_kept_cols}.
 }}
 
 \item{verbose}{Logical; emit progress messages. Default FALSE.}
@@ -74,16 +88,21 @@ method, for example \code{"supervised_correlation"}.
 \item \code{task}: \code{"regression"} for a numeric target,
 \code{"classification"} for a factor target, \code{NA} otherwise.
 \item \code{model}: \code{NULL}.
-\item \code{details}: a list holding \code{mask}, \code{indices}, \code{filtered} (the
-filtered data.table), \code{threshold}, \code{direction}, \code{action}, and
-\code{n_features} (the number of candidate features).
+\item \code{details}: a list holding, in this order, \code{mask} (the logical
+keep-mask over the candidate features), \code{indices} (the selected
+column indices, named after the selected columns), \code{filtered} (the
+selected columns as a data.table), \code{threshold}, \code{direction},
+\code{action}, and \code{n_features} (the number of candidate features, that
+is \code{ncol(data) - 1}).
 \item \code{call}: the matched call.
 }
 Any other \code{output} returns that shape instead, exactly as documented
 above. When no feature meets the selection criteria, a warning is issued
-and the tabular shapes (\code{"matrix"}, \code{"dt"},
-\code{"data.frame"}) are returned with zero columns while preserving the
-input row count.
+and the tabular shapes come back empty: \code{"matrix"} and
+\code{"data.frame"} have zero columns and keep the input row count, while
+the \code{"dt"} shape (and \code{details$filtered}) is only guaranteed to have
+zero columns -- data.table represents a zero-column table as having zero
+rows, so its row count is not preserved.
 }
 \description{
 Performs supervised, univariate, filter-based feature selection: every
@@ -91,6 +110,15 @@ column of \code{data} except \code{target} is scored against the target, and
 features are selected or dropped by comparing that score to \code{threshold}.
 }
 \details{
+This is one of the cheapest supervised screens in featR: no predictive
+model is fitted, each feature is scored on its own, and the cost is linear
+in the number of columns, so it scales to wide data. The flip side is that
+scoring is strictly univariate: it cannot see interactions between
+features, and it will happily keep a whole group of near-duplicate columns
+that all correlate with the target. Use \code{\link[=fs_correlation]{fs_correlation()}} to prune that
+redundancy afterwards, or a wrapper such as \code{\link[=fs_recursivefeature]{fs_recursivefeature()}} or
+\code{\link[=fs_svm]{fs_svm()}} when the joint contribution is what matters.
+
 Supported methods:
 \itemize{
 \item \code{"correlation"}: Absolute Pearson correlation (numeric

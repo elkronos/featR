@@ -29,9 +29,13 @@ characters can be expanded by \code{model.matrix()}).}
 numeric and free of NA/NaN/Inf.}
 
 \item{alpha}{Numeric in (0, 1]; default 1 (lasso). Use values in (0, 1)
-for elastic-net.}
+for elastic-net. \code{alpha = 0} (pure ridge) is rejected: it never sets a
+coefficient to exactly zero, so it cannot select.}
 
-\item{nfolds}{Integer > 1; default 5.}
+\item{nfolds}{Integer > 1; default 5. Number of cross-validation folds
+passed to \code{glmnet::cv.glmnet()}. When \code{custom_folds} is supplied those
+fold IDs define the folds instead, and \code{nfolds} only bounds which IDs are
+valid.}
 
 \item{standardize}{Logical; default TRUE. Passed to \code{glmnet::cv.glmnet()}
 and also controls the scale \code{scores} is ranked on (see Details).}
@@ -49,10 +53,13 @@ computed on the full data and warns about the leakage.}
 \item{seed}{Optional whole number for reproducibility, applied locally and
 restored on exit; default NULL (never seeds by default).}
 
-\item{verbose}{Logical; default FALSE.}
+\item{verbose}{Logical; default FALSE. When TRUE, reports the parallel
+backend status and how many design-matrix columns were selected.}
 
-\item{parallel}{Logical; default FALSE. When TRUE, cross-validation runs
-on \code{n_cores} workers (requires the 'doParallel' and 'foreach' packages).}
+\item{parallel}{Logical; default FALSE. When TRUE, cross-validation runs on
+\code{n_cores} workers (requires the 'doParallel' and 'foreach' packages); if
+\code{n_cores} resolves to one worker it stays sequential and says so under
+\code{verbose = TRUE}.}
 
 \item{n_cores}{Integer >= 1; number of workers used only when
 \code{parallel = TRUE}. Default 2. Values above the detected core count are
@@ -60,20 +67,24 @@ capped.}
 }
 \value{
 An \code{fs_result} object with:
-\item{selected}{Design-matrix columns whose coefficient at \code{lambda.min} is
-non-zero, ordered by decreasing \code{scores} magnitude.}
+\item{selected}{Design-matrix columns whose raw coefficient at
+\code{lambda.min} is non-zero, ordered by decreasing \code{scores} magnitude.
+(Selection reads the raw coefficients, so a constant column that glmnet
+nonetheless gave a non-zero coefficient is reported even though its
+standardized score is 0.)}
 \item{scores}{data.frame with columns Variable, Coefficient and
-AbsCoefficient, ordered by decreasing AbsCoefficient, on the
+AbsCoefficient, one row per design-matrix column (including those
+shrunk to zero), ordered by decreasing AbsCoefficient, on the
 standardized scale when \code{standardize = TRUE} (see Details).}
-\item{method}{\code{"lasso"}.}
-\item{task}{\code{"regression"}.}
+\item{method}{\code{"lasso"}, regardless of \code{alpha}.}
+\item{task}{\code{"regression"} (gaussian family only).}
 \item{model}{The fitted cv.glmnet object when \code{return_model = TRUE}, else
 NULL.}
-\item{details}{List of \code{lambda_min} (lambda minimizing CV error),
-\code{lambda_1se} (largest lambda within 1 SE of the minimum),
-\code{coefficients} (the same table as \code{scores} but always on the raw
-coefficient scale) and \code{n_features} (number of design-matrix columns
-considered).}
+\item{details}{List of \code{lambda_min} (lambda minimizing CV error, the one
+selection uses), \code{lambda_1se} (largest lambda within 1 SE of the
+minimum; reported only), \code{coefficients} (the same three-column table as
+\code{scores} but always on the raw coefficient scale) and \code{n_features}
+(number of design-matrix columns considered).}
 \item{call}{The matched call.}
 }
 \description{
@@ -82,10 +93,23 @@ which predictors survive at \code{lambda.min}. Numeric outcomes only (gaussian
 family).
 }
 \details{
+Use this when the question is "which predictors keep a non-zero coefficient
+under a cross-validated L1 penalty (or, for \code{alpha < 1}, an elastic-net
+penalty)?". Selection happens at \code{lambda.min}, the penalty that minimizes
+cross-validated error; the more conservative \code{lambda.1se} is reported in
+\code{details} but is not used to select. The main caveat is that lasso tends to
+keep one member of a group of strongly correlated predictors and zero out
+the rest, so an absent feature is not evidence that it is unrelated to the
+outcome.
+
 The design matrix is built internally from every column of \code{data} except
 \code{target}, via \code{stats::model.frame(na.action = stats::na.pass)} followed by
 \code{stats::model.matrix()}: factors and characters are expanded to dummies and
-rows carrying NAs are preserved rather than silently dropped.
+rows carrying NAs are preserved rather than silently dropped. The matrix
+carries no intercept column of its own (\code{glmnet} fits its own intercept,
+which is dropped from the reported coefficients), so \code{selected}, \code{scores}
+and \code{details$coefficients} name design-matrix columns -- for a factor
+predictor, its expanded dummy columns rather than the original column.
 
 \code{scores} ranks features on the STANDARDIZED coefficient scale when
 \code{standardize = TRUE}: each coefficient is multiplied by the standard
@@ -95,11 +119,17 @@ internally for fitting but reports coefficients back on the input scale, so
 those raw coefficients are kept in \code{details$coefficients}. With
 \code{standardize = FALSE}, \code{scores} is the raw table and the two are identical.
 
+Raw coefficient magnitude is a scale-dependent notion of importance: a
+predictor measured in small units earns a large coefficient for the same
+effect. That applies to \code{details$coefficients} always, and to \code{scores} when
+\code{standardize = FALSE}, so compare those numbers across predictors only when
+the predictors share a scale.
+
 Missing predictor values are an error under the default
 \code{impute = "none"}, because imputing before cross-validation lets the folds
-see each other. \code{impute = "mean"} reproduces the older behavior (column
-means computed on the full data) and warns. Columns that are entirely NA
-are an error either way.
+see each other. \code{impute = "mean"} fills them with column means computed on
+the whole data set -- not on the training part of each fold -- and warns
+that this leaks. Columns that are entirely NA are an error either way.
 }
 \examples{
 \donttest{

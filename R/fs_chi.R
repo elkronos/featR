@@ -14,25 +14,57 @@
 #' Handles missing values per-feature, switches to simulation-based p-values
 #' when any expected cell count is < 5, and supports multiple-testing correction.
 #'
+#' @details
+#' The question this answers is, per feature: does the joint distribution of
+#' that feature and the target differ from what independence would predict?
+#' Features are examined one at a time, so the result describes marginal
+#' association only. It says nothing about interactions, and two features
+#' carrying the same information are both reported as significant. Only factor
+#' features are tested: numeric, logical and date columns are ignored entirely,
+#' so convert or discretize them first if you want them included.
+#'
+#' Each feature is tested on its own complete cases (rows where both the
+#' feature and the target are observed), so `n` can differ between features.
+#' Levels left empty after that filtering are dropped; if either the feature or
+#' the target then has fewer than two levels, the feature is skipped with an
+#' `NA` p-value rather than tested.
+#'
+#' A feature is tested with the asymptotic chi-square statistic when every
+#' expected cell count is at least 5. Otherwise the p-value comes from a
+#' Monte-Carlo simulation with `simulation_B` replicates, which makes it
+#' stochastic unless `seed` is set and leaves `df` as `NA`. Yates' continuity
+#' correction applies only on the asymptotic path and only to 2x2 tables; it is
+#' never applied to a simulated p-value or to a larger table, whatever
+#' `continuity_correction` says.
+#'
+#' Finally, a p-value is evidence against independence, not an effect size:
+#' with enough rows a negligible association still clears any `sig_level`.
+#'
 #' @param data A data.frame or data.table with features and target. Character
 #'   columns are coerced to factor. The input object is never modified.
-#' @param target Character scalar: name of the target column.
+#' @param target Character scalar: name of the target column. It is coerced to
+#'   a factor if necessary and must have at least 2 non-NA levels.
 #' @param sig_level Numeric threshold for significance, strictly between 0
 #'   and 1 (default 0.05).
-#' @param continuity_correction NULL/TRUE/FALSE: apply Yates correction for 2x2.
-#'   If NULL (default), auto-apply when table is 2x2.
+#' @param continuity_correction NULL/TRUE/FALSE: apply Yates correction to 2x2
+#'   tables tested asymptotically. If NULL (default), auto-apply to every such
+#'   table; TRUE is equivalent, FALSE disables it. It has no effect on tables
+#'   larger than 2x2 or on simulation-based p-values, neither of which is ever
+#'   corrected.
 #' @param p_adjust_method Character: one of `stats::p.adjust.methods`
 #'   (default "bonferroni"). Set to "none" to disable multiple-testing
-#'   correction. Matching is case-insensitive.
-#' @param simulation_B Whole number >= 100: replicates for simulation-based
-#'   p-values when expected counts are low (default 2000).
+#'   correction. Matching is case-insensitive. Adjustment spans every candidate
+#'   feature, including skipped ones (whose p-value is NA and so stays NA).
+#' @param simulation_B Whole number >= 100: replicates for the simulation-based
+#'   p-value used when any expected cell count is < 5 (default 2000).
 #' @param seed Optional integer. Seeds the RNG locally (the previous RNG state
 #'   is restored on exit), which makes simulation-based p-values reproducible
 #'   in the sequential path. The parallel path draws from furrr's own
 #'   L'Ecuyer-CMRG parallel streams (`furrr_options(seed = TRUE)`), so for the
 #'   same `seed` parallel results are internally reproducible but differ from
 #'   sequential results. Default NULL (never seeds).
-#' @param verbose Logical; if TRUE, prints informative messages. Default FALSE.
+#' @param verbose Logical; if TRUE, emits informative messages (target
+#'   coercion, skipped features, worker count). Default FALSE.
 #' @param parallel Logical; if TRUE, run features in parallel using the
 #'   suggested furrr and future packages. Default FALSE (sequential).
 #' @param n_cores Whole number >= 1. Number of workers used when
@@ -44,20 +76,26 @@
 #' \describe{
 #'   \item{selected}{Character vector of features with
 #'         adj_p_value < sig_level.}
-#'   \item{scores}{Named numeric vector of adjusted p-values, one per tested
-#'         feature (smaller is stronger evidence of association).}
+#'   \item{scores}{Named numeric vector of adjusted p-values, one per candidate
+#'         categorical feature and `NA` for any feature that had to be skipped
+#'         (smaller is stronger evidence of association).}
 #'   \item{method}{"chi".}
 #'   \item{task}{"classification".}
 #'   \item{model}{NULL; the chi-square filter fits no model.}
-#'   \item{details}{A list with `results` (the full results data.frame: one
-#'         row per feature with feature; n (for tested features, the number of
-#'         complete feature-target pairs; for skipped features, the feature's
-#'         non-NA row count); df (NA for simulation-based tests, where the
-#'         asymptotic degrees of freedom do not apply); p_value; adj_p_value;
-#'         significant; method ("asymptotic" or "simulation");
-#'         correction_applied (TRUE/FALSE); min_expected (minimum expected cell
-#'         count)), plus `sig_level`, `p_adjust_method`, and `n_features` (the
-#'         number of categorical features tested).}
+#'   \item{details}{A list with `results` (the full results data.frame, one row
+#'         per candidate categorical feature, ordered by adj_p_value then
+#'         p_value so that skipped features sort last, with columns: feature;
+#'         n (for tested features, the number of complete feature-target pairs;
+#'         for skipped features, the feature's non-NA row count); df (NA for
+#'         simulation-based tests, where the asymptotic degrees of freedom do
+#'         not apply, and for skipped features); p_value; adj_p_value;
+#'         significant (TRUE only when adj_p_value < sig_level, so FALSE for
+#'         skipped features); method ("asymptotic" or "simulation", NA when
+#'         skipped); correction_applied (TRUE/FALSE, NA when skipped);
+#'         min_expected (minimum expected cell count, NA when skipped)), plus
+#'         `sig_level`, `p_adjust_method` (the method string as supplied), and
+#'         `n_features` (the number of candidate categorical features,
+#'         including any that were skipped).}
 #'   \item{call}{The matched call.}
 #' }
 #'
@@ -242,6 +280,9 @@ fs_chi <- function(
 }
 
 #' Build a contingency table safely, dropping NAs and empty levels
+#'
+#' Returns NULL (rather than a degenerate table) when no row has both values
+#' observed, or when either margin is left with fewer than two levels.
 #' @noRd
 .fs_build_contingency <- function(dt, feature, target) {
   valid <- !is.na(dt[[feature]]) & !is.na(dt[[target]])
@@ -259,11 +300,16 @@ fs_chi <- function(
 
 #' Decide simulation vs asymptotic test and run it
 #'
-#' For simulation-based p-values the asymptotic degrees of freedom do not
-#' apply, so df is NA.
+#' Simulation is used when any expected cell count is < 5; for those
+#' simulation-based p-values the asymptotic degrees of freedom do not apply, so
+#' df is NA and no continuity correction is possible. Otherwise the asymptotic
+#' test runs, with Yates' correction on 2x2 tables only.
 #' @noRd
 .fs_choose_test <- function(tab, continuity_correction, simulation_B) {
-  # Initial test (no correction) to inspect expected counts
+  # Initial test (no correction) to inspect expected counts. Only this call can
+  # emit the "approximation may be incorrect" warning: the asymptotic branch
+  # below is reached only when every expected count is >= 5, and
+  # simulate.p.value = TRUE does not warn.
   init <- suppressWarnings(stats::chisq.test(tab, correct = FALSE))
   expected <- init$expected
   min_expected <- min(expected)
@@ -351,7 +397,12 @@ fs_chi <- function(
   })))
 }
 
-#' Wrapper over p.adjust with guardrails (case-insensitive, BH/BY safe)
+#' Wrapper over p.adjust() with a case-insensitive method check
+#'
+#' Matches `method` against stats::p.adjust.methods ignoring case and passes
+#' the canonical spelling on, so "bh" works as well as "BH"; anything else is
+#' an error rather than a silent fallback. NA p-values stay NA and still count
+#' towards the number of tests.
 #' @noRd
 .fs_adjust_pvalues <- function(pvals, method = "bonferroni") {
   choices <- stats::p.adjust.methods

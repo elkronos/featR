@@ -26,13 +26,14 @@ fs_svm(
 
 \item{target}{A string naming the target variable.}
 
-\item{task}{Either \code{"classification"} or \code{"regression"}.}
+\item{task}{Either \code{"classification"} or \code{"regression"}.
+Required; there is no default, because guessing it from the target is
+exactly the mistake this argument exists to prevent.}
 
 \item{train_ratio}{Training set proportion, strictly between 0 and 1
 (default \code{0.7}).}
 
-\item{nfolds}{Number of CV folds, a whole number > 1 (default \code{5}).
-Also the number of folds used by the SVM-RFE subset-size search.}
+\item{nfolds}{Number of CV folds for hyperparameter tuning, a whole number1 (default \code{5}). Also the number of folds used by the SVM-RFEsubset-size search (clamped there to at most the number of trainingrows); \code{select_method = "rf_rfe"} ignores it and uses 10 folds.}
 
 \item{kernel}{One of \code{"linear"} (default), \code{"radial"}, or
 \code{"polynomial"}.}
@@ -45,13 +46,19 @@ dummy-encoded training predictors (default \code{FALSE}).}
 
 \item{select_method}{Which selector to run when
 \code{feature_select = TRUE}: \code{"svm_rfe"} (default, true SVM-RFE,
-linear kernel only) or \code{"rf_rfe"} (random-forest screening).}
+linear kernel only) or \code{"rf_rfe"} (random-forest screening, any
+kernel). Ignored when \code{feature_select = FALSE}, and so is the
+linear-kernel requirement, which is only enforced when SVM-RFE will
+actually run. An unrecognized value is always an error.}
 
-\item{n_features}{Optional whole number of features to keep. For
-\code{"svm_rfe"} the top \code{n_features} ranked features are kept and
-the cross-validated size search is skipped; for \code{"rf_rfe"} the
-selection is truncated to the \code{n_features} most important. Default
-\code{NULL} (the size is chosen automatically).}
+\item{n_features}{Optional whole number of features to keep, capped at the
+number of encoded predictors. For \code{"svm_rfe"} the top
+\code{n_features} ranked features are kept and the cross-validated size
+search is skipped; for \code{"rf_rfe"} it truncates the selection to its
+first \code{n_features} entries and sets how many features the
+random-forest fallback keeps. Ignored when
+\code{feature_select = FALSE}. Default \code{NULL} (the size is chosen
+automatically).}
 
 \item{class_imbalance}{Logical; if \code{TRUE} and the task is
 classification, up-samples classes within CV resampling (default
@@ -73,13 +80,18 @@ cluster is created for the duration of the call and stopped on exit.}
 An object of class \code{fs_result} with:
 \describe{
 \item{selected}{Character vector of selected encoded feature names. When
-\code{feature_select = FALSE} this is every encoded predictor;
-otherwise it is the surviving subset, ordered from most to least
-important.}
-\item{scores}{Named numeric vector of the SVM-RFE criterion (the squared
-primal weights \code{w^2} of the first, full-feature fit) or, for
-\code{select_method = "rf_rfe"}, the mean random-forest importance.
-\code{NULL} when \code{feature_select = FALSE}.}
+\code{feature_select = FALSE} this is every encoded predictor. With
+\code{"svm_rfe"} it is the surviving subset, ordered from most to least
+important; with \code{"rf_rfe"} it is the subset in the order
+\code{caret::rfe()} reports it.}
+\item{scores}{Named numeric vector covering every encoded predictor, not
+just the survivors: the SVM-RFE criterion (the squared primal weights
+\code{w^2} of the first, full-feature fit) or, for
+\code{select_method = "rf_rfe"}, the mean random-forest importance
+recorded across resamples (\code{NA} for predictors \code{rfe()} never
+scored, or the mean decrease in node impurity when the fallback ran).
+\code{NULL} when \code{feature_select = FALSE}, because no selector
+produced comparable scores.}
 \item{method}{\code{"svm_"} followed by the kernel, for example
 \code{"svm_linear"}. The selector that ran, if any, is reported in
 \code{details$selection$method}.}
@@ -92,9 +104,12 @@ classification, or a named RMSE/Rsquared/MAE vector for regression),
 \code{selection} (\code{NULL} when no selection ran, otherwise a list
 with \code{method}, \code{ranking} from most to least important,
 \code{scores}, and the size search's \code{sizes}, \code{size_scores}
-and \code{size_metric}), \code{encoder} (the fitted
+and \code{size_metric} -- those last three being \code{NULL},
+\code{NULL} and \code{NA} whenever no size search ran, which is always
+the case for \code{"rf_rfe"} and for \code{"svm_rfe"} with an explicit
+\code{n_features}), \code{encoder} (the fitted
 \code{caret::dummyVars} object) and \code{n_features} (the number of
-encoded predictors considered).}
+encoded predictors considered, counted before any were dropped).}
 \item{call}{The matched call.}
 }
 }
@@ -106,20 +121,47 @@ via cross-validation. Optional parallel training uses an explicit worker
 count.
 }
 \details{
+This is the wrapper to reach for when the selector and the final model
+should belong to the same family: SVM-RFE ranks features by the weights of
+a linear SVM rather than by an external proxy criterion, and the returned
+object carries the tuned model and its held-out performance alongside the
+chosen features. That comes at a price -- a full SVM fit at every
+elimination step, plus a cross-validated size search -- so on wide data
+screen first with a filter such as \code{\link{fs_supervised}}.
+
 \itemize{
 \item Feature selection (\code{feature_select = TRUE}) defaults to
 \strong{SVM-RFE} (Guyon, Weston, Barnhill and Vapnik, 2002). A linear
 SVM is fitted on the centered and scaled encoded training matrix, the
-features are ranked by the squared primal weight \code{w^2}, the
-lowest-ranked feature is dropped (the lowest 10\\% while more than 50
-features remain), and the SVM is \emph{refitted} on the reduced set
-until one feature is left. Reversing the elimination order gives the
-ranking, so rank 1 is the feature eliminated last. SVM-RFE requires
-\code{kernel = "linear"}; combining it with another kernel is an error.
+features are ranked by the squared primal weight \code{w^2} (recovered
+from the fit's support vectors and coefficients, summed over the
+pairwise problems of a multi-class fit), the lowest-ranked feature is
+dropped (the lowest 10\\% while more than 50 features remain), and the
+SVM is \emph{refitted} on the reduced set until one feature is left.
+Reversing the elimination order gives the ranking, so rank 1 is the
+feature eliminated last. SVM-RFE requires \code{kernel = "linear"},
+because the ranking criterion is the primal weight vector, which only
+exists for a linear kernel; combining it with another kernel is an
+error that points at \code{select_method = "rf_rfe"}. The elimination
+and size-search fits use a fixed cost of \code{C = 1} and are separate
+from the final model, which is tuned over \code{tune_grid}.
+\item How many features SVM-RFE keeps: with \code{n_features} supplied,
+exactly that many (the top of the ranking). Otherwise a short ladder of
+candidate sizes -- the powers of two up to the number of features, plus
+the full size, trimmed to at most six entries but always including 1
+and the full size -- is scored by \code{nfolds}-fold cross-validation
+with the same linear SVM, on folds shared by every candidate size. The
+winner is the size with the highest mean accuracy (classification) or
+the lowest mean RMSE (regression), ties going to the smaller size; if
+no size could be scored, all features are kept.
 \item \code{select_method = "rf_rfe"} keeps the older random-forest
-screening (\code{caret::rfFuncs}) and works with every kernel. If
-\code{rfe()} fails or selects nothing, the top random-forest importance
-features are used instead, with a warning.
+screening (\code{caret::rfFuncs}) and works with every kernel. It runs
+its own 10-fold cross-validation over subset sizes 1 to p, independent
+of \code{nfolds}. If \code{rfe()} fails or selects nothing, a plain
+random forest is fitted and its most important features are used
+instead, with a warning -- and because the fallback keeps exactly
+\code{n_features} of them, a failure with \code{n_features = NULL}
+leaves a single feature.
 \item Selection always runs on the training split only, so the test set
 never informs which features survive.
 \item Class-imbalance handling (\code{class_imbalance = TRUE},

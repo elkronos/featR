@@ -15,24 +15,39 @@ fs_randomforest(
 )
 }
 \arguments{
-\item{data}{A data.frame or data.table containing predictors and target.}
+\item{data}{A data.frame or data.table with at least one row and one column,
+holding the target and the candidate predictors (every other column).
+\code{Date} columns are converted to numeric before modeling.}
 
-\item{target}{Character scalar; name of the target column.}
+\item{target}{Single string naming the target column of \code{data}; a column
+index is not accepted.}
 
-\item{task}{One of \code{"classification"} or \code{"regression"}.}
+\item{task}{One of \code{"classification"} (the default) or \code{"regression"},
+matched with \code{match.arg()}. A classification target is coerced with
+\code{as.factor()} and must retain at least two levels; a regression target is
+coerced with \code{as.numeric()}. Either way, rows whose target is \code{NA} after
+coercion are dropped with a warning.}
 
-\item{control}{List of method-specific options (see Details).}
+\item{control}{List of method-specific options; every accepted entry and its
+default is listed under Details. Unknown entries are an error, not a
+silent no-op. Default \code{list()}, i.e. all defaults.}
 
-\item{seed}{Optional whole number for reproducibility. Applied for the
-duration of the call only; the previous RNG state is restored on exit.
-Default \code{NULL} (the RNG is never seeded unless requested).}
+\item{seed}{Optional single finite number for reproducibility, truncated to
+an integer with \code{as.integer()}. Applied for the duration of the call only;
+the previous RNG state is restored on exit. With more than one worker it
+is also handed to \code{parallel::clusterSetRNGStream()}, and is then the only
+way to make the run reproducible. Default \code{NULL} (the RNG is never seeded
+unless requested).}
 
-\item{verbose}{Logical; print progress messages. Default \code{FALSE}.}
+\item{verbose}{Logical; emit progress messages (split sizes, how many
+predictors the hook kept, the tree/worker counts, and a note when AUC is
+skipped because 'pROC' is missing). Default \code{FALSE}.}
 
-\item{n_cores}{Integer >= 1. Number of workers used to grow the forest
-(default 1 = sequential; no cluster is created). Capped at the detected
-core count and at \code{control$ntree}; values above 1 require the suggested
-packages 'foreach' and 'doParallel'. See the OOB note below.}
+\item{n_cores}{Whole number >= 1. Number of workers used to grow the forest.
+Default \code{1L} (sequential; no cluster is created). Capped at the detected
+core count and at \code{control$ntree}; an effective value above 1 requires the
+suggested packages 'foreach' and 'doParallel', and costs the OOB metrics
+as described below.}
 }
 \value{
 An object of class \code{fs_result} with:
@@ -42,65 +57,113 @@ An object of class \code{fs_result} with:
 predictor that reached the forest, since a plain random forest
 ranks rather than selects. Ordered by decreasing importance when
 importance was computed.}
-\item{scores}{Named numeric vector of permutation importance
-(\code{randomForest::importance(type = 1)}), or \code{NULL} when
+\item{scores}{Named numeric vector of permutation importance from
+\code{randomForest::importance(type = 1)} -- mean decrease in accuracy
+for classification, percent increase in MSE for regression -- scaled
+or not according to \code{control$scale_importance}. \code{NULL} when
 \code{control$importance = FALSE}.}
 \item{method}{"randomforest".}
-\item{task}{"classification" or "regression".}
-\item{model}{The fitted \code{randomForest} object.}
-\item{details}{A list with \code{metrics} (accuracy/kappa/auc, or RMSE/MAE/R2),
-\code{predictions} (test-set predictions), \code{probabilities} (class
-probabilities, classification only), \code{importance} (the
-feature/importance data.frame, sorted descending), \code{confusion}
-(classification only), \code{oob} (out-of-bag metrics, \code{NULL} when
-trained in parallel or switched off), \code{feature_names} (predictors
-the forest actually used), \code{train_index} (training rows of the
-cleaned and optionally down-sampled data), \code{test_data} (the held-out
-rows, only when \code{control$return_test_data = TRUE}), \code{control} (the
-merged control list) and \code{n_features} (candidate predictors before
-selection).}
+\item{task}{"classification" or "regression", echoing the \code{task}
+argument.}
+\item{model}{The fitted \code{randomForest} object; the result of
+\code{randomForest::combine()} when more than one worker was used.}
+\item{details}{A list with \code{metrics} (a named list: \code{accuracy}, \code{kappa},
+\code{auc} for classification, or \code{RMSE}, \code{MAE}, \code{R2} for regression),
+\code{predictions} (test-set predictions), \code{probabilities} (test-set
+class probability matrix, classification only, \code{NULL} if
+\code{predict()} cannot produce one), \code{importance} (data.frame with
+columns \code{feature} and \code{importance}, sorted descending, \code{NULL} when
+\code{control$importance = FALSE}), \code{confusion} (Observed x Predicted
+table, classification only), \code{oob} (\code{accuracy} for classification or
+\code{RMSE} for regression; \code{NULL} when trained in parallel or switched
+off), \code{feature_names} (predictors the forest actually used),
+\code{train_index} (integer training rows of the cleaned and optionally
+down-sampled data), \code{test_data} (the held-out rows, only when
+\code{control$return_test_data = TRUE}, \code{NULL} otherwise), \code{control} (the
+merged control list) and \code{n_features} (candidate predictors after
+cleaning and before selection).}
 \item{call}{The matched call.}
 }
 }
 \description{
-Splits \code{data} into train and test partitions, optionally preprocesses,
-selects, imputes, and downsamples, trains a \code{randomForest} model
-(optionally across several workers), and evaluates it on the held-out test
-set. Permutation importance is reported as the per-feature score.
+Answers "how much does each predictor contribute to a random forest, and how
+well does that forest do on rows it has never seen?" The pipeline runs in
+this order: optional preprocessing of the full table, target cleaning,
+optional downsampling, a stratified train/test split, the optional
+\code{control$feature_select} hook on the training rows, character-to-factor
+coercion and level alignment, near-zero-variance removal, imputation,
+training (optionally across several workers), and evaluation on the held-out
+rows. Permutation importance is reported as the per-feature score.
 }
 \details{
-\strong{control list (defaults)}:
+Random forests take any mix of numeric, factor, character, and \code{Date}
+predictors and need no scaling, which makes this a good default when the
+feature types are messy. The main caveat is that a forest \emph{ranks}
+rather than \emph{selects}: unless you supply \code{control$feature_select},
+\code{selected} is every predictor that reached the forest, ordered by
+importance, and choosing the cutoff is left to you. Permutation importance
+also tends to favour predictors with many distinct values and to split
+credit between correlated predictors, so treat close scores as ties.
+
+\strong{control list (every accepted entry, with its default)}:
 \itemize{
-\item \code{train_ratio = 0.75} (training proportion of the split)
-\item \code{sample_size = NULL} (optional downsampling size before split)
-\item \code{ntree = 500}
-\item \code{importance = TRUE}
-\item \code{scale_importance = TRUE} (passed as \code{scale} to
-\code{randomForest::importance()}; set to \code{FALSE} for raw,
-unscaled permutation importance)
-\item \code{mtry = NULL} (defaults: \eqn{\sqrt{p}} for classification,
-\eqn{p/3} for regression)
-\item \code{nodesize = NULL}
-\item \code{maxnodes = NULL}
-\item \code{sampsize = NULL}
-\item \code{classwt = NULL}
-\item \code{strata = NULL}
-\item \code{replace = TRUE}
-\item \code{preprocess = NULL} (function \code{dt -> dt}, applied to the
-full data before the split)
-\item \code{feature_select = NULL} (function \code{dt -> dt}; runs on the
+\item \code{train_ratio = 0.75} -- training proportion of the stratified
+split; must be strictly between 0 and 1.
+\item \code{sample_size = NULL} -- optional whole number. When supplied,
+the data is downsampled to approximately this many rows \emph{before}
+the split (proportionally within each target class for classification,
+uniformly at random for regression). Values above the available row
+count are capped. \code{NULL} keeps every row.
+\item \code{ntree = 500} -- number of trees to grow; whole number >= 1.
+\item \code{importance = TRUE} -- compute permutation importance. When
+\code{FALSE}, \code{scores} and \code{details$importance} are
+\code{NULL} and \code{selected} keeps plain column order.
+\item \code{scale_importance = TRUE} -- passed as \code{scale} to
+\code{randomForest::importance()}, which divides each mean decrease in
+accuracy by its permutation standard error. Set to \code{FALSE} for the
+raw, unscaled permutation importance.
+\item \code{mtry = NULL} -- predictors sampled at each split. \code{NULL}
+means \code{floor(sqrt(p))} for classification and \code{floor(p / 3)}
+for regression; any value, supplied or derived, is clamped to
+\code{[1, p]}, where \code{p} counts the predictors that survive
+selection and near-zero-variance removal.
+\item \code{nodesize = NULL} -- minimum size of terminal nodes; whole
+number >= 1. \code{NULL} leaves \code{randomForest}'s own default (1 for
+classification, 5 for regression).
+\item \code{maxnodes = NULL} -- maximum number of terminal nodes per tree;
+whole number >= 2, or \code{NULL} for no limit.
+\item \code{sampsize = NULL} -- rows drawn to grow each tree, passed to
+\code{randomForest}. A single number for regression (a vector is an
+error); one number per class is allowed for classification. Values are
+clamped to the training row count, and \code{NA} entries are replaced by
+the full training size when \code{replace = TRUE} and by
+\code{ceiling(0.632 * n)} otherwise.
+\item \code{classwt = NULL} -- class priors for classification, forwarded
+to \code{randomForest} unchanged and unvalidated.
+\item \code{strata = NULL} -- stratification variable for the per-tree
+sampling, forwarded to \code{randomForest} unchanged and unvalidated.
+\item \code{replace = TRUE} -- sample rows with replacement when growing
+each tree.
+\item \code{preprocess = NULL} -- function \code{dt -> dt}, applied to the
+full data before the split. It must return a data.frame/data.table that
+still contains the target. See the leakage note below.
+\item \code{feature_select = NULL} -- function \code{dt -> dt}; runs on the
 training split only, and must select existing columns while retaining
-the target -- see the note below)
-\item \code{impute = TRUE} (median/mode values learned on the training
-data for every predictor and applied to NAs in train and test)
-\item \code{drop_zerovar = TRUE} (near-zero variance removal using
-training data only)
-\item \code{oob = TRUE} (include OOB metrics in \code{details$oob}; see the
-note below about parallel training)
-\item \code{return_test_data = FALSE} (when TRUE, the held-out rows are
-returned in \code{details$test_data})
-\item \code{positive_class = NULL} (optional level name for binary AUC;
-defaults to the second factor level)
+the target -- see the note below.
+\item \code{impute = TRUE} -- median (numeric) or modal
+(factor/character) values learned on the training data for every
+predictor and applied to NAs in train and test.
+\item \code{drop_zerovar = TRUE} -- near-zero variance removal with
+\code{caret::nearZeroVar()}, using training data only.
+\item \code{oob = TRUE} -- include out-of-bag metrics in
+\code{details$oob} (\code{accuracy} for classification, \code{RMSE} for
+regression); see the note below about parallel training.
+\item \code{return_test_data = FALSE} -- when \code{TRUE}, the held-out
+rows are returned in \code{details$test_data}.
+\item \code{positive_class = NULL} -- optional level name treated as the
+positive class for binary AUC. Falls back to the second factor level
+both by default and, silently, when the string does not name a level of
+the target.
 }
 Unknown \code{control} entries are rejected, so typos and arguments that moved
 out of \code{control} (\code{seed}, \code{n_cores}, the former \code{split_ratio}) fail loudly.
@@ -110,21 +173,38 @@ out of \code{control} (\code{seed}, \code{n_cores}, the former \code{split_ratio
 selection rule that looks at the target no longer leaks the held-out rows
 into the reported test metrics. Because the same columns must be applied to
 the test rows, the hook may only subset and reorder existing columns; put
-any feature engineering in \code{control$preprocess}, which still runs on
-the full data before the split. Near-zero-variance removal happens after
-the hook, so \code{details$feature_names} (the predictors the forest
-actually used) can be a subset of \code{selected}.
+any feature engineering in \code{control$preprocess}, which runs on the full
+data before the split -- subject to the caveat in the next paragraph.
+Near-zero-variance removal happens after the hook, so
+\code{details$feature_names} (the predictors the forest actually used) can be
+a subset of \code{selected}.
 
-\strong{OOB metrics and parallel training}: when \code{n_cores > 1} the
-forest is assembled with \code{randomForest::combine()}, which drops the
-out-of-bag error structures (\code{err.rate}, \code{mse},
-\code{confusion}). In that case \code{details$oob} is \code{NULL} and a
-warning is emitted if \code{control$oob = TRUE}.
+\strong{What still sees the full data}: \code{control$preprocess} runs
+before the split by design, so any quantity it learns -- an imputation
+value, a scaling constant, anything that consults the target -- is computed
+from the held-out rows too and will flatter \code{details$metrics}. Keep it
+to row-wise transformations that do not depend on other rows. Optional
+downsampling (\code{control$sample_size}) also happens before the split,
+which is why \code{details$train_index} indexes the cleaned and
+down-sampled table rather than the rows of the original \code{data}.
 
-Character predictors are converted to factors (levels learned on the
-training split; test values unseen in training become NA and are imputed
-when \code{control$impute = TRUE}). AUC for binary classification requires
-the suggested package 'pROC'; when it is not installed AUC is \code{NA}.
+\strong{OOB metrics and parallel training}: when more than one worker is
+actually used (\code{n_cores} after the caps described above) the forest is
+assembled with \code{randomForest::combine()}, which drops the out-of-bag
+error structures (\code{err.rate}, \code{mse}, \code{confusion}). In that
+case \code{details$oob} is \code{NULL} and a warning is emitted if
+\code{control$oob = TRUE}. The held-out metrics in \code{details$metrics}
+are unaffected; use \code{n_cores = 1} when you want the OOB numbers.
+
+Character predictors are converted to factors, with the levels learned on
+the training split. Test values unseen in training become NA and are imputed
+when \code{control$impute = TRUE}; with \code{control$impute = FALSE} those
+NAs survive into \code{predict()}, which \code{randomForest} cannot handle.
+\code{details$metrics$auc} is filled in only when the classification target
+has exactly two levels \emph{and} the suggested package 'pROC' is installed;
+it is \code{NA} otherwise, which includes every multi-class fit. Regression
+fits report RMSE, MAE, and R2 instead, and R2 is \code{NA} when the held-out
+target has no variance.
 }
 \examples{
 \donttest{
@@ -137,8 +217,10 @@ if (requireNamespace("randomForest", quietly = TRUE) &&
     control = list(ntree = 100),
     seed = 42
   )
-  res$selected
-  res$details$metrics
+  # every predictor, ranked: a forest ranks rather than selects
+  print(res$selected)
+  print(res$scores)
+  print(res$details$metrics)
 }
 }
 }

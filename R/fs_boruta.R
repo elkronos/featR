@@ -257,27 +257,53 @@ boruta_prune_correlated <- function(predictors,
 #' the confirmed set. Pruning is importance-aware: within a group of correlated
 #' features the one with the highest median Boruta importance is kept.
 #'
-#' @param data A data frame (or data-frame-like object, or matrix).
+#' @details
+#' Boruta answers "which features carry any information about the target?",
+#' not "which minimal subset predicts best". It is an all-relevant selector:
+#' across up to `maxRuns` random-forest fits it compares each feature against
+#' "shadow" features built by permuting the predictors, and confirms every
+#' feature that beats the best shadow often enough to be unlikely by chance.
+#' Redundant-but-informative features are therefore all confirmed. That makes
+#' it a good fit for understanding a dataset, and a poor fit when you need a
+#' compact model. It also costs many forest fits, and the outcome varies from
+#' run to run unless `seed` is supplied.
+#'
+#' The `cutoff_cor` pruning and the `cutoff_features` cap are featR additions,
+#' applied to Boruta's output in that order; both rank features by median
+#' Boruta importance. Features still undecided when `maxRuns` is reached stay
+#' Tentative; `resolve_tentative = TRUE` settles them with the
+#' `Boruta::TentativeRoughFix()` heuristic rather than with further evidence.
+#'
+#' @param data A data frame (or data-frame-like object, or matrix). Predictor
+#'   columns may be numeric, factor, character, logical, Date or POSIXt;
+#'   character and logical columns are converted to factors and Date/POSIXt
+#'   columns to numeric, and any other type is an error. Neither the target
+#'   nor the predictors may contain missing values, since Boruta's underlying
+#'   random forest cannot fit them.
 #' @param target Name of the target column in `data`. A factor target is
-#'   treated as classification, a numeric target as regression.
-#' @param maxRuns Maximum number of Boruta iterations. Default 250.
+#'   treated as classification, a numeric target as regression; any other type
+#'   is an error, as is a target containing NAs.
+#' @param maxRuns Whole number >= 1. Maximum number of Boruta iterations.
+#'   Default 250.
 #' @param cutoff_features Optional whole number capping the number of returned
 #'   features. When supplied, the top features by median Boruta importance are
-#'   retained. Default NULL (no cap).
+#'   retained, applied after any correlation pruning. Default NULL (no cap).
 #' @param cutoff_cor Numeric correlation cutoff between 0 and 1 used to drop
 #'   redundant features from the selected set. Within each group of features
 #'   correlated above the cutoff, the feature with the highest median Boruta
-#'   importance is kept and the rest are dropped. Set NULL to skip this step.
-#'   Default 0.7.
+#'   importance is kept and the rest are dropped. Only numeric predictors are
+#'   compared (absolute Pearson correlation); factor predictors are never
+#'   pruned. Set NULL to skip this step. Default 0.7.
 #' @param resolve_tentative Logical; if TRUE, apply `Boruta::TentativeRoughFix()`
 #'   and return only confirmed attributes. If FALSE, tentative attributes are
 #'   included in the selected set. Default TRUE.
 #' @param seed Optional integer for reproducibility. Applied locally: the
 #'   previous RNG state is restored when the function exits. Default NULL
 #'   (the RNG is never seeded unless requested).
-#' @param verbose Logical; if TRUE, report progress. This maps to Boruta's
-#'   `doTrace = 1` (decisions are reported as they are made); FALSE maps to
-#'   `doTrace = 0`. Default FALSE.
+#' @param verbose Logical; if TRUE, report progress and name any features
+#'   dropped by correlation pruning. This maps to Boruta's `doTrace = 1`
+#'   (decisions are reported as they are made); FALSE maps to `doTrace = 0`.
+#'   Default FALSE.
 #'
 #' @return An object of class `fs_result` with:
 #' \describe{
@@ -289,10 +315,13 @@ boruta_prune_correlated <- function(predictors,
 #'   \item{method}{"boruta".}
 #'   \item{task}{"classification" for a factor target, "regression" for a
 #'         numeric one.}
-#'   \item{model}{The Boruta object.}
-#'   \item{details}{A list with `boruta_obj` (the Boruta object), `decisions`
-#'         (the per-feature Confirmed/Tentative/Rejected factor),
-#'         `dropped_correlated` (features removed by correlation pruning), and
+#'   \item{model}{The Boruta object, after `Boruta::TentativeRoughFix()` when
+#'         `resolve_tentative = TRUE` and something was still tentative.}
+#'   \item{details}{A list with `boruta_obj` (the same Boruta object as
+#'         `model`), `decisions` (the per-feature
+#'         Confirmed/Tentative/Rejected factor, as it stands after any
+#'         tentative fix), `dropped_correlated` (features removed by
+#'         correlation pruning, empty when `cutoff_cor` is NULL), and
 #'         `n_features` (the number of candidate features).}
 #'   \item{call}{The matched call.}
 #' }

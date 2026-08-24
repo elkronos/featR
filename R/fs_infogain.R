@@ -154,8 +154,9 @@ ig_categorical_target <- function(y, numeric_bins = NULL) {
 
 #' Conditional entropy H(Y | X) via a contingency table
 #'
-#' Vectorized replacement for the per-level `which()` loop. Inputs are
-#' expected to be NA-free and equal length.
+#' Computed in one pass over `table(x, y)` (rows with no observations are
+#' skipped) rather than by looping over the levels of `x`. Inputs are expected
+#' to be NA-free and of equal length.
 #'
 #' @param x Factor (or vector coercible by `table()`).
 #' @param y Factor (or vector coercible by `table()`).
@@ -388,9 +389,19 @@ ig_collisions <- function(tab, score_col) {
 #' target, optionally normalized to a gain ratio.
 #'
 #' @details
-#' * Numeric predictors are discretized into
-#'   `max(Freedman-Diaconis, Sturges)` bins (never fewer than 2), unless
-#'   `numeric_bins` overrides the count.
+#' Use this to rank candidate predictors cheaply, before any model is fitted:
+#' it answers "how many bits of uncertainty about the target does knowing this
+#' one predictor remove?". It needs no distributional assumptions and handles
+#' mixed column types, but it is a univariate filter -- each predictor is
+#' scored on its own, so two redundant copies of the same information both
+#' score highly, and a predictor that only matters in combination with another
+#' scores low. Treat the ranking as a shortlist, not a final feature set.
+#'
+#' * Numeric predictors are discretized into `max(Freedman-Diaconis, Sturges)`
+#'   equal-width bins (never fewer than 2), unless `numeric_bins` overrides
+#'   the count. Under the automatic rule, a column with a zero range or a zero
+#'   interquartile range falls back to 2 bins; a column with a single distinct
+#'   value becomes a single-level factor either way and scores 0.
 #' * The target is always treated categorically, so `task` is always
 #'   `"classification"`. Numeric targets are discretized the same way, ONCE
 #'   on all rows with a non-NA target, so bin breaks are shared and scores
@@ -425,20 +436,25 @@ ig_collisions <- function(tab, score_col) {
 #' scaled gains, do not compare them against thresholds calibrated for raw
 #' gains in bits.
 #'
-#' @param data A data.frame, or a list of data.frames each containing `target`.
+#' @param data A data.frame (a data.table is accepted and is copied, never
+#'   modified in place), or a list of data.frames each containing `target`.
 #' @param target Character. Name of the target column.
-#' @param numeric_bins Optional integer (>= 2 after clamping) overriding the
-#'   automatic bin calculation for numeric columns. Default `NULL`.
+#' @param numeric_bins Optional whole number >= 1 (values below 2 are clamped
+#'   to 2) overriding the automatic bin count for numeric predictors and for a
+#'   numeric target. Default `NULL` (bins chosen per column).
 #' @param normalize One of `"none"` (default, raw information gain in bits)
 #'   or `"gain_ratio"` (gain divided by the predictor's split entropy). See
 #'   the section on cardinality bias.
-#' @param top_n Optional positive integer. When supplied, `selected` holds
-#'   the `top_n` highest-scoring features (fewer if there are fewer scored
-#'   features). When `NULL` (default), `selected` holds every feature whose
-#'   score is strictly greater than 0.
+#' @param top_n Optional whole number >= 1. When supplied, `selected` holds
+#'   the `top_n` highest-scoring features (fewer if fewer were scored). This
+#'   is a rank cut, not a score floor: a zero-scoring feature is selected if
+#'   the ranking reaches it. When `NULL` (default), `selected` instead holds
+#'   every feature whose score is strictly greater than 0.
 #' @param remove_na Logical. If `TRUE` (default), rows with NA in the target
 #'   are removed up front. See Details for its narrow practical effect.
-#' @param verbose Logical. If `TRUE`, emit progress messages. Default `FALSE`.
+#' @param verbose Logical. If `TRUE`, report how many features were scored,
+#'   how many names collided across data.frames, and how many were selected.
+#'   Default `FALSE`.
 #' @return An object of class `fs_result` with elements:
 #' * `selected`: character vector of selected feature names, ordered by
 #'   decreasing score. Features with an undefined (`NA`) score are never
@@ -449,14 +465,16 @@ ig_collisions <- function(tab, score_col) {
 #'   a name occurring in several data.frames keeps its highest score.
 #' * `method`: `"infogain"`.
 #' * `task`: `"classification"` (the target is always discretized).
-#' * `model`: `NULL`.
-#' * `details`: a list holding `table` (the full scored table: `Variable`,
-#'   `InfoGain`, plus `SplitEntropy` and `GainRatio` when
-#'   `normalize = "gain_ratio"`, plus `Origin` for list input),
-#'   `normalize`, `numeric_bins`, `n_features` (the number of candidate
-#'   features), and, for list input, `collisions` (a table of the feature
-#'   names found in more than one data.frame, with `Kept` marking the row
-#'   whose score won; zero rows when there are none).
+#' * `model`: `NULL` (this is a filter; nothing is fitted).
+#' * `details`: a list holding `table` (the full scored table, one row per
+#'   scored column of each input: `Variable`, `InfoGain`, plus `SplitEntropy`
+#'   and `GainRatio` when `normalize = "gain_ratio"`, plus `Origin` for list
+#'   input), `normalize` (as resolved), `numeric_bins` (the requested bin
+#'   count as an integer, `NULL` when automatic), `n_features` (the number of
+#'   distinct scored features, i.e. `length(scores)`), and, for list input,
+#'   `collisions` (a table of the feature names found in more than one
+#'   data.frame, with `Kept` marking the row whose score won; zero rows when
+#'   there are none).
 #' * `call`: the matched call.
 #' @examples
 #' # Single data.frame:
@@ -471,7 +489,8 @@ ig_collisions <- function(tab, score_col) {
 #' res$scores
 #' res$details$table
 #'
-#' # Correct the bias toward many-leveled predictors, and keep the best two:
+#' # Normalize by split entropy to offset the bias toward many-leveled
+#' # predictors, and keep the two best-ranked features:
 #' fs_infogain(df, target = "target", normalize = "gain_ratio", top_n = 2)
 #'
 #' # List of data.frames:
@@ -531,8 +550,8 @@ fs_infogain <- function(data,
   }
 
   # Column order: Variable, InfoGain, [SplitEntropy, GainRatio], [Origin].
-  # Under normalize = "none" the split entropy is an implementation detail
-  # and is dropped, leaving exactly the historical table.
+  # Under normalize = "none" the split entropy is only an intermediate value,
+  # so it is dropped and the table keeps Variable and InfoGain alone.
   keep_cols <- c(
     "Variable",
     "InfoGain",

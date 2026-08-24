@@ -230,6 +230,16 @@ test_that("fs_bayes end-to-end smoke run returns the documented fs_result", {
   skip_on_cran()
   skip_if_not_installed("brms")
   skip_if_not_installed("loo")
+  # Every candidate model compiles a Stan program, so this needs a working
+  # C++ toolchain wired up to rstan/cmdstanr -- not merely an installed brms.
+  # CI runners and CRAN check machines frequently have the package without a
+  # usable compiler, where every fit returns NULL and the run legitimately
+  # errors. Opt in explicitly on a machine known to have the toolchain:
+  #   FEATR_TEST_BRMS=true Rscript -e 'devtools::test()'
+  skip_if_not(
+    identical(Sys.getenv("FEATR_TEST_BRMS"), "true"),
+    "set FEATR_TEST_BRMS=true to run the brms end-to-end test"
+  )
 
   x1 <- seq(-2, 2, length.out = 40)
   x2 <- rep(c(-1, 1), 20)

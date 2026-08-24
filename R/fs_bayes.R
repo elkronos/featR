@@ -743,7 +743,13 @@ fs_bayes <- function(data,
       logical(1L)
     ))
     if (length(fitted_idx) == 0L) {
-      stop("No valid models were fitted. Please check your data and model specifications.")
+      stop("No valid models were fitted. Every candidate model failed to ",
+           "sample, so there is nothing to select from. The usual causes are ",
+           "a Stan toolchain that brms cannot use (installing brms is not ",
+           "enough; a working C++ compiler must be configured), invalid ",
+           "'brm_args' such as a 'warmup' that is not smaller than 'iter', ",
+           "or a model specification the data cannot support. Re-run with ",
+           "verbose = TRUE to see the per-model failure messages.")
     }
     warning("No finite LOO selection criterion was available; ",
             "returning the first successfully fitted model, which is an arbitrary choice.")

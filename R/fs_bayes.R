@@ -159,7 +159,6 @@ bayes_fit_model <- function(data,
     family  = brm_family,
     prior   = prior,
     iter    = 2000,
-    warmup  = 1000,
     control = list(adapt_delta = 0.99, max_treedepth = 15),
     refresh = 0
   )
@@ -345,23 +344,23 @@ bayes_evaluate_combination <- function(preds,
 #' }
 #'
 #' @examples
-#' \donttest{
-#' if (requireNamespace("brms", quietly = TRUE) &&
-#'     requireNamespace("loo", quietly = TRUE)) {
-#'   x1 <- seq(-2, 2, length.out = 40)
-#'   x2 <- rep(c(-1, 1), 20)
-#'   d <- data.frame(
-#'     y  = 1 + 2 * x1 + sin(seq_len(40)),
-#'     x1 = x1,
-#'     x2 = x2
-#'   )
-#'   res <- fs_bayes(
-#'     d, "y", c("x1", "x2"),
-#'     brm_args = list(chains = 1, iter = 500, refresh = 0),
-#'     show_progress = FALSE, verbose = FALSE
-#'   )
-#'   res$SelectedFormula
-#' }
+#' # Each candidate model compiles a Stan program, so this example is not run
+#' # automatically (compilation alone takes far longer than a typical example
+#' # budget). The same call is exercised by the package tests.
+#' \dontrun{
+#' x1 <- seq(-2, 2, length.out = 40)
+#' x2 <- rep(c(-1, 1), 20)
+#' d <- data.frame(
+#'   y  = 1 + 2 * x1 + sin(seq_len(40)),
+#'   x1 = x1,
+#'   x2 = x2
+#' )
+#' res <- fs_bayes(
+#'   d, "y", c("x1", "x2"),
+#'   brm_args = list(chains = 1, iter = 500, refresh = 0),
+#'   show_progress = FALSE, verbose = FALSE
+#' )
+#' res$SelectedFormula
 #' }
 #' @export
 fs_bayes <- function(data,
@@ -575,8 +574,20 @@ fs_bayes <- function(data,
     }
   }
 
-  # Append metrics and compute summary errors (in-sample, post-selection)
-  data_with_metrics <- bayes_add_metrics_to_data(data.table::copy(data), best$model)
+  # Append metrics and compute summary errors (in-sample, post-selection).
+  # A brmsfit can exist without posterior draws when sampling itself failed
+  # (bad brm_args, divergent initialisation); fitted() would then fail deep
+  # inside brms, so surface an actionable error here instead.
+  data_with_metrics <- tryCatch(
+    bayes_add_metrics_to_data(data.table::copy(data), best$model),
+    error = function(e) {
+      stop("The selected model contains no usable posterior draws, so ",
+           "fitted values could not be computed (", conditionMessage(e),
+           "). This usually means sampling failed for every candidate model; ",
+           "check 'brm_args' (for example that 'warmup' is smaller than ",
+           "'iter') and the model specification.", call. = FALSE)
+    }
+  )
   mae  <- mean(data_with_metrics$abs_residuals, na.rm = TRUE)
   rmse <- sqrt(mean(data_with_metrics$squared_residuals, na.rm = TRUE))
 

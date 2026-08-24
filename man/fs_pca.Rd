@@ -24,7 +24,11 @@ one numeric column.}
 is after incomplete rows and zero-variance columns have been dropped.
 Explicit values larger than \code{max_possible} raise an error.}
 
-\item{scale_data}{Logical; scale numeric columns to unit variance.
+\item{scale_data}{Logical; scale numeric columns to unit variance. Cannot be
+\code{TRUE} while \code{center_data} is \code{FALSE}: \code{stats::prcomp()} and
+\code{bigstatsr::big_scale()} treat uncentered scaling differently (the latter
+ignores it), so allowing it would make the decomposition depend on which
+engine the data size selected. That combination is an error.
 Default \code{TRUE}.}
 
 \item{center_data}{Logical; center numeric columns. Default \code{TRUE}.}

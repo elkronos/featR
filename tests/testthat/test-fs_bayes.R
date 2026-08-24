@@ -93,6 +93,17 @@ test_that("bayes_validate_data catches missing or mistyped columns (helper-level
                "Missing predictor columns: zz")
   expect_error(featR:::bayes_validate_data(d, "y", c("y", "x1")),
                "must not also appear in 'predictors'")
+
+  # A family generator passed without parentheses used to die with
+  # "object of type 'closure' is not subsettable".
+  expect_error(
+    featR:::bayes_validate_data(d, "y", "x1", brm_family = stats::gaussian),
+    "Note the parentheses"
+  )
+  expect_error(
+    featR:::bayes_validate_data(d, "y", "x1", brm_family = "gaussian"),
+    "must be a family object"
+  )
   expect_error(featR:::bayes_validate_data(d, "y", "x1", date_col = "when"),
                "Date column 'when' not found")
 
@@ -152,6 +163,46 @@ test_that("combination sampling is seed-reproducible and leaves RNG state alone"
   s2 <- gen(letters[1:5], sample_combinations = 4, seed = 99)
   expect_identical(s1, s2)
   expect_length(s1, 4L)
+})
+
+test_that("sampling draws distinct subsets without enumerating them", {
+  # REGRESSION: every subset used to be materialized with combn() before
+  # sampling, so `sample_combinations` blew up on memory at exactly the scale
+  # it exists to bound. 28 predictors is 2^28 - 1 = 268435455 subsets, which
+  # cannot be enumerated; this must return promptly.
+  gen <- featR:::bayes_generate_predictor_combinations
+  preds <- paste0("x", seq_len(28))
+
+  drawn <- gen(preds, sample_combinations = 25, seed = 7)
+  expect_length(drawn, 25L)
+  expect_true(all(vapply(drawn, is.character, logical(1))))
+  # Every subset is non-empty, within range, and drawn from the pool
+  expect_true(all(lengths(drawn) >= 1L))
+  expect_true(all(lengths(drawn) <= length(preds)))
+  expect_true(all(unlist(drawn) %in% preds))
+  # ... and all 25 are distinct
+  keys <- vapply(drawn, function(s) paste(sort(s), collapse = "|"),
+                 character(1L))
+  expect_identical(anyDuplicated(keys), 0L)
+
+  # Reproducible under a seed, and different without one being shared
+  expect_identical(gen(preds, sample_combinations = 25, seed = 7), drawn)
+  expect_false(identical(gen(preds, sample_combinations = 25, seed = 8), drawn))
+
+  # max_comb_size still bounds the subset sizes on the sampled path
+  small <- gen(preds, max_comb_size = 3, sample_combinations = 20, seed = 3)
+  expect_length(small, 20L)
+  expect_true(all(lengths(small) <= 3L))
+})
+
+test_that("an unbounded search errors instead of exhausting memory", {
+  gen <- featR:::bayes_generate_predictor_combinations
+  preds <- paste0("x", seq_len(28))
+
+  expect_error(gen(preds), "Reduce 'max_comb_size'")
+  expect_error(gen(preds), "sample_combinations")
+  # A bounded search of the same predictors is fine.
+  expect_length(gen(preds, max_comb_size = 2), 28L + choose(28L, 2L))
 })
 
 test_that("bayes_add_week_feature builds ISO week ids (helper-level)", {

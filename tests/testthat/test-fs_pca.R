@@ -236,6 +236,15 @@ test_that("fs_pca validates data, num_pc and label_col", {
   expect_error(fs_pca(d, scale_data = NA), "'scale_data' must be TRUE or FALSE")
   expect_error(fs_pca(d, center_data = "yes"), "'center_data' must be TRUE or FALSE")
   expect_error(fs_pca(d, verbose = NA), "'verbose' must be TRUE or FALSE")
+
+  # Scaling without centering is rejected because stats::prcomp() and
+  # bigstatsr::big_scale() disagree about it: the latter silently ignores the
+  # request, so the decomposition would depend on the size of the input.
+  expect_error(fs_pca(d, scale_data = TRUE, center_data = FALSE),
+               "not supported")
+  # Either half alone is fine.
+  expect_silent(fs_pca(d, scale_data = FALSE, center_data = FALSE))
+  expect_silent(fs_pca(d, scale_data = TRUE, center_data = TRUE))
   expect_error(fs_pca(d, label_col = "absent"),
                "Column 'absent' not found in 'data'")
   expect_error(fs_pca(d, label_col = 1), "'label_col' must be a single non-empty")

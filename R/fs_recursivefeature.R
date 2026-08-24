@@ -150,11 +150,14 @@ rfe_fit_encoder <- function(train_df, target) {
 rfe_apply_encoder <- function(data_df, target, dv) {
   predictors <- data_df[, setdiff(colnames(data_df), target), drop = FALSE]
   X <- as.data.frame(stats::predict(dv, newdata = predictors))
+  # Defensive only: predictor levels are aligned before the encoder is fitted
+  # and predict.dummyVars() passes NAs through, so the row count should always
+  # match. Report what was actually detected rather than guessing a cause.
   if (nrow(X) != nrow(data_df)) {
     stop(sprintf(paste(
-      "One-hot encoding returned %d row(s) for %d input row(s).",
-      "This usually means missing values or factor levels unseen in training;",
-      "clean or impute the data before calling fs_recursivefeature()."
+      "One-hot encoding returned %d row(s) for %d input row(s), so the",
+      "encoded predictors can no longer be matched to the target. This should",
+      "not happen; please report it with a reproducible example."
     ), nrow(X), nrow(data_df)), call. = FALSE)
   }
   data.frame(
@@ -173,17 +176,29 @@ rfe_apply_encoder <- function(data_df, target, dv) {
 #' Registers a two-worker PSOCK cluster (capped at the detected core count via
 #' `resolve_cores()`). featR never grabs all available cores.
 #'
+#' When `seed` is supplied, the workers are given reproducible L'Ecuyer-CMRG
+#' streams, so two seeded parallel runs agree with each other.
+#'
 #' @param enable Logical; return NULL without side effects when FALSE.
+#' @param seed Optional seed used to set the workers' RNG streams.
 #' @return The cluster object, or NULL.
 #' @noRd
-rfe_start_parallel <- function(enable) {
+rfe_start_parallel <- function(enable, seed = NULL) {
   if (!isTRUE(enable)) {
     return(NULL)
   }
   fs_require(c("foreach", "doParallel"), "parallel RFE")
   cores <- resolve_cores(2L)
   cl <- parallel::makeCluster(cores)
+  # Stop the cluster ourselves if registration fails: it has not reached the
+  # caller's on.exit() yet, so it would otherwise leak connections.
+  ok <- FALSE
+  on.exit(if (!ok) try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+  if (!is.null(seed)) {
+    parallel::clusterSetRNGStream(cl, iseed = as.integer(seed))
+  }
   doParallel::registerDoParallel(cl)
+  ok <- TRUE
   cl
 }
 
@@ -475,10 +490,11 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #' @param seed Optional single finite number, truncated to an integer with
 #'   `as.integer()`. It covers the split and the RFE resampling, is applied for
 #'   the duration of the call only (the previous RNG state is restored on
-#'   exit), and defaults to `NULL`, which never seeds. Note that
-#'   `parallel = TRUE` runs resamples on PSOCK workers with their own RNG
-#'   streams, so a seeded parallel run is not guaranteed to reproduce a seeded
-#'   sequential one.
+#'   exit), and defaults to `NULL`, which never seeds. Under
+#'   `parallel = TRUE` the seed is also used to set reproducible
+#'   L'Ecuyer-CMRG streams on the workers, so two seeded parallel runs agree
+#'   with each other; because the workers draw from their own streams, a
+#'   seeded parallel run need not equal a seeded sequential one.
 #' @param verbose Logical; print progress messages and let `caret::rfe()`
 #'   report its own progress, unless `rfe_control$verbose` overrides the
 #'   latter. Default `FALSE`.
@@ -624,7 +640,7 @@ fs_recursivefeature <- function(data,
 
   n_features <- length(setdiff(colnames(train_df), target))
 
-  cl <- rfe_start_parallel(parallel)
+  cl <- rfe_start_parallel(parallel, seed = seed)
   on.exit(rfe_stop_parallel(cl), add = TRUE)
 
   rfe_message("Running recursive feature elimination on the training rows...",

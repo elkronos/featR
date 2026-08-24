@@ -603,7 +603,10 @@ fs_randomforest <- function(data,
     }
     if (anyNA(sampsize_eff)) {
       n_obs <- nrow(x_train)
-      sampsize_eff <- if (isTRUE(ctrl$replace)) n_obs else ceiling(0.632 * n_obs)
+      repl <- if (isTRUE(ctrl$replace)) n_obs else ceiling(0.632 * n_obs)
+      # Replace only the NA entries. Overwriting the whole vector silently
+      # discarded the per-class sizes the user did supply, e.g. c(10, NA).
+      sampsize_eff[is.na(sampsize_eff)] <- repl
     }
     sampsize_eff <- as.integer(sampsize_eff)
     if (any(!is.finite(sampsize_eff)) || any(sampsize_eff < 1L)) {

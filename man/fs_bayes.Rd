@@ -89,22 +89,22 @@ Evaluates predictor combinations with brms models and selects the best
 combination by elpd_loo (leave-one-out expected log predictive density).
 }
 \examples{
-\donttest{
-if (requireNamespace("brms", quietly = TRUE) &&
-    requireNamespace("loo", quietly = TRUE)) {
-  x1 <- seq(-2, 2, length.out = 40)
-  x2 <- rep(c(-1, 1), 20)
-  d <- data.frame(
-    y  = 1 + 2 * x1 + sin(seq_len(40)),
-    x1 = x1,
-    x2 = x2
-  )
-  res <- fs_bayes(
-    d, "y", c("x1", "x2"),
-    brm_args = list(chains = 1, iter = 500, refresh = 0),
-    show_progress = FALSE, verbose = FALSE
-  )
-  res$SelectedFormula
-}
+# Each candidate model compiles a Stan program, so this example is not run
+# automatically (compilation alone takes far longer than a typical example
+# budget). The same call is exercised by the package tests.
+\dontrun{
+x1 <- seq(-2, 2, length.out = 40)
+x2 <- rep(c(-1, 1), 20)
+d <- data.frame(
+  y  = 1 + 2 * x1 + sin(seq_len(40)),
+  x1 = x1,
+  x2 = x2
+)
+res <- fs_bayes(
+  d, "y", c("x1", "x2"),
+  brm_args = list(chains = 1, iter = 500, refresh = 0),
+  show_progress = FALSE, verbose = FALSE
+)
+res$SelectedFormula
 }
 }

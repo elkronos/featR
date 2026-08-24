@@ -477,7 +477,7 @@ fs_randomforest <- function(data,
     cl <- parallel::makeCluster(n_cores)
     doParallel::registerDoParallel(cl)
     on.exit({
-      try(doParallel::registerDoSEQ(), silent = TRUE)
+      try(foreach::registerDoSEQ(), silent = TRUE)
       try(parallel::stopCluster(cl), silent = TRUE)
     }, add = TRUE)
 

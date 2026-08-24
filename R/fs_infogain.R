@@ -182,24 +182,27 @@ ig_cond_entropy <- function(x, y) {
   if (!is.finite(val)) 0 else val
 }
 
-#' Information gain for one predictor against a pre-discretized target
+#' Information gain and split entropy for one predictor
 #'
 #' Complete cases are taken per pair (rows are not dropped globally), but the
 #' target must already be categorical with breaks computed once on the full
-#' data so results are comparable across predictors.
+#' data so results are comparable across predictors. The split entropy H(X)
+#' is computed on exactly the same complete cases and after the same
+#' discretization, so `InfoGain / SplitEntropy` is a well-defined gain ratio.
 #'
 #' @param x Predictor vector (numeric/character/factor/logical/date-like).
 #' @param y_cat Full-length categorical target from `ig_categorical_target()`.
 #' @param numeric_bins Optional integer for predictor discretization.
-#' @return Numeric information gain (NA when no complete cases).
+#' @return Numeric vector of length two: information gain and split entropy,
+#'   both `NA` when there are no complete cases.
 #' @noRd
-ig_info_gain_one <- function(x, y_cat, numeric_bins = NULL) {
+ig_score_one <- function(x, y_cat, numeric_bins = NULL) {
   ok <- !is.na(x) & !is.na(y_cat)
   x <- x[ok]
   y <- y_cat[ok]
 
   if (!length(x) || !length(y)) {
-    return(NA_real_)
+    return(c(NA_real_, NA_real_))
   }
 
   # Discretize/normalize the predictor to a factor
@@ -212,9 +215,9 @@ ig_info_gain_one <- function(x, y_cat, numeric_bins = NULL) {
   }
   # factors are left as-is
 
-  # A constant predictor carries no information
+  # A constant predictor carries no information and has no split entropy
   if (length(unique(x[!is.na(x)])) <= 1L) {
-    return(0)
+    return(c(0, 0))
   }
 
   ig <- ig_entropy(y) - ig_cond_entropy(x, y)
@@ -223,7 +226,28 @@ ig_info_gain_one <- function(x, y_cat, numeric_bins = NULL) {
   if (!is.finite(ig)) ig <- 0
   if (ig < 0) ig <- 0
 
-  as.numeric(ig)
+  c(as.numeric(ig), as.numeric(ig_entropy(x)))
+}
+
+#' Gain ratio from information gain and split entropy
+#'
+#' `NA` propagates. A predictor whose split entropy is (numerically) zero --
+#' a constant column -- scores 0 instead of dividing by zero.
+#'
+#' @param info_gain Numeric vector of information gains, in bits.
+#' @param split_entropy Numeric vector of predictor entropies H(X), in bits.
+#' @return Numeric vector of gain ratios, same length as `info_gain`.
+#' @noRd
+ig_gain_ratio <- function(info_gain, split_entropy) {
+  tol <- .Machine$double.eps^0.5
+  out <- rep(NA_real_, length(info_gain))
+  ok <- !is.na(info_gain) & !is.na(split_entropy)
+  if (any(ok)) {
+    num <- info_gain[ok]
+    den <- split_entropy[ok]
+    out[ok] <- ifelse(den > tol, num / den, 0)
+  }
+  out
 }
 
 #' Information gain for a single data.frame
@@ -232,7 +256,7 @@ ig_info_gain_one <- function(x, y_cat, numeric_bins = NULL) {
 #' @param target Character target column name.
 #' @param numeric_bins Optional integer bin override.
 #' @param remove_na If `TRUE`, drop rows with NA in the TARGET only.
-#' @return data.frame with columns Variable and InfoGain.
+#' @return data.frame with columns Variable, InfoGain, and SplitEntropy.
 #' @noRd
 ig_single <- function(df, target, numeric_bins = NULL, remove_na = TRUE) {
   assert_target(df, target)
@@ -254,20 +278,25 @@ ig_single <- function(df, target, numeric_bins = NULL, remove_na = TRUE) {
   predictors <- setdiff(names(dt), target)
   if (!length(predictors)) {
     return(data.frame(Variable = character(), InfoGain = numeric(),
-                      stringsAsFactors = FALSE))
+                      SplitEntropy = numeric(), stringsAsFactors = FALSE))
   }
 
   # Discretize the target ONCE, up front, using all rows with a non-NA
   # target, so bin count and cut() breaks are shared across predictors.
   y_cat <- ig_categorical_target(dt[[target]], numeric_bins = numeric_bins)
 
-  ig <- vapply(
+  scored <- vapply(
     predictors,
-    function(col) ig_info_gain_one(dt[[col]], y_cat, numeric_bins = numeric_bins),
-    numeric(1L)
+    function(col) ig_score_one(dt[[col]], y_cat, numeric_bins = numeric_bins),
+    numeric(2L)
   )
 
-  data.frame(Variable = predictors, InfoGain = ig, stringsAsFactors = FALSE)
+  data.frame(
+    Variable = predictors,
+    InfoGain = as.numeric(scored[1L, ]),
+    SplitEntropy = as.numeric(scored[2L, ]),
+    stringsAsFactors = FALSE
+  )
 }
 
 #' Information gain across a list of data.frames
@@ -276,7 +305,7 @@ ig_single <- function(df, target, numeric_bins = NULL, remove_na = TRUE) {
 #' @param target Character target column present in each data.frame.
 #' @param numeric_bins Optional integer bin override (passed through).
 #' @param remove_na Logical; drop rows with NA target (per data.frame).
-#' @return data.frame with columns Variable, InfoGain, Origin.
+#' @return data.frame with columns Variable, InfoGain, SplitEntropy, Origin.
 #' @noRd
 ig_multiple <- function(dfs_list, target, numeric_bins = NULL, remove_na = TRUE) {
   if (!length(dfs_list)) {
@@ -314,39 +343,121 @@ ig_multiple <- function(dfs_list, target, numeric_bins = NULL, remove_na = TRUE)
   out
 }
 
+#' Feature names that appear in more than one scored data.frame
+#'
+#' The union of features across a list of data.frames can contain the same
+#' name twice. `fs_infogain()` keeps the higher score; this helper records
+#' every row involved so nothing is silently dropped.
+#'
+#' @param tab Scored table with columns Variable, the score column, and
+#'   (optionally) Origin.
+#' @param score_col Name of the column holding the score.
+#' @return data.frame with columns Variable, Origin, Score, Kept; zero rows
+#'   when no name collides.
+#' @noRd
+ig_collisions <- function(tab, score_col) {
+  variables <- as.character(tab$Variable)
+  idx <- which(variables %in% unique(variables[duplicated(variables)]))
+
+  out <- data.frame(
+    Variable = variables[idx],
+    Origin = if ("Origin" %in% names(tab)) {
+      as.character(tab$Origin)[idx]
+    } else {
+      rep(NA_character_, length(idx))
+    },
+    Score = as.numeric(tab[[score_col]])[idx],
+    Kept = rep(FALSE, length(idx)),
+    stringsAsFactors = FALSE
+  )
+
+  if (nrow(out) > 0L) {
+    key <- out$Score
+    key[is.na(key)] <- -Inf
+    out <- out[order(out$Variable, -key), , drop = FALSE]
+    out$Kept <- !duplicated(out$Variable)
+    row.names(out) <- NULL
+  }
+  out
+}
+
 #' Feature Selection via Information Gain
 #'
-#' Accepts either a single data.frame or a list of data.frames and computes
-#' the information gain (in bits) of each predictor relative to the specified
-#' target.
+#' Accepts either a single data.frame or a list of data.frames and scores
+#' every predictor by its information gain (in bits) with respect to the
+#' target, optionally normalized to a gain ratio.
 #'
 #' @details
 #' * Numeric predictors are discretized into
 #'   `max(Freedman-Diaconis, Sturges)` bins (never fewer than 2), unless
 #'   `numeric_bins` overrides the count.
-#' * Numeric targets are discretized the same way, ONCE on all rows with a
-#'   non-NA target, so bin breaks are shared and information gain is
-#'   comparable across predictors.
+#' * The target is always treated categorically, so `task` is always
+#'   `"classification"`. Numeric targets are discretized the same way, ONCE
+#'   on all rows with a non-NA target, so bin breaks are shared and scores
+#'   are comparable across predictors.
 #' * Date-like predictors are expanded into `*_year`, `*_month`, `*_day`
 #'   columns (base R; the originals are dropped). Date-like targets are
 #'   treated as categorical days.
 #' * NAs are handled per predictor/target pair; rows are never dropped
-#'   globally for other predictors.
+#'   globally for other predictors. A predictor whose score is undefined
+#'   (`NA`) is never selected.
 #' * `remove_na` has a deliberately narrow effect: rows with NA in the target
 #'   are excluded per pair anyway, so the observable difference is only when
 #'   the target is entirely NA -- `remove_na = TRUE` stops with an error,
 #'   while `remove_na = FALSE` returns `NA` information gain for every
 #'   predictor.
 #'
+#' @section Cardinality bias and the gain ratio:
+#' Raw information gain systematically favors predictors with many distinct
+#' levels. In the limit, a near-unique identifier column splits the data into
+#' near-singleton groups, drives the conditional entropy H(Y | X) to zero and
+#' therefore attains the largest gain any predictor can attain, H(Y) -- while
+#' carrying no generalizable signal whatsoever. Comparing raw gains across
+#' predictors of different cardinality is therefore comparing unlike things.
+#'
+#' `normalize = "gain_ratio"` applies Quinlan's correction: each predictor's
+#' gain is divided by that predictor's own split entropy H(X), the entropy of
+#' its (discretized) level distribution. H(X) grows with cardinality -- it is
+#' `log2(k)` for a predictor with `k` equally frequent levels -- so dividing
+#' by it charges a predictor for the fineness of the split it makes. A
+#' constant predictor has `H(X) = 0` and, rather than dividing by zero, is
+#' assigned a gain ratio of 0 (its gain is zero too). Because gain ratios are
+#' scaled gains, do not compare them against thresholds calibrated for raw
+#' gains in bits.
+#'
 #' @param data A data.frame, or a list of data.frames each containing `target`.
 #' @param target Character. Name of the target column.
 #' @param numeric_bins Optional integer (>= 2 after clamping) overriding the
 #'   automatic bin calculation for numeric columns. Default `NULL`.
+#' @param normalize One of `"none"` (default, raw information gain in bits)
+#'   or `"gain_ratio"` (gain divided by the predictor's split entropy). See
+#'   the section on cardinality bias.
+#' @param top_n Optional positive integer. When supplied, `selected` holds
+#'   the `top_n` highest-scoring features (fewer if there are fewer scored
+#'   features). When `NULL` (default), `selected` holds every feature whose
+#'   score is strictly greater than 0.
 #' @param remove_na Logical. If `TRUE` (default), rows with NA in the target
 #'   are removed up front. See Details for its narrow practical effect.
-#' @return Always a data.frame. For a single data.frame input it has columns
-#'   `Variable` and `InfoGain`; for a list input it additionally has `Origin`
-#'   (the list element name, or `Data_Frame_<i>` when unnamed).
+#' @param verbose Logical. If `TRUE`, emit progress messages. Default `FALSE`.
+#' @return An object of class `fs_result` with elements:
+#' * `selected`: character vector of selected feature names, ordered by
+#'   decreasing score. Features with an undefined (`NA`) score are never
+#'   selected.
+#' * `scores`: named numeric vector of the (possibly normalized) score for
+#'   every candidate feature, ranked in decreasing order with `NA` scores
+#'   last. For list input this is the union of features across data.frames;
+#'   a name occurring in several data.frames keeps its highest score.
+#' * `method`: `"infogain"`.
+#' * `task`: `"classification"` (the target is always discretized).
+#' * `model`: `NULL`.
+#' * `details`: a list holding `table` (the full scored table: `Variable`,
+#'   `InfoGain`, plus `SplitEntropy` and `GainRatio` when
+#'   `normalize = "gain_ratio"`, plus `Origin` for list input),
+#'   `normalize`, `numeric_bins`, `n_features` (the number of candidate
+#'   features), and, for list input, `collisions` (a table of the feature
+#'   names found in more than one data.frame, with `Kept` marking the row
+#'   whose score won; zero rows when there are none).
+#' * `call`: the matched call.
 #' @examples
 #' # Single data.frame:
 #' df <- data.frame(
@@ -355,33 +466,54 @@ ig_multiple <- function(dfs_list, target, numeric_bins = NULL, remove_na = TRUE)
 #'   when = as.Date("2020-01-01") + rep(0:24, 4),
 #'   target = rep(1:2, 50)
 #' )
-#' fs_infogain(df, "target")
+#' res <- fs_infogain(df, target = "target")
+#' res$selected
+#' res$scores
+#' res$details$table
+#'
+#' # Correct the bias toward many-leveled predictors, and keep the best two:
+#' fs_infogain(df, target = "target", normalize = "gain_ratio", top_n = 2)
 #'
 #' # List of data.frames:
 #' df1 <- data.frame(A = rep(1:5, 20), target = rep(1:2, 50))
 #' df2 <- data.frame(B = rep(c("yes", "no"), 50), target = rep(letters[1:2], 50))
-#' fs_infogain(list(df1 = df1, df2 = df2), "target")
+#' fs_infogain(list(df1 = df1, df2 = df2), target = "target")
 #' @export
-fs_infogain <- function(data, target, numeric_bins = NULL, remove_na = TRUE) {
+fs_infogain <- function(data,
+                        target,
+                        numeric_bins = NULL,
+                        normalize = c("none", "gain_ratio"),
+                        top_n = NULL,
+                        remove_na = TRUE,
+                        verbose = FALSE) {
+  cl <- match.call()
+
+  normalize <- match.arg(normalize)
   assert_string(target, "target")
   assert_flag(remove_na, "remove_na")
+  assert_flag(verbose, "verbose")
   if (!is.null(numeric_bins)) {
     numeric_bins <- assert_count(numeric_bins, "numeric_bins", lower = 1L)
   }
+  if (!is.null(top_n)) {
+    top_n <- assert_count(top_n, "top_n", lower = 1L)
+  }
+
+  is_list_input <- !inherits(data, "data.frame") && is.list(data)
 
   if (inherits(data, "data.frame")) {
     assert_data_frame(data)
-    ig_single(
+    tab <- ig_single(
       df = data,
       target = target,
       numeric_bins = numeric_bins,
       remove_na = remove_na
     )
-  } else if (is.list(data)) {
+  } else if (is_list_input) {
     if (!all(vapply(data, function(x) inherits(x, "data.frame"), logical(1L)))) {
       stop("All elements in 'data' must be data.frames.")
     }
-    ig_multiple(
+    tab <- ig_multiple(
       dfs_list = data,
       target = target,
       numeric_bins = numeric_bins,
@@ -390,4 +522,81 @@ fs_infogain <- function(data, target, numeric_bins = NULL, remove_na = TRUE) {
   } else {
     stop("Input 'data' must be a data.frame or a list of data.frames.")
   }
+
+  if (normalize == "gain_ratio") {
+    tab$GainRatio <- ig_gain_ratio(tab$InfoGain, tab$SplitEntropy)
+    score_col <- "GainRatio"
+  } else {
+    score_col <- "InfoGain"
+  }
+
+  # Column order: Variable, InfoGain, [SplitEntropy, GainRatio], [Origin].
+  # Under normalize = "none" the split entropy is an implementation detail
+  # and is dropped, leaving exactly the historical table.
+  keep_cols <- c(
+    "Variable",
+    "InfoGain",
+    if (normalize == "gain_ratio") c("SplitEntropy", "GainRatio"),
+    if ("Origin" %in% names(tab)) "Origin"
+  )
+  tab <- tab[, keep_cols, drop = FALSE]
+  row.names(tab) <- NULL
+
+  collisions <- ig_collisions(tab, score_col)
+
+  scores <- stats::setNames(
+    as.numeric(tab[[score_col]]),
+    as.character(tab$Variable)
+  )
+  scores <- scores[order(scores, decreasing = TRUE, na.last = TRUE)]
+  dup <- duplicated(names(scores))
+  if (any(dup)) {
+    # Ranked descending already, so the first occurrence is the higher score.
+    scores <- scores[!dup]
+  }
+
+  n_features <- length(scores)
+
+  selected <- if (is.null(top_n)) {
+    names(scores)[!is.na(scores) & scores > 0]
+  } else {
+    utils::head(names(scores)[!is.na(scores)], top_n)
+  }
+
+  details <- list(
+    table = tab,
+    normalize = normalize,
+    numeric_bins = numeric_bins,
+    n_features = n_features
+  )
+  if (is_list_input) {
+    details$collisions <- collisions
+  }
+
+  if (verbose) {
+    message(sprintf(
+      "Scored %d feature%s by information gain (normalize = '%s').",
+      n_features, if (n_features == 1L) "" else "s", normalize
+    ))
+    if (nrow(collisions) > 0L) {
+      message(sprintf(
+        "%d feature name(s) occurred in more than one data.frame; kept the highest score.",
+        length(unique(collisions$Variable))
+      ))
+    }
+    message(sprintf(
+      "Selected %d feature%s.",
+      length(selected), if (length(selected) == 1L) "" else "s"
+    ))
+  }
+
+  new_fs_result(
+    selected = selected,
+    scores = scores,
+    method = "infogain",
+    task = "classification",
+    model = NULL,
+    details = details,
+    call = cl
+  )
 }

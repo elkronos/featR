@@ -4,7 +4,15 @@
 \alias{fs_infogain}
 \title{Feature Selection via Information Gain}
 \usage{
-fs_infogain(data, target, numeric_bins = NULL, remove_na = TRUE)
+fs_infogain(
+  data,
+  target,
+  numeric_bins = NULL,
+  normalize = c("none", "gain_ratio"),
+  top_n = NULL,
+  remove_na = TRUE,
+  verbose = FALSE
+)
 }
 \arguments{
 \item{data}{A data.frame, or a list of data.frames each containing \code{target}.}
@@ -14,32 +22,63 @@ fs_infogain(data, target, numeric_bins = NULL, remove_na = TRUE)
 \item{numeric_bins}{Optional integer (>= 2 after clamping) overriding the
 automatic bin calculation for numeric columns. Default \code{NULL}.}
 
+\item{normalize}{One of \code{"none"} (default, raw information gain in bits)
+or \code{"gain_ratio"} (gain divided by the predictor's split entropy). See
+the section on cardinality bias.}
+
+\item{top_n}{Optional positive integer. When supplied, \code{selected} holds
+the \code{top_n} highest-scoring features (fewer if there are fewer scored
+features). When \code{NULL} (default), \code{selected} holds every feature whose
+score is strictly greater than 0.}
+
 \item{remove_na}{Logical. If \code{TRUE} (default), rows with NA in the target
 are removed up front. See Details for its narrow practical effect.}
+
+\item{verbose}{Logical. If \code{TRUE}, emit progress messages. Default \code{FALSE}.}
 }
 \value{
-Always a data.frame. For a single data.frame input it has columns
-\code{Variable} and \code{InfoGain}; for a list input it additionally has \code{Origin}
-(the list element name, or \verb{Data_Frame_<i>} when unnamed).
+An object of class \code{fs_result} with elements:
+\itemize{
+\item \code{selected}: character vector of selected feature names, ordered by
+decreasing score. Features with an undefined (\code{NA}) score are never
+selected.
+\item \code{scores}: named numeric vector of the (possibly normalized) score for
+every candidate feature, ranked in decreasing order with \code{NA} scores
+last. For list input this is the union of features across data.frames;
+a name occurring in several data.frames keeps its highest score.
+\item \code{method}: \code{"infogain"}.
+\item \code{task}: \code{"classification"} (the target is always discretized).
+\item \code{model}: \code{NULL}.
+\item \code{details}: a list holding \code{table} (the full scored table: \code{Variable},
+\code{InfoGain}, plus \code{SplitEntropy} and \code{GainRatio} when
+\code{normalize = "gain_ratio"}, plus \code{Origin} for list input),
+\code{normalize}, \code{numeric_bins}, \code{n_features} (the number of candidate
+features), and, for list input, \code{collisions} (a table of the feature
+names found in more than one data.frame, with \code{Kept} marking the row
+whose score won; zero rows when there are none).
+\item \code{call}: the matched call.
+}
 }
 \description{
-Accepts either a single data.frame or a list of data.frames and computes
-the information gain (in bits) of each predictor relative to the specified
-target.
+Accepts either a single data.frame or a list of data.frames and scores
+every predictor by its information gain (in bits) with respect to the
+target, optionally normalized to a gain ratio.
 }
 \details{
 \itemize{
 \item Numeric predictors are discretized into
 \code{max(Freedman-Diaconis, Sturges)} bins (never fewer than 2), unless
 \code{numeric_bins} overrides the count.
-\item Numeric targets are discretized the same way, ONCE on all rows with a
-non-NA target, so bin breaks are shared and information gain is
-comparable across predictors.
+\item The target is always treated categorically, so \code{task} is always
+\code{"classification"}. Numeric targets are discretized the same way, ONCE
+on all rows with a non-NA target, so bin breaks are shared and scores
+are comparable across predictors.
 \item Date-like predictors are expanded into \verb{*_year}, \verb{*_month}, \verb{*_day}
 columns (base R; the originals are dropped). Date-like targets are
 treated as categorical days.
 \item NAs are handled per predictor/target pair; rows are never dropped
-globally for other predictors.
+globally for other predictors. A predictor whose score is undefined
+(\code{NA}) is never selected.
 \item \code{remove_na} has a deliberately narrow effect: rows with NA in the target
 are excluded per pair anyway, so the observable difference is only when
 the target is entirely NA -- \code{remove_na = TRUE} stops with an error,
@@ -47,6 +86,26 @@ while \code{remove_na = FALSE} returns \code{NA} information gain for every
 predictor.
 }
 }
+\section{Cardinality bias and the gain ratio}{
+
+Raw information gain systematically favors predictors with many distinct
+levels. In the limit, a near-unique identifier column splits the data into
+near-singleton groups, drives the conditional entropy H(Y | X) to zero and
+therefore attains the largest gain any predictor can attain, H(Y) -- while
+carrying no generalizable signal whatsoever. Comparing raw gains across
+predictors of different cardinality is therefore comparing unlike things.
+
+\code{normalize = "gain_ratio"} applies Quinlan's correction: each predictor's
+gain is divided by that predictor's own split entropy H(X), the entropy of
+its (discretized) level distribution. H(X) grows with cardinality -- it is
+\code{log2(k)} for a predictor with \code{k} equally frequent levels -- so dividing
+by it charges a predictor for the fineness of the split it makes. A
+constant predictor has \code{H(X) = 0} and, rather than dividing by zero, is
+assigned a gain ratio of 0 (its gain is zero too). Because gain ratios are
+scaled gains, do not compare them against thresholds calibrated for raw
+gains in bits.
+}
+
 \examples{
 # Single data.frame:
 df <- data.frame(
@@ -55,10 +114,16 @@ df <- data.frame(
   when = as.Date("2020-01-01") + rep(0:24, 4),
   target = rep(1:2, 50)
 )
-fs_infogain(df, "target")
+res <- fs_infogain(df, target = "target")
+res$selected
+res$scores
+res$details$table
+
+# Correct the bias toward many-leveled predictors, and keep the best two:
+fs_infogain(df, target = "target", normalize = "gain_ratio", top_n = 2)
 
 # List of data.frames:
 df1 <- data.frame(A = rep(1:5, 20), target = rep(1:2, 50))
 df2 <- data.frame(B = rep(c("yes", "no"), 50), target = rep(letters[1:2], 50))
-fs_infogain(list(df1 = df1, df2 = df2), "target")
+fs_infogain(list(df1 = df1, df2 = df2), target = "target")
 }

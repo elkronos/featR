@@ -152,54 +152,67 @@ svd_truncate <- function(svd_result, n_singular_values) {
 #' truncation to the leading singular triplets, and an approximate solver
 #' for large matrices.
 #'
+#' @details
 #' The exact path uses \code{base::svd()}. The approximate path uses
 #' \code{RSpectra::svds()} (package \pkg{RSpectra}, a Suggests dependency,
 #' required only when that path is actually taken) and is only applicable
-#' when fewer than \code{min(dim(matrix_data))} singular values are
-#' requested. By default \code{n_singular_values = NULL} resolves to
-#' \code{min(dim(matrix_data))}, which implies the exact path; to enable the
-#' approximate solver on a large matrix, request
-#' \code{n_singular_values < min(dim(matrix_data))}.
+#' when fewer than \code{min(dim(x))} singular values are requested. By
+#' default \code{n_singular_values = NULL} resolves to \code{min(dim(x))},
+#' which implies the exact path; to enable the approximate solver on a large
+#' matrix, request \code{n_singular_values < min(dim(x))}.
 #'
 #' With \code{svd_method = "auto"}, the approximate solver is chosen only
-#' when \code{n_singular_values < min(dim(matrix_data))} and
-#' \code{min(dim(matrix_data)) > svd_threshold}; otherwise the exact solver
-#' is used, and a message explains why when a large matrix still ends up on
-#' the exact path because all singular values were requested.
+#' when \code{n_singular_values < min(dim(x))} and
+#' \code{min(dim(x)) > svd_threshold}; otherwise the exact solver is used,
+#' and a message explains why when a large matrix still ends up on the exact
+#' path because all singular values were requested.
 #'
-#' @param matrix_data Numeric matrix or data.frame (all numeric columns).
+#' @param x Numeric matrix, or a data.frame whose columns are all numeric
+#'   (it is coerced to a matrix). Must contain no NA/NaN/Inf values. The
+#'   argument is called \code{x} rather than \code{data} because it is a
+#'   matrix of values, not a table of observations and features.
+#' @param n_singular_values Positive whole number of singular values and
+#'   vectors to keep, or NULL (default) for \code{min(dim(x))}. Values
+#'   exceeding \code{min(dim(x))} are an error.
 #' @param scale_input TRUE (center and scale, the default), FALSE,
 #'   \code{"center"}, or \code{"scale"}. Scaling requires all columns to
 #'   have non-zero variance; offending columns are reported by name.
-#' @param n_singular_values Positive whole number of singular values and
-#'   vectors to keep, or NULL (default) for \code{min(dim(matrix_data))}.
-#'   Values exceeding \code{min(dim(matrix_data))} are an error.
 #' @param svd_method \code{"auto"} (default), \code{"exact"}, or
 #'   \code{"approx"}.
 #' @param svd_threshold Positive number; with \code{svd_method = "auto"},
-#'   the approximate solver is considered only when
-#'   \code{min(dim(matrix_data))} exceeds this value (default 100).
+#'   the approximate solver is considered only when \code{min(dim(x))}
+#'   exceeds this value (default 100).
 #' @param approx_args List of extra arguments passed to
 #'   \code{RSpectra::svds()} (for example \code{tol} or \code{opts}). Must
 #'   not include \code{A} or \code{k}, which are set internally.
-#' @param verbose Logical; emit progress messages.
-#' @return A list with:
+#' @param verbose Logical; emit progress messages. Default FALSE.
+#' @return A plain list. \code{fs_svd()} is dimensionality reduction rather
+#'   than feature selection, so it returns its own decomposition structure and
+#'   not the \code{fs_result} object produced by the package's selection
+#'   functions. The components are:
 #'   \itemize{
 #'     \item \code{singular_values}
 #'     \item \code{left_singular_vectors}
 #'     \item \code{right_singular_vectors}
 #'   }
 #' @examples
-#' set.seed(123)
-#' matrix_data <- matrix(rnorm(30), nrow = 6)
-#' res <- fs_svd(matrix_data, scale_input = TRUE, n_singular_values = 2)
+#' m <- matrix(
+#'   c(4, 0, 0, 3,
+#'     0, 5, 1, 2,
+#'     2, 1, 6, 0,
+#'     1, 3, 2, 7,
+#'     5, 2, 0, 1,
+#'     0, 4, 3, 2),
+#'   nrow = 6, ncol = 4, byrow = TRUE
+#' )
+#' res <- fs_svd(m, n_singular_values = 2, scale_input = TRUE)
 #' res$singular_values
 #' res$left_singular_vectors
 #' res$right_singular_vectors
 #' @export
-fs_svd <- function(matrix_data,
-                   scale_input = TRUE,
+fs_svd <- function(x,
                    n_singular_values = NULL,
+                   scale_input = TRUE,
                    svd_method = c("auto", "exact", "approx"),
                    svd_threshold = 100,
                    approx_args = list(),
@@ -226,8 +239,8 @@ fs_svd <- function(matrix_data,
     )
   }
 
-  x <- svd_coerce_matrix(matrix_data)
-  min_dim <- min(dim(x))
+  mat <- svd_coerce_matrix(x)
+  min_dim <- min(dim(mat))
 
   if (is.null(n_singular_values)) {
     k <- min_dim
@@ -236,7 +249,7 @@ fs_svd <- function(matrix_data,
     if (k > min_dim) {
       stop(
         sprintf(
-          "'n_singular_values' (%d) exceeds min(dim(matrix_data)) (%d).",
+          "'n_singular_values' (%d) exceeds min(dim(x)) (%d).",
           k, min_dim
         ),
         call. = FALSE
@@ -244,7 +257,7 @@ fs_svd <- function(matrix_data,
     }
   }
 
-  xs <- svd_scale_matrix(x, scale_input, verbose = verbose)
+  xs <- svd_scale_matrix(mat, scale_input, verbose = verbose)
 
   if (svd_method == "auto") {
     if (k < min_dim && min_dim > svd_threshold) {
@@ -255,9 +268,9 @@ fs_svd <- function(matrix_data,
         message(
           paste0(
             "svd_method = 'auto' selected the exact solver despite a large ",
-            "matrix because all min(dim(matrix_data)) singular values were ",
-            "requested; set n_singular_values < min(dim(matrix_data)) to ",
-            "enable the approximate solver."
+            "matrix because all min(dim(x)) singular values were requested; ",
+            "set n_singular_values < min(dim(x)) to enable the approximate ",
+            "solver."
           )
         )
       }
@@ -270,7 +283,7 @@ fs_svd <- function(matrix_data,
   if (svd_method == "approx" && k >= min_dim) {
     message(
       paste0(
-        "Requested n_singular_values equals min(dim(matrix_data)), but ",
+        "Requested n_singular_values equals min(dim(x)), but ",
         "RSpectra::svds() requires fewer; falling back to exact SVD."
       )
     )

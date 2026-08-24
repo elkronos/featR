@@ -90,18 +90,39 @@ sup_score_anova <- function(dt, y, na_rm) {
   )
 }
 
+#' Learning task implied by the target column
+#'
+#' A numeric target means regression, a factor target means classification.
+#' Anything else (character, logical) is left undeclared: `fs_supervised()`
+#' can score such targets with ANOVA, but the intended task is genuinely
+#' ambiguous, so `NA` is reported rather than guessed.
+#'
+#' @param y Target vector.
+#' @return A single string, or `NA_character_`.
+#' @noRd
+sup_task <- function(y) {
+  if (is.numeric(y)) {
+    return("regression")
+  }
+  if (is.factor(y)) {
+    return("classification")
+  }
+  NA_character_
+}
+
 #' Compute supervised per-feature scores
 #'
-#' Validates `y`, resolves `method = "auto"` (numeric `y` -> "correlation",
-#' categorical `y` -> "anova"), and scores every column of `dt` against `y`.
-#' Returning the resolved method alongside the scores keeps a single source
-#' of truth for which method was actually used.
+#' Validates the target, resolves `method = "auto"` (numeric target ->
+#' "correlation", categorical target -> "anova"), and scores every column of
+#' `dt` against `y`. Returning the resolved method alongside the scores keeps
+#' a single source of truth for which method was actually used.
 #'
 #' @param dt data.table of numeric feature columns.
-#' @param y Target vector (numeric, factor, character, or logical).
+#' @param y Target vector (numeric, factor, character, or logical), already
+#'   extracted from the `target` column of `data`.
 #' @param method One of "auto", "correlation", "anova".
 #' @param na_rm Single flag; drop NA pairs per feature before scoring.
-#' @param log_progress Single flag; emit progress messages.
+#' @param verbose Single flag; emit progress messages.
 #' @return List with `scores` (named numeric vector, one element per column
 #'   of `dt`) and `method` (the resolved scoring method actually used).
 #' @noRd
@@ -109,25 +130,24 @@ sup_scores <- function(dt,
                        y,
                        method = c("auto", "correlation", "anova"),
                        na_rm = TRUE,
-                       log_progress = FALSE) {
+                       verbose = FALSE) {
   method <- match.arg(method)
 
-  if (is.matrix(y) || is.data.frame(y)) {
-    stop("`y` must be a vector, not a matrix or data frame.", call. = FALSE)
-  }
-  if (length(y) != nrow(dt)) {
-    stop("Length of `y` must equal number of rows in `x`.", call. = FALSE)
+  if (!is.null(dim(y))) {
+    stop("The 'target' column must be an atomic vector, not a matrix or data frame.",
+         call. = FALSE)
   }
 
   is_y_numeric <- is.numeric(y)
   is_y_categorical <- is.factor(y) || is.character(y) || is.logical(y)
   if (!is_y_numeric && !is_y_categorical) {
-    stop("`y` must be numeric, factor, character, or logical.", call. = FALSE)
+    stop("The 'target' column must be numeric, factor, character, or logical.",
+         call. = FALSE)
   }
 
   if (method == "auto") {
     method <- if (is_y_numeric) "correlation" else "anova"
-    if (log_progress) {
+    if (verbose) {
       message(sprintf(
         paste0(
           "method = 'auto' resolved to '%s'. Note that the threshold scale ",
@@ -140,16 +160,16 @@ sup_scores <- function(dt,
   }
 
   if (method == "correlation" && !is_y_numeric) {
-    stop("`method = \"correlation\"` requires numeric `y`.", call. = FALSE)
+    stop("`method = \"correlation\"` requires a numeric target.", call. = FALSE)
   }
   if (method == "anova" && !is_y_categorical) {
     stop(
-      "`method = \"anova\"` requires categorical `y` (factor/character/logical).",
+      "`method = \"anova\"` requires a categorical target (factor, character, or logical).",
       call. = FALSE
     )
   }
 
-  if (log_progress) {
+  if (verbose) {
     message(sprintf(
       "Computing supervised feature scores using method '%s'...", method
     ))
@@ -169,117 +189,162 @@ sup_scores <- function(dt,
 
 #' Supervised Filter-Based Feature Selection
 #'
-#' Performs supervised, univariate, filter-based feature selection by scoring
-#' each feature with respect to a target `y` and selecting or dropping
-#' features based on a threshold on the score.
+#' Performs supervised, univariate, filter-based feature selection: every
+#' column of `data` except `target` is scored against the target, and
+#' features are selected or dropped by comparing that score to `threshold`.
 #'
 #' Supported methods:
 #' \itemize{
-#'   \item \code{"correlation"}: Absolute Pearson correlation (numeric target),
-#'     so scores lie in \code{[0, 1]}.
+#'   \item \code{"correlation"}: Absolute Pearson correlation (numeric
+#'     target), so scores lie in \code{[0, 1]}.
 #'   \item \code{"anova"}: One-way ANOVA F-statistic (categorical target),
 #'     so scores lie in \code{[0, Inf)}.
-#'   \item \code{"auto"}: Chooses \code{"correlation"} for numeric `y` and
-#'     \code{"anova"} for categorical `y`. Because the two score scales
+#'   \item \code{"auto"}: Chooses \code{"correlation"} for a numeric target
+#'     and \code{"anova"} for a categorical one. Because the two score scales
 #'     differ, a message reports the resolved method when
-#'     \code{log_progress = TRUE}.
+#'     \code{verbose = TRUE}.
 #' }
 #'
 #' Features whose score is undefined (\code{NA}) are never selected, under
 #' both \code{action = "keep"} and \code{action = "remove"}; a warning
 #' reports how many such features were excluded.
 #'
-#' @param x Numeric matrix, data.frame, or data.table (all numeric columns).
-#' @param y Target vector (numeric, factor, character, or logical) with one
-#'   element per row of `x`.
+#' Columns are subset by integer index, never by name, so duplicated column
+#' names cannot select the wrong columns.
+#'
+#' @param data A data.frame, data.table, or matrix containing `target` and
+#'   the candidate feature columns. Every column other than `target` must be
+#'   numeric.
+#' @param target Character. Name of the target column in `data`. It is
+#'   removed from the candidate features and used as the scoring target.
 #' @param method One of \code{"auto"}, \code{"correlation"}, \code{"anova"}.
 #' @param threshold Non-negative, finite numeric scalar threshold applied to
-#'   the feature scores (not to `y` directly). Default 0.
+#'   the feature scores (not to the target directly). Default 0.
 #' @param direction One of \code{"above"}, \code{"below"}; compares scores to
 #'   \code{threshold}.
 #' @param action One of \code{"keep"}, \code{"remove"}; determines whether
 #'   features meeting the condition are retained or dropped.
 #' @param include_equal Logical; if TRUE, comparisons are inclusive
 #'   (greater/less than or equal) instead of strict.
-#' @param na_rm Logical; if TRUE, rows with NA in `x` or `y` are dropped when
-#'   computing scores.
-#' @param out One of \code{"matrix"}, \code{"dt"}, \code{"data.frame"},
-#'   \code{"mask"}, \code{"indices"}, \code{"names"}, \code{"list"}.
+#' @param na_rm Logical; if TRUE, rows with NA in a feature or in the target
+#'   are dropped when computing that feature's score.
+#' @param output One of \code{"result"} (default), \code{"matrix"},
+#'   \code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
+#'   \code{"names"}, \code{"list"}.
 #'   \itemize{
-#'     \item \code{"matrix"} (default): numeric matrix of selected features.
+#'     \item \code{"result"} (default): an \code{fs_result} object (see
+#'       Value).
+#'     \item \code{"matrix"}: numeric matrix of selected features.
 #'     \item \code{"dt"}: data.table of selected features.
 #'     \item \code{"data.frame"}: data.frame of selected features.
-#'     \item \code{"mask"}: logical vector of length \code{ncol(x)}.
-#'     \item \code{"indices"}: integer vector of selected column indices.
+#'     \item \code{"mask"}: logical vector, one element per candidate feature.
+#'     \item \code{"indices"}: integer vector of selected column indices,
+#'       indexing the candidate features (that is, `data` without `target`).
 #'     \item \code{"names"}: character vector of selected column names.
 #'     \item \code{"list"}: list with components:
 #'       \code{filtered} (matrix), \code{mask}, \code{indices}, \code{names},
 #'       \code{scores}, and \code{meta}.
 #'   }
-#' @param log_progress Logical; emit progress messages.
+#' @param verbose Logical; emit progress messages. Default FALSE.
 #'
-#' @return Depends on the `out` argument (see above). When no feature meets
-#'   the selection criteria, a warning is issued and the tabular shapes
-#'   (\code{"matrix"}, \code{"dt"}, \code{"data.frame"}) are returned with
-#'   zero columns while preserving the input row count.
+#' @return With the default \code{output = "result"}, an object of class
+#'   `fs_result` with elements:
+#'   \itemize{
+#'     \item `selected`: character vector of selected feature names.
+#'     \item `scores`: named numeric vector of per-feature scores, in column
+#'       order, `NA` where the score is undefined.
+#'     \item `method`: `"supervised_"` followed by the resolved scoring
+#'       method, for example `"supervised_correlation"`.
+#'     \item `task`: `"regression"` for a numeric target,
+#'       `"classification"` for a factor target, `NA` otherwise.
+#'     \item `model`: `NULL`.
+#'     \item `details`: a list holding `mask`, `indices`, `filtered` (the
+#'       filtered data.table), `threshold`, `direction`, `action`, and
+#'       `n_features` (the number of candidate features).
+#'     \item `call`: the matched call.
+#'   }
+#'   Any other `output` returns that shape instead, exactly as documented
+#'   above. When no feature meets the selection criteria, a warning is issued
+#'   and the tabular shapes (\code{"matrix"}, \code{"dt"},
+#'   \code{"data.frame"}) are returned with zero columns while preserving the
+#'   input row count.
 #'
 #' @examples
-#' set.seed(123)
-#' X <- matrix(rnorm(200), ncol = 5)
-#' y_num <- rnorm(nrow(X))
-#' y_fac <- factor(sample(letters[1:3], nrow(X), replace = TRUE))
-#'
-#' # Correlation-based selection (numeric y)
-#' out_corr <- fs_supervised(
-#'   x = X, y = y_num,
-#'   method = "correlation",
-#'   threshold = 0.3,
-#'   direction = "above",
-#'   action = "keep",
-#'   out = "list"
+#' df <- data.frame(
+#'   strong = c(1, 2, 3, 4),
+#'   mirror = c(4, 3, 2, 1),
+#'   weak   = c(1, 0, 1, 0),
+#'   y      = c(1, 2, 3, 4)
 #' )
 #'
-#' # ANOVA-based selection (factor y)
-#' out_anova <- fs_supervised(
-#'   x = X, y = y_fac,
-#'   method = "anova",
-#'   threshold = 1.0,
-#'   direction = "above",
-#'   action = "keep",
-#'   out = "matrix"
+#' # Default: an fs_result
+#' res <- fs_supervised(df, target = "y", method = "correlation",
+#'                      threshold = 0.5)
+#' res$selected
+#' res$scores
+#' res$details$filtered
+#'
+#' # The classic shapes are still available
+#' fs_supervised(df, target = "y", method = "correlation", threshold = 0.5,
+#'               output = "names")
+#'
+#' # ANOVA against a factor target
+#' df_fac <- data.frame(
+#'   wide = c(1, 2, 10, 11),
+#'   mild = c(1, 3, 2, 4),
+#'   grp  = factor(c("a", "a", "b", "b"))
 #' )
+#' fs_supervised(df_fac, target = "grp", method = "anova", threshold = 1,
+#'               output = "matrix")
 #' @export
-fs_supervised <- function(x,
-                          y,
+fs_supervised <- function(data,
+                          target,
                           method = c("auto", "correlation", "anova"),
                           threshold = 0,
                           direction = c("above", "below"),
                           action = c("keep", "remove"),
                           include_equal = FALSE,
                           na_rm = TRUE,
-                          out = c("matrix", "dt", "data.frame",
-                                  "mask", "indices", "names", "list"),
-                          log_progress = FALSE) {
+                          output = c("result", "matrix", "dt", "data.frame",
+                                     "mask", "indices", "names", "list"),
+                          verbose = FALSE) {
+  cl <- match.call()
+
   method_arg <- match.arg(method)
   direction <- match.arg(direction)
   action <- match.arg(action)
-  out <- match.arg(out)
+  output <- match.arg(output)
   assert_number(threshold, "threshold", lower = 0)
   assert_flag(include_equal, "include_equal")
   assert_flag(na_rm, "na_rm")
-  assert_flag(log_progress, "log_progress")
+  assert_flag(verbose, "verbose")
+  assert_string(target, "target")
 
-  dt <- as_dt(x, arg = "x")
-  if (!all(vapply(dt, is.numeric, logical(1L)))) {
-    stop("All columns of 'x' must be numeric.", call. = FALSE)
+  dt <- as_dt(data, arg = "data")
+  assert_target(dt, target)
+
+  # Index-based, so a data source with duplicated column names keeps every
+  # candidate feature and only the first `target` column is consumed.
+  target_idx <- match(target, names(dt))
+  y <- dt[[target_idx]]
+
+  feature_idx <- setdiff(seq_along(dt), target_idx)
+  if (length(feature_idx) == 0L) {
+    stop("'data' must contain at least one feature column besides 'target'.",
+         call. = FALSE)
+  }
+  features <- dt[, feature_idx, with = FALSE]
+
+  if (!all(vapply(features, is.numeric, logical(1L)))) {
+    stop("All feature columns of 'data' must be numeric.", call. = FALSE)
   }
 
   scored <- sup_scores(
-    dt = dt,
+    dt = features,
     y = y,
     method = method_arg,
     na_rm = na_rm,
-    log_progress = log_progress
+    verbose = verbose
   )
   scores <- scored$scores
   method_used <- scored$method
@@ -298,18 +363,39 @@ fs_supervised <- function(x,
             call. = FALSE)
   }
 
-  if (log_progress) {
+  if (verbose) {
     op <- if (direction == "above") ">" else "<"
     if (include_equal) op <- paste0(op, "=")
     verb <- if (action == "keep") "Retaining" else "Removing"
     message(sprintf(
       "%s features with supervised score %s %s", verb, op, threshold
     ))
-    message(sprintf("Kept %d of %d features.", length(keep_idx), ncol(dt)))
+    message(sprintf("Kept %d of %d features.", length(keep_idx),
+                    ncol(features)))
   }
 
-  res <- filter_output(dt, scores, mask, out)
-  if (out == "list") {
+  if (output == "result") {
+    return(new_fs_result(
+      selected = filter_output(features, scores, mask, "names"),
+      scores = scores,
+      method = paste0("supervised_", method_used),
+      task = sup_task(y),
+      model = NULL,
+      details = list(
+        mask = mask,
+        indices = keep_idx,
+        filtered = filter_output(features, scores, mask, "dt"),
+        threshold = threshold,
+        direction = direction,
+        action = action,
+        n_features = ncol(features)
+      ),
+      call = cl
+    ))
+  }
+
+  res <- filter_output(features, scores, mask, output)
+  if (output == "list") {
     res$meta <- list(
       method_arg = method_arg,
       method_used = method_used,
@@ -318,7 +404,7 @@ fs_supervised <- function(x,
       action = action,
       include_equal = include_equal,
       na_rm = na_rm,
-      n_input_cols = ncol(dt),
+      n_input_cols = ncol(features),
       n_kept_cols = length(keep_idx)
     )
   }

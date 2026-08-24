@@ -4,17 +4,23 @@
 \alias{fs_stepwise}
 \title{Stepwise linear-regression feature selection via AIC}
 \usage{
-fs_stepwise(data, dependent_var, step_type = "both", verbose = FALSE, ...)
+fs_stepwise(
+  data,
+  target,
+  direction = c("both", "backward", "forward"),
+  verbose = FALSE,
+  ...
+)
 }
 \arguments{
-\item{data}{A data.frame containing the dependent variable and the
-candidate predictors (all other columns).}
+\item{data}{A data.frame containing the target and the candidate
+predictors (all other columns).}
 
-\item{dependent_var}{Character string naming the numeric dependent
-variable. (Unquoted symbols are not accepted.)}
+\item{target}{Character string naming the numeric target column.
+(Unquoted symbols are not accepted.)}
 
-\item{step_type}{Direction of the search: \code{"backward"}, \code{"forward"}, or
-\code{"both"} (default).}
+\item{direction}{Direction of the search: \code{"both"} (default),
+\code{"backward"}, or \code{"forward"}.}
 
 \item{verbose}{Logical. If \code{TRUE}, emits progress messages and enables the
 \code{stepAIC()} trace output. Default \code{FALSE}.}
@@ -24,27 +30,42 @@ variable. (Unquoted symbols are not accepted.)}
 user-supplied \code{trace} is dropped with a warning).}
 }
 \value{
-A list with:
-\itemize{
-\item \code{final_model}: the model selected by \code{stepAIC()}.
-\item \code{importance}: the coefficient summary matrix of the final
-model. \strong{Caveat}: p-values obtained after stepwise selection on
-the same data are optimistically biased (the selective-inference
-problem) and must not be used for formal inference.
-\item \code{selected_terms}: character vector of selected predictors
-(excluding the intercept).
-\item \code{call}: a list describing the inputs used.
+An object of class \code{fs_result} with:
+\describe{
+\item{selected}{Character vector of the selected predictor terms
+(excluding the intercept).}
+\item{scores}{Named numeric vector of absolute t statistics from the
+final model's coefficient table, excluding the intercept.
+\strong{Caveat}: these statistics (and the p-values in
+\code{details$coefficients}) are computed after selection on the same data,
+so they are optimistically biased and are not valid for inference.}
+\item{method}{"stepwise".}
+\item{task}{"regression"; \code{fs_stepwise()} fits linear models only.}
+\item{model}{The \code{lm} selected by \code{stepAIC()}.}
+\item{details}{A list with \code{final_model} (the same \code{lm}), \code{coefficients}
+(the \code{summary()} coefficient matrix, same caveat as \code{scores}),
+\code{selected_terms} (the selected term labels), \code{direction} (the search
+direction actually used), \code{n_features} (the number of candidate
+predictors offered to the search) and \code{dropped_na_rows} (how many rows
+were removed for missing values).}
+\item{call}{The matched call.}
 }
 }
 \description{
 Uses \code{MASS::stepAIC()} to perform forward, backward, or both-direction
-stepwise selection on a linear regression of \code{dependent_var} against all
-other columns of \code{data}. For \code{step_type = "forward"} and \code{"both"} a proper
-null model and scope are set up so that forward moves are possible.
+stepwise selection on a linear regression of \code{target} against all other
+columns of \code{data}. For \code{direction = "forward"} and \code{"both"} a proper null
+model and scope are set up so that forward moves are possible.
 }
 \details{
 Requires the suggested package 'MASS'. The function is
-linear-regression-only: the dependent variable must be numeric.
+linear-regression-only: the target must be numeric.
+
+\strong{Post-selection inference caveat.} The reported \code{scores} (absolute
+t statistics) and the p-values in \code{details$coefficients} are computed on
+the same data that drove the search. They are optimistically biased -- the
+selective-inference problem -- and must not be used for formal inference,
+only as a rough ordering of the retained terms.
 
 The fitted models reference the data through a small private environment
 attached to the model formula, so \code{predict()}, \code{summary()}, \code{anova()},
@@ -63,9 +84,9 @@ differing row sets.
 \examples{
 \donttest{
 if (requireNamespace("MASS", quietly = TRUE)) {
-  out <- fs_stepwise(mtcars, dependent_var = "mpg", step_type = "both")
-  out$selected_terms
-  out$importance
+  res <- fs_stepwise(mtcars, target = "mpg", direction = "both")
+  res$selected
+  res$scores
 }
 }
 }

@@ -8,15 +8,15 @@ fs_correlation(
   data,
   threshold,
   method = "pearson",
+  prune = TRUE,
   na.rm = FALSE,
-  parallel = FALSE,
-  n_cores = 2,
   sample_frac = 1,
   output_format = "matrix",
   diag_value = 0,
-  no_vars_message = "No variables meet the correlation threshold.",
   seed = NULL,
-  verbose = FALSE
+  verbose = FALSE,
+  parallel = FALSE,
+  n_cores = 2L
 )
 }
 \arguments{
@@ -25,7 +25,8 @@ fs_correlation(
 all columns must be ordered factors. For \code{"pointbiserial"}: columns
 may be numeric (continuous) or dichotomous (exactly 2 unique non-NA values).}
 
-\item{threshold}{Numeric between 0 and 1. Pairs with |correlation| > threshold are selected.}
+\item{threshold}{Numeric between 0 and 1. Pairs with |correlation| > threshold
+are flagged as redundant.}
 
 \item{method}{One of \code{"pearson"} (default), \code{"spearman"},
 \code{"kendall"}, \code{"polychoric"}, \code{"pointbiserial"}.
@@ -33,6 +34,15 @@ Point-biserial correlations are computed as the Pearson correlation
 between the continuous variable and a 0/1 indicator of the dichotomous
 variable (1 for the second sorted unique value, e.g. the second factor
 level), which is the definition of the point-biserial coefficient.}
+
+\item{prune}{Logical. If \code{TRUE} (default), \code{selected} is the
+reduced non-redundant set: within each correlated group one representative
+is kept and the other members are dropped, the representative being the
+member with the LOWEST mean absolute correlation to the other retained
+variables (the \code{caret::findCorrelation()} heuristic, implemented here
+with base stats). Variables that were never flagged are always retained.
+If \code{FALSE}, \code{selected} is every variable appearing in at least
+one flagged pair, i.e. the redundant set, and nothing is dropped.}
 
 \item{na.rm}{Logical. If \code{TRUE}, missing values are removed pairwise
 for \code{"pearson"}/\code{"spearman"}/\code{"kendall"}, per pair
@@ -44,42 +54,54 @@ propagate NA into the affected correlations, except for
 present (silently deleting cases would contradict the behaviour of the
 other methods). Default \code{FALSE}.}
 
-\item{parallel}{Logical. Use parallel processing (via the suggested foreach
-and doParallel packages) for point-biserial computations. Default \code{FALSE}.}
-
-\item{n_cores}{Integer >= 1. Number of workers if \code{parallel = TRUE};
-requests are capped at the detected core count. Default \code{2}.}
-
 \item{sample_frac}{Numeric in (0, 1]. Fraction of rows to sample before computing
 correlations. Default \code{1} (no sampling).}
 
 \item{output_format}{\code{"matrix"} (default) or \code{"data.frame"} for the
-correlation matrix.}
+correlation matrix stored in \code{details$corr_matrix}.}
 
 \item{diag_value}{Value to assign to the diagonal of the correlation matrix.
 Default \code{0}.}
-
-\item{no_vars_message}{Message printed if no variable pairs exceed \code{threshold}.}
 
 \item{seed}{Optional integer seed for reproducible sampling, applied
 locally; the previous RNG state is restored afterwards. Default
 \code{NULL} (never seeds).}
 
 \item{verbose}{Logical. Print progress messages. Default \code{FALSE}.}
+
+\item{parallel}{Logical. Use parallel processing (via the suggested foreach
+and doParallel packages) for point-biserial computations. Default
+\code{FALSE} (sequential).}
+
+\item{n_cores}{Whole number >= 1. Number of workers if \code{parallel = TRUE};
+requests are capped at the detected core count. Default \code{2}.}
 }
 \value{
-A list with:
+An object of class \code{fs_result} with:
 \describe{
-\item{corr_matrix}{Correlation matrix (matrix or data frame, per \code{output_format}).}
-\item{selected_vars}{Character vector of all variables that appear in at
-least one pair with |r| > threshold. Note that this includes BOTH
-members of each high-correlation pair, i.e. the redundant set; the
-function does not choose which member of a pair to keep or drop (a
-keep/drop redesign is deferred).}
+\item{selected}{Character vector. With \code{prune = TRUE}, every variable
+except the redundant group members that were dropped. With
+\code{prune = FALSE}, every variable appearing in at least one flagged
+pair (both members of each pair).}
+\item{scores}{Named numeric vector giving each variable's maximum absolute
+correlation with any other variable (NA when no correlation with that
+variable could be computed).}
+\item{method}{\code{paste0("correlation_", method)}, e.g.
+"correlation_pearson".}
+\item{task}{\code{NA_character_}; correlation filtering is unsupervised.}
+\item{model}{NULL; no model is fitted.}
+\item{details}{A list with \code{corr_matrix} (the correlation matrix, reshaped
+to long form when \code{output_format = "data.frame"}), \code{pairs} (a
+data.frame of the flagged pairs with columns Var1, Var2, Correlation,
+strongest first), \code{dropped} (features removed by pruning; empty when
+\code{prune = FALSE}), \code{redundant} (the unpruned pair-member set), and
+\code{n_features} (the number of variables considered).}
+\item{call}{The matched call.}
 }
 }
 \description{
-Selects features from a dataset based on pairwise correlation.
+Flags variable pairs whose absolute correlation exceeds \code{threshold} and,
+by default, reduces each correlated group to a single representative.
 }
 \examples{
 d <- data.frame(
@@ -88,5 +110,9 @@ d <- data.frame(
   c = c(1.5, 0.9, 2.1, 0.4, 1.1, 0.8)
 )
 res <- fs_correlation(d, threshold = 0.9)
-res$selected_vars
+res$selected
+res$details$pairs
+
+# keep the legacy view: both members of every flagged pair
+fs_correlation(d, threshold = 0.9, prune = FALSE)$selected
 }

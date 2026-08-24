@@ -2,9 +2,11 @@
 #
 # Argument-type validation in fs_bayes() runs BEFORE fs_require(c("brms",
 # "loo")), so those tests need no skips and run everywhere. Data-content
-# validation (response/predictor existence) happens AFTER fs_require(), so
+# validation (target/predictor existence) happens AFTER fs_require(), so
 # exercising it through the public API is gated on brms/loo; the same checks
-# are also covered helper-level via featR::: so they run everywhere.
+# are also covered helper-level via featR::: so they run everywhere. The
+# loo_compare()-driven selection rule is likewise tested at helper level with
+# a hand-made comparison table, so it needs neither brms nor loo.
 
 test_that("fs_bayes validates argument types before requiring brms/loo", {
   d <- data.frame(y = c(1.5, 2.5, 3.5), x1 = c(1, 2, 3))
@@ -12,11 +14,11 @@ test_that("fs_bayes validates argument types before requiring brms/loo", {
   expect_error(fs_bayes(1L, "y", "x1"), "'data' must be a data.frame")
   expect_error(fs_bayes(d, 1, "x1"), "single non-empty character string")
   expect_error(fs_bayes(d, "y", 1:2),
-               "'predictor_cols' must be a character vector")
+               "'predictors' must be a character vector")
   expect_error(fs_bayes(d, "y", character(0)),
-               "'predictor_cols' must be a character vector")
+               "'predictors' must be a character vector")
   expect_error(fs_bayes(d, "y", c("x1", NA)),
-               "'predictor_cols' must be a character vector")
+               "'predictors' must be a character vector")
   expect_error(fs_bayes(d, "y", "x1", date_col = 5),
                "'date_col' must be a single non-empty")
   expect_error(fs_bayes(d, "y", "x1", brm_args = "iter"),
@@ -29,14 +31,28 @@ test_that("fs_bayes validates argument types before requiring brms/loo", {
                "'sample_combinations' must be between 1 and Inf")
   expect_error(fs_bayes(d, "y", "x1", seed = "a"),
                "'seed' must be a single finite number")
-  expect_error(fs_bayes(d, "y", "x1", show_progress = "yes"),
-               "'show_progress' must be TRUE or FALSE")
+  expect_error(fs_bayes(d, "y", "x1", verbose = "yes"),
+               "'verbose' must be TRUE or FALSE")
+  expect_error(fs_bayes(d, "y", "x1", n_cores = 0),
+               "'n_cores' must be between 1 and Inf")
+  expect_error(fs_bayes(d, "y", "x1", rule = "elbow"), "should be one of")
 })
 
-test_that("fs_bayes rejects the removed early_stop_threshold argument", {
+test_that("fs_bayes rejects the removed and renamed arguments", {
   d <- data.frame(y = c(1, 2, 3), x1 = c(3, 2, 1))
+
   expect_error(
     fs_bayes(d, "y", "x1", early_stop_threshold = 0.1),
+    "unused argument"
+  )
+  # show_progress folded into verbose
+  expect_error(
+    fs_bayes(d, "y", "x1", show_progress = FALSE),
+    "unused argument"
+  )
+  # response_col / predictor_cols were renamed to target / predictors
+  expect_error(
+    fs_bayes(d, response_col = "y", predictor_cols = "x1"),
     "unused argument"
   )
 })
@@ -45,20 +61,22 @@ test_that("fs_bayes signature and defaults are stable", {
   fx <- formals(fs_bayes)
   expect_identical(
     names(fx),
-    c("data", "response_col", "predictor_cols", "date_col", "brm_family",
-      "prior", "brm_args", "parallel_combinations", "n_cores",
-      "max_comb_size", "sample_combinations", "seed", "show_progress",
-      "verbose")
+    c("data", "target", "predictors", "date_col", "brm_family", "prior",
+      "brm_args", "rule", "max_comb_size", "sample_combinations",
+      "parallel_combinations", "seed", "verbose", "n_cores")
   )
   expect_null(fx$date_col)
   expect_null(fx$prior)
-  expect_null(fx$n_cores)
   expect_null(fx$max_comb_size)
   expect_null(fx$sample_combinations)
   expect_null(fx$seed)
+  expect_identical(eval(fx$brm_args), list())
+  expect_identical(eval(fx$rule), c("1se", "best"))
   expect_identical(fx$parallel_combinations, FALSE)
-  expect_identical(fx$show_progress, TRUE)
-  expect_identical(fx$verbose, TRUE)
+  expect_identical(fx$verbose, FALSE)
+  expect_identical(fx$n_cores, 1L)
+  expect_false(any(c("response_col", "predictor_cols", "show_progress") %in%
+                     names(fx)))
 })
 
 test_that("bayes_validate_data catches missing or mistyped columns (helper-level)", {
@@ -83,6 +101,20 @@ test_that("bayes_validate_data catches missing or mistyped columns (helper-level
   )
 
   expect_true(featR:::bayes_validate_data(d, "y", c("x1", "x2")))
+})
+
+test_that("bayes_task_from_family maps brms families onto featR tasks", {
+  task_of <- featR:::bayes_task_from_family
+
+  expect_identical(task_of(stats::gaussian()), "regression")
+  expect_identical(task_of(stats::poisson()), "regression")
+  expect_identical(task_of(stats::binomial()), "classification")
+  expect_identical(task_of(list(family = "bernoulli")), "classification")
+  expect_identical(task_of(list(family = "cumulative")), "classification")
+  # anything unrecognisable falls back to regression rather than erroring
+  expect_identical(task_of(NULL), "regression")
+  expect_identical(task_of(list()), "regression")
+  expect_identical(task_of(list(family = "made_up")), "regression")
 })
 
 test_that("bayes_generate_predictor_combinations enumerates and caps sizes", {
@@ -127,12 +159,60 @@ test_that("bayes_add_week_feature builds ISO week ids (helper-level)", {
   )
   out <- featR:::bayes_add_week_feature(dt, "when", "x")
   expect_true("iso_week_id" %in% names(out$data))
-  expect_identical(out$predictor_cols, c("x", "iso_week_id"))
+  expect_identical(out$predictors, c("x", "iso_week_id"))
   # ISO year boundaries: 2024-01-01 is 2024-W01 and 2024-12-31 is 2025-W01
   expect_identical(out$data$iso_week_id, c(202401L, 202501L))
 })
 
-test_that("fs_bayes reports missing response and predictor columns", {
+test_that("bayes_pick_model implements the 1se and best rules", {
+  pick <- featR:::bayes_pick_model
+
+  results <- list(
+    list(preds = c("x1", "x2", "x3"), loo_val = -10.0), # highest elpd
+    list(preds = "x1",                loo_val = -10.8), # within 1 se, smallest
+    list(preds = c("x1", "x2"),       loo_val = -10.4), # within 1 se
+    list(preds = "x2",                loo_val = -30.0)  # far worse
+  )
+  idx <- 1:4
+
+  # loo_compare() orders rows best-first and names them after the list
+  comparison <- matrix(
+    c(0, -0.4, -0.8, -20,
+      0,  1.0,  1.2,   2),
+    ncol = 2,
+    dimnames = list(c("model1", "model3", "model2", "model4"),
+                    c("elpd_diff", "se_diff"))
+  )
+
+  # 'best' keeps the raw elpd maximum, i.e. the first comparison row
+  expect_identical(pick(results, idx, comparison, "best"), 1L)
+
+  # '1se' keeps the most parsimonious model whose elpd difference from the
+  # best is within one standard error of that difference
+  expect_identical(pick(results, idx, comparison, "1se"), 2L)
+
+  # model4 is outside one standard error, so parsimony does not rescue it
+  expect_false(identical(pick(results, idx, comparison, "1se"), 4L))
+
+  # without a usable comparison table both rules fall back to the raw maximum
+  expect_identical(pick(results, idx, NULL, "1se"), 1L)
+  expect_identical(pick(results, idx, NULL, "best"), 1L)
+  expect_identical(pick(results, idx, matrix(1:4, ncol = 2), "1se"), 1L)
+
+  # no usable model at all
+  expect_identical(pick(results, integer(0), comparison, "1se"), NA_integer_)
+})
+
+test_that("bayes_loo_comparison declines to compare fewer than two loo objects", {
+  cmp <- featR:::bayes_loo_comparison
+  results <- list(list(loo = NULL), list(loo = NULL))
+
+  expect_null(cmp(results, 1L))
+  # non-loo objects are refused rather than passed to loo::loo_compare()
+  expect_null(cmp(results, 1:2))
+})
+
+test_that("fs_bayes reports missing target and predictor columns", {
   skip_if_not_installed("brms")
   skip_if_not_installed("loo")
   skip_on_cran() # loading the brms namespace alone is slow
@@ -144,7 +224,7 @@ test_that("fs_bayes reports missing response and predictor columns", {
                "Missing predictor columns: zz")
 })
 
-test_that("fs_bayes end-to-end smoke run returns the documented elements", {
+test_that("fs_bayes end-to-end smoke run returns the documented fs_result", {
   skip_on_cran()
   skip_if_not_installed("brms")
   skip_if_not_installed("loo")
@@ -158,13 +238,43 @@ test_that("fs_bayes end-to-end smoke run returns the documented elements", {
   res <- suppressWarnings(suppressMessages(fs_bayes(
     d, "y", c("x1", "x2"),
     brm_args = list(chains = 1, iter = 300, refresh = 0),
-    show_progress = FALSE,
     verbose = FALSE
   )))
 
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$method, "bayes")
+  expect_identical(res$task, "regression")
+  expect_s3_class(res$model, "brmsfit")
+  expect_false(is.null(res$call))
+
+  # no per-feature score is comparable across combination models
+  expect_null(res$scores)
+  expect_type(res$selected, "character")
+  expect_gt(length(res$selected), 0L)
+  expect_true(all(res$selected %in% c("x1", "x2")))
+
   expect_named(
-    res,
-    c("Model", "Data", "MAE", "RMSE", "SelectedPredictors",
-      "SelectedFormula", "BestELPD")
+    res$details,
+    c("data", "mae", "rmse", "formula", "best_elpd", "loo_comparison",
+      "n_failed_fits", "n_features")
   )
+  expect_identical(res$details$n_features, 2L)
+  expect_identical(res$details$n_failed_fits, 0L)
+  expect_true(data.table::is.data.table(res$details$data))
+  expect_true(all(c("fitted_values", "residuals", "abs_residuals",
+                    "squared_residuals") %in% names(res$details$data)))
+  expect_true(is.numeric(res$details$mae))
+  expect_true(is.numeric(res$details$rmse))
+  expect_match(res$details$formula, "^y ~ ")
+
+  # The statistical fix: selection goes through loo::loo_compare(). Assert the
+  # contract (a table with the comparison columns), not the container class --
+  # loo_compare() has returned a matrix in some versions and a data.frame in
+  # others, and either is fine here.
+  expect_false(is.null(res$details$loo_comparison))
+  expect_true(all(c("elpd_diff", "se_diff") %in%
+                    colnames(res$details$loo_comparison)))
+  expect_gte(nrow(res$details$loo_comparison), 2L)
+
+  expect_output(print(res), "bayes")
 })

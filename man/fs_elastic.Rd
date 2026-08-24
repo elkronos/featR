@@ -6,65 +6,69 @@
 \usage{
 fs_elastic(
   data,
-  formula,
+  target,
   alpha_seq = seq(0, 1, by = 0.1),
-  lambda_seq = 10^seq(-3, 3, length.out = 100),
+  lambda_seq = NULL,
   trControl = NULL,
   metric = NULL,
   use_pca = FALSE,
   nPCs = NULL,
-  cores = 1L,
-  verbose = TRUE,
-  seed = NULL
+  seed = NULL,
+  verbose = FALSE,
+  n_cores = 1L
 )
 }
 \arguments{
-\item{data}{A data frame containing predictors and response.}
+\item{data}{A data frame (or data.table) containing the target and the
+candidate predictors.}
 
-\item{formula}{A formula specifying the model.}
+\item{target}{Single string naming the outcome column in \code{data}.}
 
-\item{alpha_seq}{Numeric vector of alpha values to tune over.
-Default \code{seq(0, 1, by = 0.1)}.}
+\item{alpha_seq}{Numeric vector of alpha values to tune over, each in
+\verb{[0, 1]}. Default \code{seq(0, 1, by = 0.1)}.}
 
-\item{lambda_seq}{Numeric vector of lambda values to tune over.
-Default \code{10^seq(-3, 3, length.out = 100)}.}
+\item{lambda_seq}{Numeric vector of non-negative lambda values to tune
+over, or \code{NULL} (default) to use glmnet's own path per alpha.}
 
 \item{trControl}{Optional \code{caret::trainControl()} object. If \code{NULL}
-(default), 5-fold CV with an NA-safe summary function is used.}
+(default), 5-fold CV with an NA-safe summary function is used. When
+\code{use_pca = TRUE}, \code{pcaComp = nPCs} is injected into its \code{preProcOptions}.}
 
 \item{metric}{Optional character. Performance metric to optimize. If \code{NULL}
 (default), \code{"RMSE"} is used for regression and \code{"Accuracy"} for
 classification.}
 
 \item{use_pca}{Logical. Whether to project predictors onto principal
-components before training. Default \code{FALSE}. See Details for the
-cross-validation caveat.}
+components inside each resample. Default \code{FALSE}.}
 
 \item{nPCs}{Integer. Number of principal components to retain when
 \code{use_pca = TRUE}. Must be strictly less than \code{min(nrow, ncol)} of the
 predictor matrix.}
 
-\item{cores}{Integer >= 1. Number of workers for parallel training.
-Default \code{1} (sequential; no cluster is created). Values above the
-detected core count are capped.}
-
-\item{verbose}{Logical. Print progress messages. Default \code{TRUE}.}
-
 \item{seed}{Optional integer seed applied locally (and restored on exit)
 before resampling and tuning. Default \code{NULL} (never seeds by default).}
+
+\item{verbose}{Logical. Print progress messages. Default \code{FALSE}.}
+
+\item{n_cores}{Integer >= 1. Number of workers for parallel training.
+Default \code{1} (sequential; no cluster is created). Values above the
+detected core count are capped.}
 }
 \value{
-A list containing:
-\item{coef}{Coefficients at the best \code{lambda} (matrix, or list for multinomial models).}
-\item{best_alpha}{Best alpha value.}
-\item{best_lambda}{Best lambda value.}
-\item{metric_name}{Name of the performance metric used.}
-\item{metric_value}{Metric value at the best hyperparameters.}
-\item{task}{Character: \code{"regression"} or \code{"classification"}.}
-\item{full_model}{The \code{caret::train} object.}
-\item{pca_model}{The PCA model when \code{use_pca = TRUE}, else \code{NULL}.}
-\item{use_pca}{Logical, whether PCA was used.}
-\item{formula}{The model formula.}
+An \code{fs_result} object with:
+\item{selected}{Predictors (or components, when \code{use_pca = TRUE}) whose
+coefficient at the chosen alpha/lambda is non-zero; for multinomial
+fits, the union across classes.}
+\item{scores}{Named numeric vector of absolute coefficients, or NULL for
+multinomial fits where no single per-predictor score exists.}
+\item{method}{\code{"elastic_net"}.}
+\item{task}{\code{"regression"} or \code{"classification"}.}
+\item{model}{The \code{caret::train} object.}
+\item{details}{List of \code{coef} (coefficients at the best lambda: a matrix,
+or a list of them for multinomial fits), \code{best_alpha}, \code{best_lambda},
+\code{metric_name}, \code{metric_value}, \code{use_pca}, and \code{n_features} (number of
+predictors the model saw, i.e. \code{nPCs} when \code{use_pca = TRUE}).}
+\item{call}{The matched call.}
 }
 \description{
 Performs feature selection and model training using elastic net
@@ -72,11 +76,26 @@ regularization via \code{caret::train(method = "glmnet")}. Supports regression
 (numeric outcomes) and classification (factor/character outcomes).
 }
 \details{
-When \code{use_pca = TRUE}, the PCA is fit on the \strong{full} data set before
-cross-validation, so the CV metrics are optimistic (the component loadings
-have seen the held-out folds). Proper per-fold PCA is deferred; if you need
-it today, pass a custom \code{trControl} and use \code{preProcess = "pca"} in
-\code{caret::train()} instead of \code{use_pca}.
+The model formula is built internally from \code{data} and \code{target}: every other
+column of \code{data} is a candidate predictor, and non-syntactic names are
+backticked.
+
+When \code{use_pca = TRUE} the PCA is \strong{not} fitted up front. \code{caret} is asked
+for \code{preProcess = c("center", "scale", "pca")} with \code{pcaComp = nPCs} in
+\code{trControl$preProcOptions}, so centering, scaling and the component
+loadings are refit on the training part of every resample and the held-out
+fold never contributes to them. The model is then fitted on components, so
+\code{selected}, \code{scores} and \code{details$coef} are named \code{PC1}, \code{PC2}, ... rather
+than after the original columns. \code{nPCs} must be smaller than the number of
+rows each resample trains on as well as smaller than the number of
+predictors.
+
+\code{lambda_seq = NULL} (the default) tunes over the lambda path
+\code{glmnet::glmnet()} itself proposes at each alpha, which is scaled to the
+data, instead of a fixed sequence that spends most of its fits on
+irrelevant lambdas. With \code{use_pca = TRUE} that path is computed on the
+original predictors, so it is only an approximation of the scale the
+components live on; pass \code{lambda_seq} explicitly if you need to control it.
 }
 \examples{
 \donttest{
@@ -89,12 +108,9 @@ if (requireNamespace("caret", quietly = TRUE) &&
     x2 = rnorm(60),
     x3 = rnorm(60)
   )
-  fit <- fs_elastic(
-    df, y ~ .,
-    lambda_seq = 10^seq(-2, 1, length.out = 10),
-    verbose = FALSE, seed = 1
-  )
-  fit$best_alpha
+  res <- fs_elastic(df, "y", alpha_seq = c(0.5, 1), seed = 1)
+  selected(res)
+  res$details$best_alpha
 }
 }
 }

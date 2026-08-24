@@ -1,6 +1,7 @@
 # Elastic net feature selection for featR.
-# Suggests: caret, glmnet, Matrix (always); irlba (only when use_pca = TRUE);
-# foreach + doParallel (only when cores > 1).
+# Suggests: caret, glmnet, Matrix (always); foreach + doParallel (only when
+# n_cores > 1). PCA is now done by caret inside each resample, so irlba is no
+# longer used here.
 
 #' Print a progress message when verbose
 #' @noRd
@@ -32,6 +33,20 @@ elastic_safe_summary <- function(data, lev = NULL, model = NULL) {
   }
 
   out
+}
+
+#' Build the model formula for a data + target pair
+#'
+#' Non-syntactic column names are backticked so they survive parsing.
+#'
+#' @param target Name of the outcome column.
+#' @param predictors Character vector of predictor column names.
+#' @return A formula.
+#' @noRd
+elastic_formula <- function(target, predictors) {
+  stats::as.formula(paste(
+    backtick(target), "~", paste(backtick(predictors), collapse = " + ")
+  ))
 }
 
 #' Extract response and predictor variables from a formula
@@ -134,37 +149,25 @@ elastic_check_variance <- function(x, context) {
   invisible(NULL)
 }
 
-#' Perform PCA on predictors via truncated SVD
+#' Validate the component count requested for the PCA pre-processing step
 #'
-#' `irlba::prcomp_irlba()` requires `nPCs` strictly less than `min(dim(x))`.
+#' The bound is checked against the full predictor matrix; note that caret
+#' refits the PCA inside every resample, so `nPCs` must also be smaller than
+#' the number of rows each resample trains on.
 #'
-#' @param x A (possibly sparse) predictor matrix.
-#' @param use_pca Logical. Whether to perform PCA.
-#' @param nPCs Integer. Number of principal components to retain.
-#' @return A list with elements `x` (PC scores) and `pca` (model or `NULL`).
+#' @param x The predictor matrix.
+#' @param nPCs Requested number of principal components.
+#' @return `nPCs` as an integer.
 #' @noRd
-elastic_pca <- function(x, use_pca = FALSE, nPCs = NULL) {
-  if (!use_pca) {
-    return(list(x = x, pca = NULL))
-  }
-
+elastic_check_npcs <- function(x, nPCs) {
   if (is.null(nPCs)) {
-    stop("Please set a positive 'nPCs' when 'use_pca' is TRUE.")
+    stop("Please set a positive 'nPCs' when 'use_pca' is TRUE.", call. = FALSE)
   }
   nPCs <- assert_count(nPCs, "nPCs", lower = 1L)
-
-  # Keep sparse input sparse; promote large dense input for memory behavior
-  if (!inherits(x, "sparseMatrix") && prod(dim(x)) > 5e5) {
-    x <- Matrix::Matrix(x, sparse = TRUE)
-  }
-
   if (nPCs >= min(dim(x))) {
-    stop("'nPCs' must be strictly less than min(nrow(x), ncol(x)) for irlba::prcomp_irlba().")
+    stop("'nPCs' must be strictly less than min(nrow(x), ncol(x)).", call. = FALSE)
   }
-
-  pca <- irlba::prcomp_irlba(x, n = nPCs, scale. = TRUE)
-
-  list(x = pca$x, pca = pca)
+  nPCs
 }
 
 #' Infer task type and coerce the response
@@ -208,9 +211,42 @@ elastic_infer_task <- function(y) {
   stop("Unsupported response type: response must be numeric, logical, factor, or character.")
 }
 
+#' Tuning grid built from glmnet's own lambda path, one path per alpha
+#'
+#' `caret::train()` rejects a glmnet tuning grid that has no `lambda` column,
+#' so "let glmnet choose the path" means asking `glmnet::glmnet()` which
+#' lambdas it would use at each alpha and tuning over exactly those, instead
+#' of an arbitrary fixed sequence. Only the candidate values are taken from
+#' the full data (this is what `caret`'s own default grid does); which lambda
+#' wins is still decided by resampling.
+#'
+#' @param x The predictor matrix handed to `caret::train()`.
+#' @param y The response vector.
+#' @param alpha_seq Numeric vector of alpha values.
+#' @param task Either "regression" or "classification".
+#' @param nlambda Number of lambda values requested per alpha.
+#' @return A data.frame with columns `alpha` and `lambda`.
+#' @noRd
+elastic_lambda_grid <- function(x, y, alpha_seq, task, nlambda = 50L) {
+  family <- if (identical(task, "classification")) {
+    if (nlevels(y) > 2L) "multinomial" else "binomial"
+  } else {
+    "gaussian"
+  }
+
+  xm <- if (inherits(x, "sparseMatrix")) x else as.matrix(x)
+
+  grids <- lapply(alpha_seq, function(a) {
+    fit <- glmnet::glmnet(xm, y, family = family, alpha = a, nlambda = nlambda)
+    data.frame(alpha = a, lambda = unique(as.numeric(fit$lambda)))
+  })
+
+  do.call(rbind, grids)
+}
+
 #' Train elastic net models via caret
 #'
-#' Sequential when `cores == 1` (no cluster is ever created); otherwise a
+#' Sequential when `n_cores == 1` (no cluster is ever created); otherwise a
 #' cluster is registered and guaranteed to stop on exit, even on error.
 #'
 #' @param x A predictor matrix (dense or sparse).
@@ -218,12 +254,15 @@ elastic_infer_task <- function(y) {
 #' @param tuneGrid Data frame with `alpha` and `lambda` combinations.
 #' @param trControl A `caret::trainControl()` object.
 #' @param metric Character. Performance metric used by `caret::train()`.
-#' @param cores Integer >= 1, already resolved via `resolve_cores()`.
+#' @param preProcess Optional character vector of `caret::preProcess()` steps
+#'   applied inside every resample; NULL for none.
+#' @param n_cores Integer >= 1, already resolved via `resolve_cores()`.
 #' @return A `caret::train` object.
 #' @noRd
-elastic_train_models <- function(x, y, tuneGrid, trControl, metric, cores = 1L) {
-  if (cores > 1L) {
-    cl <- parallel::makeCluster(cores)
+elastic_train_models <- function(x, y, tuneGrid, trControl, metric,
+                                 preProcess = NULL, n_cores = 1L) {
+  if (n_cores > 1L) {
+    cl <- parallel::makeCluster(n_cores)
     on.exit({
       parallel::stopCluster(cl)
       foreach::registerDoSEQ()
@@ -232,12 +271,13 @@ elastic_train_models <- function(x, y, tuneGrid, trControl, metric, cores = 1L) 
   }
 
   caret::train(
-    x         = x,
-    y         = y,
-    method    = "glmnet",
-    tuneGrid  = tuneGrid,
-    trControl = trControl,
-    metric    = metric
+    x          = x,
+    y          = y,
+    method     = "glmnet",
+    tuneGrid   = tuneGrid,
+    trControl  = trControl,
+    metric     = metric,
+    preProcess = preProcess
   )
 }
 
@@ -274,6 +314,52 @@ elastic_select_best <- function(fit, metric) {
   )
 }
 
+#' Names of predictors with a non-zero coefficient
+#'
+#' Multinomial fits give one coefficient matrix per class, so the union across
+#' classes is taken.
+#'
+#' @param coefs A coefficient matrix, or a list of them (multinomial).
+#' @return Character vector of predictor names, intercept excluded.
+#' @noRd
+elastic_nonzero_names <- function(coefs) {
+  if (is.list(coefs)) {
+    return(
+      unique(unlist(lapply(coefs, elastic_nonzero_names), use.names = FALSE)) %||%
+        character(0L)
+    )
+  }
+
+  nms <- rownames(coefs)
+  if (is.null(nms)) {
+    return(character(0L))
+  }
+  v <- as.vector(coefs)
+  keep <- !is.na(v) & v != 0 & nms != "(Intercept)"
+  nms[keep]
+}
+
+#' Absolute coefficients as a named numeric score vector
+#'
+#' NULL for multinomial fits, where a predictor has one coefficient per class
+#' and there is no single comparable score.
+#'
+#' @param coefs A coefficient matrix, or a list of them (multinomial).
+#' @return A named numeric vector, or NULL.
+#' @noRd
+elastic_scores <- function(coefs) {
+  if (is.list(coefs)) {
+    return(NULL)
+  }
+  nms <- rownames(coefs)
+  if (is.null(nms)) {
+    return(NULL)
+  }
+  v <- as.vector(coefs)
+  keep <- nms != "(Intercept)"
+  stats::setNames(abs(v[keep]), nms[keep])
+}
+
 #' Elastic Net Feature Selection and Model Training
 #'
 #' Performs feature selection and model training using elastic net
@@ -281,46 +367,65 @@ elastic_select_best <- function(fit, metric) {
 #' (numeric outcomes) and classification (factor/character outcomes).
 #'
 #' @details
-#' When `use_pca = TRUE`, the PCA is fit on the **full** data set before
-#' cross-validation, so the CV metrics are optimistic (the component loadings
-#' have seen the held-out folds). Proper per-fold PCA is deferred; if you need
-#' it today, pass a custom `trControl` and use `preProcess = "pca"` in
-#' `caret::train()` instead of `use_pca`.
+#' The model formula is built internally from `data` and `target`: every other
+#' column of `data` is a candidate predictor, and non-syntactic names are
+#' backticked.
 #'
-#' @param data A data frame containing predictors and response.
-#' @param formula A formula specifying the model.
-#' @param alpha_seq Numeric vector of alpha values to tune over.
-#'   Default `seq(0, 1, by = 0.1)`.
-#' @param lambda_seq Numeric vector of lambda values to tune over.
-#'   Default `10^seq(-3, 3, length.out = 100)`.
+#' When `use_pca = TRUE` the PCA is **not** fitted up front. `caret` is asked
+#' for `preProcess = c("center", "scale", "pca")` with `pcaComp = nPCs` in
+#' `trControl$preProcOptions`, so centering, scaling and the component
+#' loadings are refit on the training part of every resample and the held-out
+#' fold never contributes to them. The model is then fitted on components, so
+#' `selected`, `scores` and `details$coef` are named `PC1`, `PC2`, ... rather
+#' than after the original columns. `nPCs` must be smaller than the number of
+#' rows each resample trains on as well as smaller than the number of
+#' predictors.
+#'
+#' `lambda_seq = NULL` (the default) tunes over the lambda path
+#' `glmnet::glmnet()` itself proposes at each alpha, which is scaled to the
+#' data, instead of a fixed sequence that spends most of its fits on
+#' irrelevant lambdas. With `use_pca = TRUE` that path is computed on the
+#' original predictors, so it is only an approximation of the scale the
+#' components live on; pass `lambda_seq` explicitly if you need to control it.
+#'
+#' @param data A data frame (or data.table) containing the target and the
+#'   candidate predictors.
+#' @param target Single string naming the outcome column in `data`.
+#' @param alpha_seq Numeric vector of alpha values to tune over, each in
+#'   `[0, 1]`. Default `seq(0, 1, by = 0.1)`.
+#' @param lambda_seq Numeric vector of non-negative lambda values to tune
+#'   over, or `NULL` (default) to use glmnet's own path per alpha.
 #' @param trControl Optional `caret::trainControl()` object. If `NULL`
-#'   (default), 5-fold CV with an NA-safe summary function is used.
+#'   (default), 5-fold CV with an NA-safe summary function is used. When
+#'   `use_pca = TRUE`, `pcaComp = nPCs` is injected into its `preProcOptions`.
 #' @param metric Optional character. Performance metric to optimize. If `NULL`
 #'   (default), `"RMSE"` is used for regression and `"Accuracy"` for
 #'   classification.
 #' @param use_pca Logical. Whether to project predictors onto principal
-#'   components before training. Default `FALSE`. See Details for the
-#'   cross-validation caveat.
+#'   components inside each resample. Default `FALSE`.
 #' @param nPCs Integer. Number of principal components to retain when
 #'   `use_pca = TRUE`. Must be strictly less than `min(nrow, ncol)` of the
 #'   predictor matrix.
-#' @param cores Integer >= 1. Number of workers for parallel training.
-#'   Default `1` (sequential; no cluster is created). Values above the
-#'   detected core count are capped.
-#' @param verbose Logical. Print progress messages. Default `TRUE`.
 #' @param seed Optional integer seed applied locally (and restored on exit)
 #'   before resampling and tuning. Default `NULL` (never seeds by default).
-#' @return A list containing:
-#'   \item{coef}{Coefficients at the best `lambda` (matrix, or list for multinomial models).}
-#'   \item{best_alpha}{Best alpha value.}
-#'   \item{best_lambda}{Best lambda value.}
-#'   \item{metric_name}{Name of the performance metric used.}
-#'   \item{metric_value}{Metric value at the best hyperparameters.}
-#'   \item{task}{Character: `"regression"` or `"classification"`.}
-#'   \item{full_model}{The `caret::train` object.}
-#'   \item{pca_model}{The PCA model when `use_pca = TRUE`, else `NULL`.}
-#'   \item{use_pca}{Logical, whether PCA was used.}
-#'   \item{formula}{The model formula.}
+#' @param verbose Logical. Print progress messages. Default `FALSE`.
+#' @param n_cores Integer >= 1. Number of workers for parallel training.
+#'   Default `1` (sequential; no cluster is created). Values above the
+#'   detected core count are capped.
+#' @return An `fs_result` object with:
+#'   \item{selected}{Predictors (or components, when `use_pca = TRUE`) whose
+#'     coefficient at the chosen alpha/lambda is non-zero; for multinomial
+#'     fits, the union across classes.}
+#'   \item{scores}{Named numeric vector of absolute coefficients, or NULL for
+#'     multinomial fits where no single per-predictor score exists.}
+#'   \item{method}{`"elastic_net"`.}
+#'   \item{task}{`"regression"` or `"classification"`.}
+#'   \item{model}{The `caret::train` object.}
+#'   \item{details}{List of `coef` (coefficients at the best lambda: a matrix,
+#'     or a list of them for multinomial fits), `best_alpha`, `best_lambda`,
+#'     `metric_name`, `metric_value`, `use_pca`, and `n_features` (number of
+#'     predictors the model saw, i.e. `nPCs` when `use_pca = TRUE`).}
+#'   \item{call}{The matched call.}
 #' @examples
 #' \donttest{
 #' if (requireNamespace("caret", quietly = TRUE) &&
@@ -332,37 +437,37 @@ elastic_select_best <- function(fit, metric) {
 #'     x2 = rnorm(60),
 #'     x3 = rnorm(60)
 #'   )
-#'   fit <- fs_elastic(
-#'     df, y ~ .,
-#'     lambda_seq = 10^seq(-2, 1, length.out = 10),
-#'     verbose = FALSE, seed = 1
-#'   )
-#'   fit$best_alpha
+#'   res <- fs_elastic(df, "y", alpha_seq = c(0.5, 1), seed = 1)
+#'   selected(res)
+#'   res$details$best_alpha
 #' }
 #' }
 #' @export
 fs_elastic <- function(data,
-                       formula,
+                       target,
                        alpha_seq  = seq(0, 1, by = 0.1),
-                       lambda_seq = 10^seq(-3, 3, length.out = 100),
+                       lambda_seq = NULL,
                        trControl  = NULL,
                        metric     = NULL,
                        use_pca    = FALSE,
                        nPCs       = NULL,
-                       cores      = 1L,
-                       verbose    = TRUE,
-                       seed       = NULL) {
+                       seed       = NULL,
+                       verbose    = FALSE,
+                       n_cores    = 1L) {
+  mc <- match.call()
+
   assert_data_frame(data)
-  if (!inherits(formula, "formula")) {
-    stop("'formula' must be a formula.", call. = FALSE)
-  }
+  assert_target(data, target)
   if (!is.numeric(alpha_seq) || length(alpha_seq) == 0L || anyNA(alpha_seq) ||
       any(alpha_seq < 0) || any(alpha_seq > 1)) {
     stop("'alpha_seq' must be a numeric vector with values in [0, 1].", call. = FALSE)
   }
-  if (!is.numeric(lambda_seq) || length(lambda_seq) == 0L || anyNA(lambda_seq) ||
-      any(lambda_seq < 0)) {
-    stop("'lambda_seq' must be a numeric vector of non-negative values.", call. = FALSE)
+  if (!is.null(lambda_seq)) {
+    if (!is.numeric(lambda_seq) || length(lambda_seq) == 0L ||
+        anyNA(lambda_seq) || any(lambda_seq < 0)) {
+      stop("'lambda_seq' must be a numeric vector of non-negative values, or NULL.",
+           call. = FALSE)
+    }
   }
   if (!is.null(metric)) {
     assert_string(metric, "metric")
@@ -375,18 +480,27 @@ fs_elastic <- function(data,
       stop("'seed' must be a single whole number (integer-sized) or NULL.", call. = FALSE)
     }
   }
-  cores <- resolve_cores(cores, "cores")
+  n_cores <- resolve_cores(n_cores, "n_cores")
+
+  # as.data.frame() keeps data.table input away from data.table's NSE and
+  # copies, so the caller's object is never touched.
+  data <- as.data.frame(data)
+  predictor_names <- setdiff(names(data), target)
+  if (length(predictor_names) == 0L) {
+    stop(sprintf("'data' must contain at least one predictor column besides '%s'.",
+                 target), call. = FALSE)
+  }
 
   fs_require(c("caret", "glmnet", "Matrix"), "elastic net feature selection")
-  if (use_pca) {
-    fs_require("irlba", "PCA via truncated SVD")
-  }
-  if (cores > 1L) {
+  if (n_cores > 1L) {
     fs_require(c("foreach", "doParallel"), "parallel model training")
   }
 
+  local_seed(seed)
+
   elastic_message("Extracting response and predictor variables...", verbose)
-  vars <- elastic_extract_variables(data, formula)
+  form <- elastic_formula(target, predictor_names)
+  vars <- elastic_extract_variables(data, form)
   y <- vars$y
   x <- vars$x
 
@@ -399,7 +513,8 @@ fs_elastic <- function(data,
   }
 
   elastic_message("Ensuring predictors are in sparse format (if large)...", verbose)
-  if (!inherits(x, "sparseMatrix") && prod(dim(x)) > 5e5) {
+  # caret's preProcess cannot handle sparse input, so the PCA path stays dense.
+  if (!use_pca && !inherits(x, "sparseMatrix") && prod(dim(x)) > 5e5) {
     x <- Matrix::Matrix(x, sparse = TRUE)
   }
 
@@ -410,15 +525,16 @@ fs_elastic <- function(data,
 
   elastic_check_variance(x, if (use_pca) "PCA with scaling" else "model training")
 
-  elastic_message("Performing PCA if specified...", verbose)
-  pca_res <- elastic_pca(x, use_pca = use_pca, nPCs = nPCs)
-  x <- pca_res$x
-  pca_model <- pca_res$pca
+  if (use_pca) {
+    nPCs <- elastic_check_npcs(x, nPCs)
+  }
 
   elastic_message("Creating tuning grid...", verbose)
-  tuneGrid <- expand.grid(alpha = alpha_seq, lambda = lambda_seq)
-
-  local_seed(seed)
+  tuneGrid <- if (is.null(lambda_seq)) {
+    elastic_lambda_grid(x, y, alpha_seq, task)
+  } else {
+    expand.grid(alpha = alpha_seq, lambda = lambda_seq)
+  }
 
   if (is.null(trControl)) {
     elastic_message("Creating default trainControl...", verbose)
@@ -428,18 +544,26 @@ fs_elastic <- function(data,
       summaryFunction = elastic_safe_summary
     )
   }
+  if (use_pca) {
+    # Refit PCA inside every resample rather than once on the full data.
+    trControl$preProcOptions <- utils::modifyList(
+      trControl$preProcOptions %||% list(),
+      list(pcaComp = nPCs)
+    )
+  }
 
   elastic_message(
-    if (cores > 1L) "Training models (parallel)..." else "Training models...",
+    if (n_cores > 1L) "Training models (parallel)..." else "Training models...",
     verbose
   )
   fit <- elastic_train_models(
-    x         = x,
-    y         = y,
-    tuneGrid  = tuneGrid,
-    trControl = trControl,
-    metric    = metric,
-    cores     = cores
+    x          = x,
+    y          = y,
+    tuneGrid   = tuneGrid,
+    trControl  = trControl,
+    metric     = metric,
+    preProcess = if (use_pca) c("center", "scale", "pca") else NULL,
+    n_cores    = n_cores
   )
 
   elastic_message("Selecting best model...", verbose)
@@ -448,16 +572,24 @@ fs_elastic <- function(data,
   elastic_message("Extracting coefficients at best lambda...", verbose)
   coefficients <- stats::coef(best$model, s = best$lambda)
 
-  list(
-    coef         = coefficients,
-    best_alpha   = best$alpha,
-    best_lambda  = best$lambda,
-    metric_name  = best$metric_name,
-    metric_value = best$metric_value,
-    task         = task,
-    full_model   = fit,
-    pca_model    = pca_model,
-    use_pca      = use_pca,
-    formula      = formula
+  selected_features <- elastic_nonzero_names(coefficients)
+  scores <- elastic_scores(coefficients)
+
+  new_fs_result(
+    selected = selected_features,
+    scores   = scores,
+    method   = "elastic_net",
+    task     = task,
+    model    = fit,
+    details  = list(
+      coef         = coefficients,
+      best_alpha   = best$alpha,
+      best_lambda  = best$lambda,
+      metric_name  = best$metric_name,
+      metric_value = best$metric_value,
+      use_pca      = use_pca,
+      n_features   = if (use_pca) nPCs else ncol(x)
+    ),
+    call = mc
   )
 }

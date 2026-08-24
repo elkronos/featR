@@ -17,13 +17,37 @@ ig_toy <- function() {
   )
 }
 
+# Deterministic 64-row cardinality trap (no RNG). The target is balanced, so
+# H(y) = 1 bit.
+#   id   = 64 distinct labels -> H(y | id) = 0, so raw IG = 1 bit (the
+#          maximum attainable) while H(id) = log2(64) = 6 bits.
+#   good = 2 levels, 32/32, each 87.5% pure -> raw IG = 1 - H(0.875)
+#          = 0.4564 bits with H(good) = 1 bit.
+# Raw information gain therefore ranks the useless identifier ABOVE the
+# genuinely informative predictor; the gain ratio reverses that.
+ig_cardinality_toy <- function() {
+  data.frame(
+    id     = paste0("id", seq_len(64)),
+    good   = rep(c("L", "H"), each = 32),
+    target = c(rep("a", 28), rep("b", 4), rep("b", 28), rep("a", 4)),
+    stringsAsFactors = FALSE
+  )
+}
+
+# H(y | good) for the 87.5% / 12.5% split above.
+ig_h_conditional <- -(0.875 * log2(0.875) + 0.125 * log2(0.125))
+
 test_that("input validation errors are informative", {
   df <- data.frame(A = 1:4, target = c(1, 2, 1, 2))
   expect_error(fs_infogain("nope", "target"), "must be a data\\.frame or a list")
   expect_error(fs_infogain(df, target = 1), "single non-empty character string")
   expect_error(fs_infogain(df, "target", remove_na = "yes"), "TRUE or FALSE")
+  expect_error(fs_infogain(df, "target", verbose = "yes"), "TRUE or FALSE")
   expect_error(fs_infogain(df, "target", numeric_bins = 2.5), "whole number")
   expect_error(fs_infogain(df, "target", numeric_bins = 0), "between")
+  expect_error(fs_infogain(df, "target", normalize = "sqrt"), "should be one of")
+  expect_error(fs_infogain(df, "target", top_n = 0), "between")
+  expect_error(fs_infogain(df, "target", top_n = 1.5), "whole number")
   expect_error(fs_infogain(df, "missing"), "not found in 'data'")
   expect_error(fs_infogain(list(df, 1), "target"),
                "All elements in 'data' must be data\\.frames")
@@ -32,52 +56,186 @@ test_that("input validation errors are informative", {
                "position 2")
 })
 
-test_that("single data.frame input returns a plain data.frame with Variable/InfoGain", {
+test_that("the default return is an fs_result with the documented pieces", {
   res <- fs_infogain(ig_toy(), "target")
-  expect_identical(class(res), "data.frame")
-  expect_identical(names(res), c("Variable", "InfoGain"))
-  expect_identical(sort(res$Variable), sort(c("dup", "noise", "const")))
-  expect_true(is.numeric(res$InfoGain))
+
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$method, "infogain")
+  expect_identical(res$task, "classification")
+  expect_null(res$model)
+  expect_true(is.call(res$call))
+
+  expect_type(res$scores, "double")
+  expect_identical(sort(names(res$scores)), sort(c("dup", "noise", "const")))
+  expect_type(res$selected, "character")
+
+  expect_named(res$details,
+               c("table", "normalize", "numeric_bins", "n_features"))
+  expect_identical(res$details$normalize, "none")
+  expect_null(res$details$numeric_bins)
+  expect_identical(res$details$n_features, 3L)
+  # Not a list input, so there is nothing to collide.
+  expect_null(res$details$collisions)
+
+  # details$table is exactly the historical Variable/InfoGain data.frame.
+  tab <- res$details$table
+  expect_identical(class(tab), "data.frame")
+  expect_identical(names(tab), c("Variable", "InfoGain"))
+  expect_identical(sort(tab$Variable), sort(c("dup", "noise", "const")))
+  expect_true(is.numeric(tab$InfoGain))
 })
 
 test_that("information gain matches hand-computed log2 entropies", {
   res <- fs_infogain(ig_toy(), "target")
-  ig <- res$InfoGain[match(c("dup", "noise", "const"), res$Variable)]
 
   # Perfect predictor recovers the full target entropy H(y) = 1.5 bits
-  expect_equal(ig[1L], 1.5, tolerance = 1e-8)
+  expect_equal(res$scores[["dup"]], 1.5, tolerance = 1e-8)
   # 'noise' halves: H(y | noise) = 1 bit, so IG = 1.5 - 1 = 0.5
-  expect_equal(ig[2L], 0.5, tolerance = 1e-8)
+  expect_equal(res$scores[["noise"]], 0.5, tolerance = 1e-8)
   # A constant predictor carries no information (source returns exactly 0)
-  expect_identical(ig[3L], 0)
+  expect_identical(res$scores[["const"]], 0)
+
+  # The same numbers are in details$table.
+  tab <- res$details$table
+  expect_equal(tab$InfoGain[match("dup", tab$Variable)], 1.5, tolerance = 1e-8)
+  expect_equal(tab$InfoGain[match("noise", tab$Variable)], 0.5,
+               tolerance = 1e-8)
 })
 
-test_that("duplicate-of-target column ranks first; IG non-negative, finite, bounded", {
+test_that("scores rank descending and only positive scores are selected", {
   res <- fs_infogain(ig_toy(), "target")
-  expect_identical(res$Variable[which.max(res$InfoGain)], "dup")
-  expect_true(all(is.finite(res$InfoGain)))
-  expect_true(all(res$InfoGain >= 0))
-  expect_true(all(res$InfoGain <= 1.5 + 1e-8))
+
+  expect_identical(names(res$scores), c("dup", "noise", "const"))
+  expect_false(is.unsorted(rev(res$scores)))
+  expect_true(all(is.finite(res$scores)))
+  expect_true(all(res$scores >= 0))
+  expect_true(all(res$scores <= 1.5 + 1e-8))
+
+  # top_n = NULL: every feature with a score strictly greater than zero.
+  expect_identical(res$selected, c("dup", "noise"))
+  expect_false("const" %in% res$selected)
 })
 
-test_that("list input gains an Origin column; unnamed/NA elements fall back to Data_Frame_<i>", {
+test_that("top_n truncates the ranking and ignores the zero-score floor", {
+  expect_identical(fs_infogain(ig_toy(), "target", top_n = 1)$selected, "dup")
+  expect_identical(
+    fs_infogain(ig_toy(), "target", top_n = 2)$selected,
+    c("dup", "noise")
+  )
+  # top_n selects by rank, not by a score floor, and never asks for more
+  # features than exist.
+  expect_identical(
+    fs_infogain(ig_toy(), "target", top_n = 10)$selected,
+    c("dup", "noise", "const")
+  )
+})
+
+test_that("gain_ratio demotes a high-cardinality predictor that raw IG favors", {
+  df <- ig_cardinality_toy()
+
+  raw <- fs_infogain(df, "target")
+  expect_equal(raw$scores[["id"]], 1, tolerance = 1e-8)
+  expect_equal(raw$scores[["good"]], 1 - ig_h_conditional, tolerance = 1e-8)
+  # The identifier wins on raw information gain -- the bias being corrected.
+  expect_gt(raw$scores[["id"]], raw$scores[["good"]])
+  expect_identical(names(raw$scores)[1L], "id")
+  expect_identical(fs_infogain(df, "target", top_n = 1)$selected, "id")
+
+  gr <- fs_infogain(df, "target", normalize = "gain_ratio")
+  # IG / H(X): 1 / log2(64) for the identifier, 0.4564 / 1 for 'good'.
+  expect_equal(gr$scores[["id"]], 1 / 6, tolerance = 1e-8)
+  expect_equal(gr$scores[["good"]], 1 - ig_h_conditional, tolerance = 1e-8)
+  expect_gt(gr$scores[["good"]], gr$scores[["id"]])
+  expect_identical(names(gr$scores)[1L], "good")
+  expect_identical(
+    fs_infogain(df, "target", normalize = "gain_ratio", top_n = 1)$selected,
+    "good"
+  )
+
+  expect_identical(gr$details$normalize, "gain_ratio")
+  expect_identical(names(gr$details$table),
+                   c("Variable", "InfoGain", "SplitEntropy", "GainRatio"))
+  tab <- gr$details$table
+  expect_equal(tab$SplitEntropy[match("id", tab$Variable)], 6,
+               tolerance = 1e-8)
+  expect_equal(tab$SplitEntropy[match("good", tab$Variable)], 1,
+               tolerance = 1e-8)
+  # The raw gains are still reported alongside the normalized ones.
+  expect_equal(tab$InfoGain[match("id", tab$Variable)], 1, tolerance = 1e-8)
+})
+
+test_that("gain_ratio divides by zero nowhere: a constant predictor scores 0", {
+  res <- fs_infogain(ig_toy(), "target", normalize = "gain_ratio")
+
+  expect_true(all(is.finite(res$scores)))
+  expect_identical(res$scores[["const"]], 0)
+  # dup: IG 1.5 / H(dup) 1.5 = 1; noise: IG 0.5 / H(noise) 1 = 0.5
+  expect_equal(res$scores[["dup"]], 1, tolerance = 1e-8)
+  expect_equal(res$scores[["noise"]], 0.5, tolerance = 1e-8)
+  expect_identical(res$selected, c("dup", "noise"))
+})
+
+test_that("list input keeps Origin and falls back to Data_Frame_<i>", {
   d1 <- data.frame(A = rep(1:2, 25), target = rep(c("x", "y"), 25))
   d2 <- data.frame(B = rep(c("u", "v"), 30), target = rep(c("x", "y"), 30))
 
   res <- fs_infogain(list(first = d1, second = d2), "target")
-  expect_identical(class(res), "data.frame")
-  expect_identical(names(res), c("Variable", "InfoGain", "Origin"))
-  expect_setequal(unique(res$Origin), c("first", "second"))
-  expect_identical(res$Variable[res$Origin == "first"], "A")
-  expect_identical(res$Variable[res$Origin == "second"], "B")
+  tab <- res$details$table
+  expect_identical(class(tab), "data.frame")
+  expect_identical(names(tab), c("Variable", "InfoGain", "Origin"))
+  expect_setequal(unique(tab$Origin), c("first", "second"))
+  expect_identical(tab$Variable[tab$Origin == "first"], "A")
+  expect_identical(tab$Variable[tab$Origin == "second"], "B")
+
+  # selected/scores cover the union across data.frames.
+  expect_setequal(names(res$scores), c("A", "B"))
+  expect_setequal(res$selected, c("A", "B"))
+  expect_identical(res$details$n_features, 2L)
+  expect_identical(nrow(res$details$collisions), 0L)
 
   res_unnamed <- fs_infogain(list(d1, d2), "target")
-  expect_setequal(unique(res_unnamed$Origin), c("Data_Frame_1", "Data_Frame_2"))
+  expect_setequal(unique(res_unnamed$details$table$Origin),
+                  c("Data_Frame_1", "Data_Frame_2"))
 
   lst <- list(d1, d2)
   names(lst) <- c("named", NA)
   res_na_name <- fs_infogain(lst, "target")
-  expect_setequal(unique(res_na_name$Origin), c("named", "Data_Frame_2"))
+  expect_setequal(unique(res_na_name$details$table$Origin),
+                  c("named", "Data_Frame_2"))
+})
+
+test_that("a name colliding across data.frames keeps the higher score", {
+  # 'shared' predicts the target perfectly in d1 and not at all in d2.
+  d1 <- data.frame(
+    shared = rep(c("u", "v"), 25),
+    target = rep(c("x", "y"), 25),
+    stringsAsFactors = FALSE
+  )
+  d2 <- data.frame(
+    shared = rep(c("u", "v"), 24),
+    other  = rep(c("p", "p", "q", "q"), 12),
+    target = rep(c("x", "x", "y", "y"), 12),
+    stringsAsFactors = FALSE
+  )
+
+  res <- fs_infogain(list(first = d1, second = d2), "target")
+
+  # Every scored row survives in the table ...
+  expect_identical(nrow(res$details$table), 3L)
+  # ... but the union of names is scored once, at the higher value.
+  expect_setequal(names(res$scores), c("shared", "other"))
+  expect_identical(res$details$n_features, 2L)
+  expect_equal(res$scores[["shared"]], 1, tolerance = 1e-8)
+  expect_equal(res$scores[["other"]], 1, tolerance = 1e-8)
+
+  coll <- res$details$collisions
+  expect_identical(class(coll), "data.frame")
+  expect_identical(names(coll), c("Variable", "Origin", "Score", "Kept"))
+  expect_identical(nrow(coll), 2L)
+  expect_identical(unique(coll$Variable), "shared")
+  expect_identical(coll$Kept, c(TRUE, FALSE))
+  expect_identical(coll$Origin[coll$Kept], "first")
+  expect_equal(coll$Score, c(1, 0), tolerance = 1e-8)
 })
 
 test_that("Date predictors expand into _year/_month/_day and the original is dropped", {
@@ -87,9 +245,14 @@ test_that("Date predictors expand into _year/_month/_day and the original is dro
     target = rep(c("p", "q"), 50)
   )
   res <- fs_infogain(df, "target")
-  expect_true(all(c("when_year", "when_month", "when_day") %in% res$Variable))
-  expect_false("when" %in% res$Variable)
-  expect_true(all(is.finite(res$InfoGain)))
+
+  expect_true(all(c("when_year", "when_month", "when_day") %in%
+                    names(res$scores)))
+  expect_false("when" %in% names(res$scores))
+  expect_true(all(c("when_year", "when_month", "when_day") %in%
+                    res$details$table$Variable))
+  expect_false("when" %in% res$details$table$Variable)
+  expect_true(all(is.finite(res$scores)))
 })
 
 test_that("POSIXct predictors are expanded like Dates", {
@@ -98,9 +261,11 @@ test_that("POSIXct predictors are expanded like Dates", {
     target = rep(c("p", "q"), 30)
   )
   res <- fs_infogain(df, "target")
-  expect_true(all(c("stamp_year", "stamp_month", "stamp_day") %in% res$Variable))
-  expect_false("stamp" %in% res$Variable)
-  expect_true(all(is.finite(res$InfoGain)))
+
+  expect_true(all(c("stamp_year", "stamp_month", "stamp_day") %in%
+                    names(res$scores)))
+  expect_false("stamp" %in% names(res$scores))
+  expect_true(all(is.finite(res$scores)))
 })
 
 test_that("data.table input works and the caller's table is not modified", {
@@ -113,8 +278,9 @@ test_that("data.table input works and the caller's table is not modified", {
   names_before <- names(data.table::copy(dt))
 
   res <- fs_infogain(dt, "target")
-  expect_identical(class(res), "data.frame")
-  expect_true(all(c("when_year", "when_month", "when_day") %in% res$Variable))
+  expect_s3_class(res, "fs_result")
+  expect_true(all(c("when_year", "when_month", "when_day") %in%
+                    names(res$scores)))
 
   # By-reference expansion must not leak back into the caller's object
   expect_identical(names(dt), names_before)
@@ -128,7 +294,8 @@ test_that("a date-like target is treated as categorical days (known answer)", {
     target = as.Date("2020-01-01") + rep(0:4, 20)
   )
   res <- fs_infogain(df, "target")
-  expect_equal(res$InfoGain[res$Variable == "A"], log2(5), tolerance = 1e-8)
+  expect_equal(res$scores[["A"]], log2(5), tolerance = 1e-8)
+  expect_identical(res$task, "classification")
 })
 
 test_that("numeric predictors/targets are discretized; numeric_bins override accepted", {
@@ -138,11 +305,15 @@ test_that("numeric predictors/targets are discretized; numeric_bins override acc
   )
   res_auto <- fs_infogain(df, "target")
   res_bins <- fs_infogain(df, "target", numeric_bins = 3)
+
   for (res in list(res_auto, res_bins)) {
-    expect_identical(names(res), c("Variable", "InfoGain"))
-    expect_true(all(is.finite(res$InfoGain)))
-    expect_true(all(res$InfoGain >= 0))
+    expect_s3_class(res, "fs_result")
+    expect_identical(names(res$details$table), c("Variable", "InfoGain"))
+    expect_true(all(is.finite(res$scores)))
+    expect_true(all(res$scores >= 0))
   }
+  expect_identical(res_auto$details$numeric_bins, NULL)
+  expect_identical(res_bins$details$numeric_bins, 3L)
 })
 
 test_that("scattered NAs are handled per pair; remove_na makes no difference then", {
@@ -155,27 +326,76 @@ test_that("scattered NAs are handled per pair; remove_na makes no difference the
   res_drop <- fs_infogain(df, "target", remove_na = TRUE)
   res_keep <- fs_infogain(df, "target", remove_na = FALSE)
 
-  expect_identical(sort(res_drop$Variable), c("A", "B"))
-  expect_true(all(is.finite(res_drop$InfoGain)))
-  expect_true(all(res_drop$InfoGain >= 0))
+  expect_identical(sort(res_drop$details$table$Variable), c("A", "B"))
+  expect_true(all(is.finite(res_drop$scores)))
+  expect_true(all(res_drop$scores >= 0))
   # Rows with NA target are excluded per pair anyway (documented behavior)
-  expect_equal(res_drop, res_keep)
+  expect_equal(res_drop$details$table, res_keep$details$table)
+  expect_equal(res_drop$scores, res_keep$scores)
 })
 
-test_that("an all-NA target errors under remove_na = TRUE and yields NA IG otherwise", {
+test_that("an all-NA target errors under remove_na = TRUE and yields NA scores otherwise", {
   df <- data.frame(A = rep(1:2, 10), target = rep(NA_real_, 20))
   expect_error(fs_infogain(df, "target", remove_na = TRUE), "No rows available")
 
   res <- fs_infogain(df, "target", remove_na = FALSE)
-  expect_identical(res$Variable, "A")
-  expect_true(all(is.na(res$InfoGain)))
+  expect_identical(res$details$table$Variable, "A")
+  expect_true(all(is.na(res$details$table$InfoGain)))
+  expect_true(all(is.na(res$scores)))
+  # An undefined score is never selected, with or without top_n.
+  expect_identical(res$selected, character(0))
+  expect_identical(
+    fs_infogain(df, "target", remove_na = FALSE, top_n = 1)$selected,
+    character(0)
+  )
+  # NA propagates through the gain ratio instead of becoming NaN.
+  gr <- fs_infogain(df, "target", remove_na = FALSE, normalize = "gain_ratio")
+  expect_true(all(is.na(gr$scores)))
 })
 
-test_that("a target-only data.frame yields an empty result with the documented names", {
+test_that("a target-only data.frame yields an empty result with the documented shape", {
   res <- fs_infogain(data.frame(target = 1:10), "target")
-  expect_identical(class(res), "data.frame")
-  expect_identical(names(res), c("Variable", "InfoGain"))
-  expect_identical(nrow(res), 0L)
+
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$selected, character(0))
+  expect_length(res$scores, 0L)
+  expect_true(is.numeric(res$scores))
+  expect_identical(res$details$n_features, 0L)
+
+  tab <- res$details$table
+  expect_identical(class(tab), "data.frame")
+  expect_identical(names(tab), c("Variable", "InfoGain"))
+  expect_identical(nrow(tab), 0L)
+})
+
+test_that("verbose is quiet by default and reports when switched on", {
+  expect_silent(fs_infogain(ig_toy(), "target"))
+
+  msgs <- capture_messages(fs_infogain(ig_toy(), "target", verbose = TRUE))
+  expect_true(any(grepl("Scored 3 features", msgs, fixed = TRUE)))
+  expect_true(any(grepl("normalize = 'none'", msgs, fixed = TRUE)))
+  expect_true(any(grepl("Selected 2 features", msgs, fixed = TRUE)))
+})
+
+test_that("the result prints", {
+  res <- fs_infogain(ig_toy(), "target")
+  expect_output(print(res), "fs_result")
+  expect_output(print(res), "infogain")
+})
+
+test_that("fs_infogain's formals match the unified API", {
+  fi <- formals(fs_infogain)
+
+  expect_identical(
+    names(fi),
+    c("data", "target", "numeric_bins", "normalize", "top_n", "remove_na",
+      "verbose")
+  )
+  expect_identical(eval(fi$normalize), c("none", "gain_ratio"))
+  expect_null(fi$numeric_bins)
+  expect_null(fi$top_n)
+  expect_identical(fi$remove_na, TRUE)
+  expect_identical(fi$verbose, FALSE)
 })
 
 test_that("fs_infogain leaves the caller's RNG state untouched", {

@@ -20,14 +20,14 @@
 #'   "n_unique".
 #' @param na_rm Single flag; remove NAs when computing scores (where
 #'   applicable).
-#' @param log_progress Single flag; emit progress messages.
+#' @param verbose Single flag; emit progress messages.
 #' @return Named numeric vector of scores (length = ncol(dt)).
 #' @noRd
 unsup_scores <- function(dt,
                          method,
                          na_rm = TRUE,
-                         log_progress = FALSE) {
-  if (log_progress) {
+                         verbose = FALSE) {
+  if (verbose) {
     message(sprintf(
       "Computing unsupervised feature scores using method '%s'...", method
     ))
@@ -127,7 +127,11 @@ unsup_scores <- function(dt,
 #' both \code{action = "keep"} and \code{action = "remove"}; a warning
 #' reports how many such features were excluded.
 #'
-#' @param x Numeric matrix, data.frame, or data.table (all numeric columns).
+#' Columns are subset by integer index, never by name, so duplicated column
+#' names cannot select the wrong columns.
+#'
+#' @param data A data.frame, data.table, or matrix; all columns must be
+#'   numeric.
 #' @param method One of \code{"variance"}, \code{"mad"}, \code{"iqr"},
 #'   \code{"range"}, \code{"missing_prop"}, \code{"n_unique"}.
 #' @param threshold Non-negative, finite numeric scalar threshold applied to
@@ -140,54 +144,68 @@ unsup_scores <- function(dt,
 #'   (greater/less than or equal) instead of strict.
 #' @param na_rm Logical; if TRUE, remove NAs when computing scores (where
 #'   applicable).
-#' @param output One of \code{"matrix"}, \code{"dt"}, \code{"data.frame"},
-#'   \code{"mask"}, \code{"indices"}, \code{"names"}, \code{"list"}.
+#' @param output One of \code{"result"} (default), \code{"matrix"},
+#'   \code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
+#'   \code{"names"}, \code{"list"}.
 #'   \itemize{
-#'     \item \code{"matrix"} (default): numeric matrix of selected features.
+#'     \item \code{"result"} (default): an \code{fs_result} object (see
+#'       Value).
+#'     \item \code{"matrix"}: numeric matrix of selected features.
 #'     \item \code{"dt"}: data.table of selected features.
 #'     \item \code{"data.frame"}: data.frame of selected features.
-#'     \item \code{"mask"}: logical vector of length \code{ncol(x)}.
+#'     \item \code{"mask"}: logical vector of length \code{ncol(data)}.
 #'     \item \code{"indices"}: integer vector of selected column indices.
 #'     \item \code{"names"}: character vector of selected column names.
 #'     \item \code{"list"}: list with components:
 #'       \code{filtered} (matrix), \code{mask}, \code{indices}, \code{names},
 #'       \code{scores}, and \code{meta}.
 #'   }
-#' @param log_progress Logical; emit progress messages.
+#' @param verbose Logical; emit progress messages. Default FALSE.
 #'
-#' @return Depends on the `output` argument (see above). When no feature
-#'   meets the selection criteria, a warning is issued and the tabular shapes
-#'   (\code{"matrix"}, \code{"dt"}, \code{"data.frame"}) are returned with
-#'   zero columns while preserving the input row count.
+#' @return With the default \code{output = "result"}, an object of class
+#'   `fs_result` with elements:
+#'   \itemize{
+#'     \item `selected`: character vector of selected feature names.
+#'     \item `scores`: named numeric vector of per-feature scores, in column
+#'       order, `NA` where the score is undefined.
+#'     \item `method`: `"unsupervised_"` followed by the scoring method, for
+#'       example `"unsupervised_variance"`.
+#'     \item `task`: `NA_character_` (unsupervised selection has no task).
+#'     \item `model`: `NULL`.
+#'     \item `details`: a list holding `mask`, `indices`, `filtered` (the
+#'       filtered data.table), `threshold`, `direction`, `action`, and
+#'       `n_features` (the number of candidate features).
+#'     \item `call`: the matched call.
+#'   }
+#'   Any other `output` returns that shape instead, exactly as documented
+#'   above. When no feature meets the selection criteria, a warning is issued
+#'   and the tabular shapes (\code{"matrix"}, \code{"dt"},
+#'   \code{"data.frame"}) are returned with zero columns while preserving the
+#'   input row count.
 #'
 #' @examples
-#' set.seed(123)
-#' X <- matrix(rnorm(200), ncol = 5)
-#'
-#' # Keep features with variance > 0.5
-#' out_var <- fs_unsupervised(
-#'   x = X,
-#'   method = "variance",
-#'   threshold = 0.5,
-#'   direction = "above",
-#'   action = "keep",
-#'   output = "list"
+#' df <- data.frame(
+#'   spread = c(1, 2, 3, 4, 100),
+#'   flat   = c(2, 2, 2, 2, 2),
+#'   gappy  = c(1, NA, 3, NA, 5)
 #' )
+#'
+#' # Default: an fs_result
+#' res <- fs_unsupervised(df, method = "variance", threshold = 0.5)
+#' res$selected
+#' res$scores
+#' res$details$filtered
+#'
+#' # The classic shapes are still available
+#' fs_unsupervised(df, method = "variance", threshold = 0.5,
+#'                 output = "matrix")
 #'
 #' # Remove features with missing proportion >= 0.2
-#' X_na <- X
-#' X_na[sample(length(X_na), 20)] <- NA
-#' out_missing <- fs_unsupervised(
-#'   x = X_na,
-#'   method = "missing_prop",
-#'   threshold = 0.2,
-#'   direction = "above",
-#'   action = "remove",
-#'   include_equal = TRUE,
-#'   output = "matrix"
-#' )
+#' fs_unsupervised(df, method = "missing_prop", threshold = 0.2,
+#'                 direction = "above", action = "remove",
+#'                 include_equal = TRUE, output = "names")
 #' @export
-fs_unsupervised <- function(x,
+fs_unsupervised <- function(data,
                             method = c("variance",
                                        "mad",
                                        "iqr",
@@ -199,9 +217,11 @@ fs_unsupervised <- function(x,
                             action = c("keep", "remove"),
                             include_equal = FALSE,
                             na_rm = TRUE,
-                            output = c("matrix", "dt", "data.frame",
+                            output = c("result", "matrix", "dt", "data.frame",
                                        "mask", "indices", "names", "list"),
-                            log_progress = FALSE) {
+                            verbose = FALSE) {
+  cl <- match.call()
+
   # Capture before the arguments are touched: missing() is unreliable after
   # reassignment.
   used_defaults <- missing(direction) && missing(action) && missing(threshold)
@@ -213,7 +233,7 @@ fs_unsupervised <- function(x,
   assert_number(threshold, "threshold", lower = 0)
   assert_flag(include_equal, "include_equal")
   assert_flag(na_rm, "na_rm")
-  assert_flag(log_progress, "log_progress")
+  assert_flag(verbose, "verbose")
 
   if (method == "missing_prop" && used_defaults) {
     warning(
@@ -227,16 +247,16 @@ fs_unsupervised <- function(x,
     )
   }
 
-  dt <- as_dt(x, arg = "x")
+  dt <- as_dt(data, arg = "data")
   if (!all(vapply(dt, is.numeric, logical(1L)))) {
-    stop("All columns of 'x' must be numeric.", call. = FALSE)
+    stop("All columns of 'data' must be numeric.", call. = FALSE)
   }
 
   scores <- unsup_scores(
     dt = dt,
     method = method,
     na_rm = na_rm,
-    log_progress = log_progress
+    verbose = verbose
   )
 
   mask <- filter_mask(
@@ -253,7 +273,7 @@ fs_unsupervised <- function(x,
             call. = FALSE)
   }
 
-  if (log_progress) {
+  if (verbose) {
     op <- if (direction == "above") ">" else "<"
     if (include_equal) op <- paste0(op, "=")
     verb <- if (action == "keep") "Retaining" else "Removing"
@@ -261,6 +281,26 @@ fs_unsupervised <- function(x,
       "%s features with unsupervised score %s %s", verb, op, threshold
     ))
     message(sprintf("Kept %d of %d features.", length(keep_idx), ncol(dt)))
+  }
+
+  if (output == "result") {
+    return(new_fs_result(
+      selected = filter_output(dt, scores, mask, "names"),
+      scores = scores,
+      method = paste0("unsupervised_", method),
+      task = NA_character_,
+      model = NULL,
+      details = list(
+        mask = mask,
+        indices = keep_idx,
+        filtered = filter_output(dt, scores, mask, "dt"),
+        threshold = threshold,
+        direction = direction,
+        action = action,
+        n_features = ncol(dt)
+      ),
+      call = cl
+    ))
   }
 
   res <- filter_output(dt, scores, mask, output)

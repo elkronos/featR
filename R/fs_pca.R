@@ -45,7 +45,7 @@ pca_label_cols <- function(data) {
 #' @param num_pc Number of PCs to retain, or `NULL` to use
 #'   `min(2, max_possible)`.
 #' @param scale_data,center_data Logical scaling/centering switches.
-#' @param verbose Logical; emit progress messages.
+#' @param verbose Logical; emit progress messages. Default `FALSE`.
 #' @return A list with `svd` (list `u` = scores, `d` = singular values or
 #'   standard deviations, `v` = loadings), `var_explained` (proportion of
 #'   total variance per computed PC), `num_pc` (resolved value), `rows_kept`
@@ -56,7 +56,7 @@ pca_compute <- function(data,
                         num_pc = NULL,
                         scale_data = TRUE,
                         center_data = TRUE,
-                        verbose = TRUE) {
+                        verbose = FALSE) {
   dt <- as_dt(data)
 
   # Numeric columns are those not declared as labels and actually numeric.
@@ -328,8 +328,16 @@ pca_plot <- function(pca_result, label_col) {
 #' `var_explained` always reports the proportion of *total* variance
 #' explained by each retained component. With the 'bigstatsr' engine only the
 #' retained components are computed, so the entries do not sum to 1 (they sum
-#' to the fraction of variance captured by those components). Plotting
-#' requires the suggested package 'ggplot2'.
+#' to the fraction of variance captured by those components).
+#'
+#' `plot` controls printing only, never construction. Whenever a plot can be
+#' built at all (a `label_col` was supplied, at least two components were
+#' retained, and the suggested package 'ggplot2' is installed) the ggplot
+#' object is returned in `$plot`, whether or not `plot` is `TRUE`. Setting
+#' `plot = TRUE` additionally prints it, and in that case 'ggplot2' is
+#' required: its absence becomes an error rather than a silently missing
+#' `$plot`. `plot = TRUE` without a `label_col`, or with fewer than two
+#' retained components, warns and skips the plot.
 #'
 #' @param data A data.frame or data.table with at least two rows and at least
 #'   one numeric column.
@@ -342,12 +350,16 @@ pca_plot <- function(pca_result, label_col) {
 #' @param center_data Logical; center numeric columns. Default `TRUE`.
 #' @param label_col Optional name of a column used to label and color points;
 #'   the column is excluded from the PCA features.
-#' @param plot Logical; if `TRUE` (the default whenever `label_col` is
-#'   supplied) and at least two components are available, a PC1 vs PC2
-#'   scatterplot is printed and returned as `$plot`.
-#' @param verbose Logical; emit progress messages. Default `TRUE`.
+#' @param plot Logical; if `TRUE`, the PC1 vs PC2 scatterplot is printed.
+#'   Default `FALSE`, unconditionally: it no longer depends on whether
+#'   `label_col` was supplied. The plot object is returned in `$plot` either
+#'   way whenever one can be built (see Details).
+#' @param verbose Logical; emit progress messages. Default `FALSE`.
 #'
-#' @return A list with components:
+#' @return A plain list. `fs_pca()` is dimensionality reduction rather than
+#'   feature selection, so it returns its own PCA structure and not the
+#'   `fs_result` object produced by the package's selection functions. The
+#'   components are:
 #' \itemize{
 #'   \item `pc_loadings`: matrix of variable loadings (features x PCs).
 #'   \item `pc_scores`: matrix of observation scores (rows kept x PCs).
@@ -356,17 +368,22 @@ pca_plot <- function(pca_result, label_col) {
 #'   \item `pca_df`: data.table of scores plus label columns.
 #'   \item `meta`: list with `numeric_cols`, `rows_kept`, `n_rows_used`,
 #'     `n_cols_used`.
-#'   \item `plot`: the ggplot object (only when a plot was produced).
+#'   \item `plot`: the ggplot object; present only when a plot could be built.
 #' }
 #'
 #' @examples
-#' res <- fs_pca(mtcars, num_pc = 2, label_col = "cyl", plot = FALSE)
+#' res <- fs_pca(mtcars, num_pc = 2, label_col = "cyl")
 #' res$var_explained
 #' head(res$pca_df)
 #'
 #' \donttest{
 #' if (requireNamespace("ggplot2", quietly = TRUE)) {
-#'   res <- fs_pca(iris, label_col = "Species")
+#'   # nothing is printed, but the ggplot object is still there
+#'   res <- fs_pca(iris, label_col = "Species", verbose = TRUE)
+#'   res$plot
+#'
+#'   # plot = TRUE prints it as well
+#'   res <- fs_pca(iris, label_col = "Species", plot = TRUE)
 #' }
 #' }
 #' @export
@@ -375,8 +392,8 @@ fs_pca <- function(data,
                    scale_data = TRUE,
                    center_data = TRUE,
                    label_col = NULL,
-                   plot = !is.null(label_col),
-                   verbose = TRUE) {
+                   plot = FALSE,
+                   verbose = FALSE) {
   assert_data_frame(data, "data")
   if (!is.null(num_pc)) {
     num_pc <- assert_count(num_pc, "num_pc", lower = 1L)
@@ -418,17 +435,28 @@ fs_pca <- function(data,
     extra_label_col = label_col
   )
 
-  if (plot) {
+  # `plot` decides whether to print, not whether to build: the ggplot object
+  # is attached to the result whenever one can be built at all.
+  can_plot <- !is.null(label_col) && num_pc >= 2L
+
+  if (plot && !can_plot) {
     if (is.null(label_col)) {
       warning("plot = TRUE but no 'label_col' provided; skipping plot.",
               call. = FALSE)
-    } else if (num_pc < 2L) {
+    } else {
       warning("plot = TRUE requires at least 2 principal components; skipping plot.",
               call. = FALSE)
-    } else {
-      p <- pca_plot(results, label_col = label_col)
+    }
+  }
+
+  # 'ggplot2' is only a Suggests, so build the plot silently when it happens to
+  # be installed and let pca_plot() raise the actionable install error only
+  # when the user actually asked for the plot to be drawn.
+  if (can_plot && (plot || requireNamespace("ggplot2", quietly = TRUE))) {
+    p <- pca_plot(results, label_col = label_col)
+    results$plot <- p
+    if (plot) {
       print(p)
-      results$plot <- p
     }
   }
 

@@ -1,12 +1,14 @@
 # Tests for fs_svm().
 #
-# fs_svm() validates the typo-prone arguments (kernel, task) and then all of
-# its data/option arguments BEFORE calling fs_require(), so every validation
-# test below runs everywhere. Helpers that rely only on base R
-# (svm_coerce_target, svm_align_levels, svm_tune_grid) are exercised directly
-# via featR::: so their behavior is covered without caret installed; anything
-# reaching caret/kernlab/e1071/randomForest is gated and, when it fits a
-# model, also skipped on CRAN.
+# fs_svm() validates the typo-prone arguments (kernel, select_method, task)
+# and then all of its data/option arguments BEFORE calling fs_require(), so
+# every validation test below runs everywhere -- including the SVM-RFE/kernel
+# compatibility guard, which needs no model fit. Helpers that rely only on
+# base R (svm_coerce_target, svm_align_levels, svm_tune_grid,
+# svm_center_scale, svm_rfe_size_ladder) are exercised directly via featR:::
+# so their behavior is covered without caret installed; anything reaching
+# caret/kernlab/e1071/randomForest is gated and, when it fits a model, also
+# skipped on CRAN.
 
 # Deterministic two-class frame (no RNG): x1/x2 separate the classes, x3 is
 # an uninformative but non-constant covariate.
@@ -31,11 +33,31 @@ svm_toy_regression <- function() {
   )
 }
 
-test_that("kernel and task are validated before any suggested package is needed", {
+# Deterministic SVM-RFE frame (no RNG). x1 and x2 genuinely drive the label
+# (a 3.0 shift between the classes on top of a small oscillation), while n1
+# and n2 are pure noise: their patterns have periods 10 and 6, and each class
+# spans exactly 30 rows, so both features have *identical* distributions in
+# the two classes and carry no signal at all.
+svm_rfe_toy <- function() {
+  grp <- rep(c("a", "b"), each = 30)
+  w1 <- rep(c(-0.6, 0.2, 0.5, -0.3, 0.4, -0.2), 10)
+  w2 <- rep(c(0.3, -0.5, 0.6, -0.4, 0.1, 0.5, -0.6, 0.2, -0.1, 0.4), 6)
+  data.frame(
+    y  = factor(grp),
+    x1 = ifelse(grp == "b", 1.5, -1.5) + w1,
+    x2 = ifelse(grp == "b", 1.5, -1.5) + w2,
+    n1 = rep(c(-1, -0.5, 0, 0.5, 1, 0.25, -0.25, 0.75, -0.75, 0.1), 6),
+    n2 = rep(c(0.4, -0.9, 0.15, -0.35, 0.8, -0.2), 10)
+  )
+}
+
+test_that("kernel, select_method and task are validated before fs_require()", {
   d <- svm_toy_classification()
 
   # match.arg() fires first, so a typo'd kernel fails immediately
   expect_error(fs_svm(d, "y", "classification", kernel = "banana"),
+               "should be one of")
+  expect_error(fs_svm(d, "y", "classification", select_method = "nope"),
                "should be one of")
   expect_error(fs_svm(d, "y", "classifcation"),
                "'task' must be either 'classification' or 'regression'")
@@ -86,34 +108,75 @@ test_that("data, target and numeric options are validated before fs_require()", 
                "must contain at least 2 rows")
 })
 
-test_that("logical flags and tune_grid are validated before fs_require()", {
+test_that("logical flags, n_features and tune_grid are validated early", {
   d <- svm_toy_classification()
 
   expect_error(fs_svm(d, "y", "classification", feature_select = "yes"),
                "'feature_select' must be TRUE or FALSE")
   expect_error(fs_svm(d, "y", "classification", class_imbalance = NA),
                "'class_imbalance' must be TRUE or FALSE")
+  expect_error(fs_svm(d, "y", "classification", verbose = NA),
+               "'verbose' must be TRUE or FALSE")
+  expect_error(fs_svm(d, "y", "classification", n_features = 0),
+               "'n_features' must be between 1 and Inf")
+  expect_error(fs_svm(d, "y", "classification", n_features = 1.5),
+               "'n_features' must be a whole number")
   expect_error(fs_svm(d, "y", "classification", tune_grid = "C"),
                "'tune_grid' must be a data.frame")
   expect_error(fs_svm(d, "y", "classification", n_cores = 0),
                "'n_cores' must be between 1 and Inf")
 })
 
+test_that("SVM-RFE refuses a non-linear kernel with an actionable message", {
+  # This guard needs no model fit and runs before fs_require(), so it is not
+  # skipped anywhere.
+  d <- svm_toy_classification()
+
+  expect_error(
+    fs_svm(d, "y", "classification", kernel = "radial",
+           feature_select = TRUE, select_method = "svm_rfe"),
+    "SVM-RFE requires a linear kernel"
+  )
+  expect_error(
+    fs_svm(d, "y", "classification", kernel = "polynomial",
+           feature_select = TRUE, select_method = "svm_rfe"),
+    'select_method = "rf_rfe"',
+    fixed = TRUE
+  )
+
+  # The guard is scoped: with selection off, or with the random-forest
+  # screener, a non-linear kernel is fine and validation simply continues to
+  # the next check (tune_grid).
+  expect_error(
+    fs_svm(d, "y", "classification", kernel = "radial", tune_grid = "C"),
+    "'tune_grid' must be a data.frame"
+  )
+  expect_error(
+    fs_svm(d, "y", "classification", kernel = "radial",
+           feature_select = TRUE, select_method = "rf_rfe", tune_grid = "C"),
+    "'tune_grid' must be a data.frame"
+  )
+})
+
 test_that("fs_svm signature and defaults are stable", {
   fx <- formals(fs_svm)
   expect_identical(
     names(fx),
-    c("data", "target", "task", "train_ratio", "nfolds", "tune_grid",
-      "seed", "feature_select", "class_imbalance", "kernel", "n_cores")
+    c("data", "target", "task", "train_ratio", "nfolds", "kernel",
+      "tune_grid", "feature_select", "select_method", "n_features",
+      "class_imbalance", "seed", "verbose", "n_cores")
   )
   expect_identical(fx$train_ratio, 0.7)
   expect_identical(fx$nfolds, 5)
   expect_null(fx$tune_grid)
-  expect_null(fx$seed)
   expect_identical(fx$feature_select, FALSE)
+  expect_null(fx$n_features)
   expect_identical(fx$class_imbalance, FALSE)
+  expect_null(fx$seed)
+  expect_identical(fx$verbose, FALSE)
   expect_identical(fx$n_cores, 1L)
   expect_identical(eval(fx$kernel), c("linear", "radial", "polynomial"))
+  expect_identical(eval(fx$select_method), c("svm_rfe", "rf_rfe"))
 })
 
 test_that("svm_coerce_target guards numeric classification targets", {
@@ -201,6 +264,34 @@ test_that("svm_tune_grid returns the documented per-kernel grids", {
   expect_error(grid("banana"), "should be one of")
 })
 
+test_that("svm_center_scale standardizes and survives constant columns", {
+  x <- data.frame(a = c(1, 2, 3, 4), b = c(5, 5, 5, 5), cc = c(-1, 0, 1, 2))
+  out <- featR:::svm_center_scale(x)
+
+  expect_true(is.matrix(out))
+  expect_identical(colnames(out), c("a", "b", "cc"))
+  expect_equal(unname(colMeans(out)), c(0, 0, 0))
+  # the constant column is centered but not rescaled, so it collapses to zeros
+  expect_equal(unname(apply(out, 2L, stats::sd)), c(1, 0, 1))
+  expect_false(anyNA(out))
+  expect_null(attr(out, "scaled:center"))
+  expect_null(attr(out, "scaled:scale"))
+})
+
+test_that("svm_rfe_size_ladder builds a short powers-of-two ladder", {
+  ladder <- featR:::svm_rfe_size_ladder
+
+  expect_identical(ladder(1), 1L)
+  expect_identical(ladder(4), c(1L, 2L, 4L))
+  expect_identical(ladder(5), c(1L, 2L, 4L, 5L))
+  expect_identical(ladder(32), c(1L, 2L, 4L, 8L, 16L, 32L))
+
+  big <- ladder(100)
+  expect_lte(length(big), 6L)
+  expect_identical(big[1], 1L)
+  expect_identical(big[length(big)], 100L)
+})
+
 test_that("svm_performance drops NA pairs with a warning and stays consistent", {
   skip_if_not_installed("caret")
 
@@ -221,7 +312,66 @@ test_that("svm_performance drops NA pairs with a warning and stays consistent", 
   expect_identical(names(clean), c("RMSE", "Rsquared", "MAE"))
 })
 
-test_that("classification smoke returns the documented structure", {
+test_that("svm_rfe_rank ranks the informative pair above the noise pair", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  skip_on_cran()
+
+  d <- svm_rfe_toy()
+
+  # No RNG anywhere: the frame is deterministic, and supplying n_features
+  # skips the cross-validated size search.
+  res <- suppressWarnings(featR:::svm_rfe_rank(
+    x = d[, c("x1", "x2", "n1", "n2")],
+    y = d$y,
+    task = "classification",
+    n_features = 2L
+  ))
+
+  expect_setequal(res$ranking, c("x1", "x2", "n1", "n2"))
+  # rank 1 = eliminated last = most important
+  expect_setequal(res$ranking[1:2], c("x1", "x2"))
+  expect_setequal(res$ranking[3:4], c("n1", "n2"))
+  expect_setequal(res$selected, c("x1", "x2"))
+  expect_identical(res$selected, res$ranking[1:2])
+
+  # the reported criterion is w^2 from the first, full-feature fit
+  expect_true(is.numeric(res$scores))
+  expect_setequal(names(res$scores), c("x1", "x2", "n1", "n2"))
+  expect_true(all(res$scores >= 0))
+  expect_gt(max(res$scores[c("x1", "x2")]), max(res$scores[c("n1", "n2")]))
+
+  # an explicit n_features skips the size search entirely
+  expect_null(res$sizes)
+  expect_null(res$size_scores)
+  expect_true(is.na(res$size_metric))
+})
+
+test_that("svm_rfe_rank picks a subset size when n_features is NULL", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+
+  d <- svm_rfe_toy()
+
+  set.seed(4)
+  res <- suppressWarnings(featR:::svm_rfe_rank(
+    x = d[, c("x1", "x2", "n1", "n2")],
+    y = d$y,
+    task = "classification",
+    nfolds = 3
+  ))
+
+  expect_identical(res$sizes, c(1L, 2L, 4L))
+  expect_identical(names(res$size_scores), c("1", "2", "4"))
+  expect_true(is.numeric(res$size_scores))
+  expect_identical(res$size_metric, "accuracy")
+  expect_true(length(res$selected) %in% res$sizes)
+  expect_identical(res$selected, utils::head(res$ranking, length(res$selected)))
+})
+
+test_that("classification smoke returns the documented fs_result", {
   skip_if_not_installed("caret")
   skip_if_not_installed("kernlab")
   skip_if_not_installed("e1071")
@@ -243,15 +393,30 @@ test_that("classification smoke returns the documented structure", {
   # a supplied seed must not disturb the caller's RNG state
   expect_identical(.Random.seed, state_before)
 
-  expect_named(res, c("model", "test_set", "predictions", "performance",
-                      "selected_features"))
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$method, "svm_linear")
+  expect_identical(res$task, "classification")
   expect_s3_class(res$model, "train")
-  expect_s3_class(res$performance, "confusionMatrix")
-  expect_null(res$selected_features)
-  expect_length(res$predictions, nrow(res$test_set))
-  expect_true(is.factor(res$test_set$y))
+  expect_false(is.null(res$call))
+
+  # no selection ran, so every encoded predictor is "selected" and there are
+  # no comparable per-feature scores
+  expect_setequal(res$selected, c("x1", "x2", "x3"))
+  expect_null(res$scores)
+
+  expect_named(res$details,
+               c("test_set", "predictions", "performance", "selection",
+                 "encoder", "n_features"))
+  expect_null(res$details$selection)
+  expect_identical(res$details$n_features, 3L)
+  expect_s3_class(res$details$encoder, "dummyVars")
+  expect_s3_class(res$details$performance, "confusionMatrix")
+  expect_length(res$details$predictions, nrow(res$details$test_set))
+  expect_true(is.factor(res$details$test_set$y))
   # the classes are well separated, so accuracy should be high
-  expect_gt(unname(res$performance$overall["Accuracy"]), 0.7)
+  expect_gt(unname(res$details$performance$overall["Accuracy"]), 0.7)
+
+  expect_output(print(res), "svm_linear")
 })
 
 test_that("regression smoke returns a named RMSE/Rsquared/MAE vector", {
@@ -268,12 +433,13 @@ test_that("regression smoke returns a named RMSE/Rsquared/MAE vector", {
     seed = 7
   )
 
-  expect_named(res, c("model", "test_set", "predictions", "performance",
-                      "selected_features"))
-  expect_true(is.numeric(res$performance))
-  expect_identical(names(res$performance), c("RMSE", "Rsquared", "MAE"))
-  expect_true(all(is.finite(res$performance[c("RMSE", "MAE")])))
-  expect_length(res$predictions, nrow(res$test_set))
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$task, "regression")
+  perf <- res$details$performance
+  expect_true(is.numeric(perf))
+  expect_identical(names(perf), c("RMSE", "Rsquared", "MAE"))
+  expect_true(all(is.finite(perf[c("RMSE", "MAE")])))
+  expect_length(res$details$predictions, nrow(res$details$test_set))
 })
 
 test_that("the same seed reproduces the run", {
@@ -290,8 +456,8 @@ test_that("the same seed reproduces the run", {
 
   res1 <- do.call(fs_svm, args)
   res2 <- do.call(fs_svm, args)
-  expect_equal(res1$performance, res2$performance)
-  expect_equal(res1$predictions, res2$predictions)
+  expect_equal(res1$details$performance, res2$details$performance)
+  expect_equal(res1$details$predictions, res2$details$predictions)
 })
 
 test_that("class_imbalance routes up-sampling through trainControl", {
@@ -315,7 +481,7 @@ test_that("class_imbalance routes up-sampling through trainControl", {
   # Up-sampling must be delegated to caret so it happens inside each
   # resample; the old implementation duplicated rows before CV instead.
   expect_false(is.null(res$model$control$sampling))
-  expect_s3_class(res$performance, "confusionMatrix")
+  expect_s3_class(res$details$performance, "confusionMatrix")
 
   res_off <- fs_svm(
     d, "y", "classification",
@@ -326,7 +492,45 @@ test_that("class_imbalance routes up-sampling through trainControl", {
   expect_null(res_off$model$control$sampling)
 })
 
-test_that("feature_select returns selected encoded feature names", {
+test_that("feature_select = TRUE runs SVM-RFE end to end", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  skip_on_cran()
+
+  d <- svm_rfe_toy()
+
+  res <- suppressWarnings(fs_svm(
+    d, "y", "classification",
+    nfolds = 3, kernel = "linear",
+    tune_grid = data.frame(C = 1),
+    feature_select = TRUE,
+    select_method = "svm_rfe",
+    n_features = 2,
+    seed = 13
+  ))
+
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$method, "svm_linear")
+  expect_length(res$selected, 2L)
+  expect_setequal(res$selected, c("x1", "x2"))
+
+  # scores cover every encoded predictor, not just the survivors
+  expect_true(is.numeric(res$scores))
+  expect_setequal(names(res$scores), c("x1", "x2", "n1", "n2"))
+  expect_identical(res$details$n_features, 4L)
+
+  sel <- res$details$selection
+  expect_named(sel, c("method", "ranking", "scores", "sizes", "size_scores",
+                      "size_metric"))
+  expect_identical(sel$method, "svm_rfe")
+  expect_setequal(sel$ranking, c("x1", "x2", "n1", "n2"))
+  expect_identical(res$selected, sel$ranking[1:2])
+  expect_null(sel$sizes)
+  expect_s3_class(res$details$performance, "confusionMatrix")
+})
+
+test_that("select_method = 'rf_rfe' keeps the random-forest screening path", {
   skip_if_not_installed("caret")
   skip_if_not_installed("kernlab")
   skip_if_not_installed("e1071")
@@ -340,11 +544,19 @@ test_that("feature_select returns selected encoded feature names", {
     nfolds = 3, kernel = "linear",
     tune_grid = data.frame(C = 1),
     feature_select = TRUE,
+    select_method = "rf_rfe",
     seed = 99
   ))
 
-  expect_type(res$selected_features, "character")
-  expect_gt(length(res$selected_features), 0L)
-  expect_true(all(res$selected_features %in% c("x1", "x2", "x3")))
-  expect_s3_class(res$performance, "confusionMatrix")
+  expect_s3_class(res, "fs_result")
+  expect_type(res$selected, "character")
+  expect_gt(length(res$selected), 0L)
+  expect_true(all(res$selected %in% c("x1", "x2", "x3")))
+
+  expect_identical(res$details$selection$method, "rf_rfe")
+  expect_true(is.numeric(res$scores))
+  expect_setequal(names(res$scores), c("x1", "x2", "x3"))
+  expect_setequal(res$details$selection$ranking, c("x1", "x2", "x3"))
+  expect_null(res$details$selection$sizes)
+  expect_s3_class(res$details$performance, "confusionMatrix")
 })

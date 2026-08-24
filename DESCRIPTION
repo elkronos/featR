@@ -5,13 +5,14 @@ Authors@R:
     person("Justin", "Chase", email = "jchase.msu@gmail.com",
            role = c("aut", "cre", "cph"))
 Description: Filter, wrapper, and embedded feature-selection methods behind a
-    consistent set of functions: correlation and chi-squared filters,
-    information gain, LASSO and elastic net, Bayesian model comparison,
-    'Boruta', recursive feature elimination, random forest importance,
-    multivariate adaptive regression splines, support vector machine
-    pipelines, stepwise selection, and principal component / singular value
-    decomposition helpers. Heavy modeling engines are optional and only
-    required by the functions that use them.
+    consistent set of functions that share one calling convention and one
+    return type: correlation and chi-squared filters, information gain, LASSO
+    and elastic net, Bayesian model comparison, 'Boruta', recursive feature
+    elimination, random forest importance, multivariate adaptive regression
+    splines, support vector machine recursive feature elimination, stepwise
+    selection, and principal component / singular value decomposition
+    helpers. Heavy modeling engines are optional and only required by the
+    functions that use them.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -37,7 +38,6 @@ Suggests:
     future,
     ggplot2,
     glmnet,
-    irlba,
     kernlab,
     loo,
     MASS,

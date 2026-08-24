@@ -1,8 +1,13 @@
 # Tests for fs_pca(). The decomposition runs through stats::prcomp() for
 # anything under 1e7 cells, and the tidying only needs data.table (an Import),
-# so every test below runs unconditionally except the one block that actually
-# draws a plot, which is gated on the 'ggplot2' Suggest. The bigstatsr branch
-# is unreachable with fixtures this small.
+# so every test below runs unconditionally except the blocks that build a
+# ggplot, which are gated on the 'ggplot2' Suggest. The bigstatsr branch is
+# unreachable with fixtures this small.
+#
+# Post-unification conventions exercised here: verbose defaults to FALSE and is
+# the last argument, and plot defaults to FALSE unconditionally (it no longer
+# keys off label_col). plot now governs printing only; the ggplot object is
+# attached to $plot whenever one can be built.
 
 # Deterministic 12-row toy set (no RNG). All four columns are numeric with
 # non-zero variance and the matrix has full rank 4: 'x2' is a doubled 'x1'
@@ -144,7 +149,8 @@ test_that("character and factor columns are excluded but kept as labels", {
   d$grp <- rep(c("a", "b", "c"), 4)
   d$tier <- factor(rep(c("lo", "hi"), 6))
 
-  msgs <- capture_messages(res <- fs_pca(d, num_pc = 2))
+  # verbose defaults to FALSE now, so the narration has to be asked for
+  msgs <- capture_messages(res <- fs_pca(d, num_pc = 2, verbose = TRUE))
   all_msgs <- paste(msgs, collapse = "")
   expect_match(
     all_msgs,
@@ -160,11 +166,17 @@ test_that("character and factor columns are excluded but kept as labels", {
   expect_identical(names(res$pca_df), c("PC1", "PC2", "grp", "tier"))
   expect_identical(res$pca_df$grp, d$grp)
   expect_identical(res$pca_df$tier, d$tier)
+
+  # the same call is silent at the default verbose = FALSE
+  quiet <- expect_silent(fs_pca(d, num_pc = 2))
+  expect_identical(quiet$meta$numeric_cols, res$meta$numeric_cols)
 })
 
 test_that("an explicit numeric label_col is excluded from the features", {
   d <- pca_toy()
-  d$id <- as.numeric(101:112)
+  # a numeric grouping code, kept under 10 distinct values so that building the
+  # (unprinted) ggplot does not trip pca_plot()'s "more than 9 labels" warning
+  d$id <- as.numeric(rep(101:104, 3))
 
   res <- fs_pca(d, num_pc = 2, label_col = "id", plot = FALSE, verbose = FALSE)
 
@@ -236,7 +248,7 @@ test_that("fs_pca validates data, num_pc and label_col", {
   )
 })
 
-test_that("plot defaults to FALSE without a label_col and prints nothing", {
+test_that("fs_pca signature and defaults are stable", {
   fx <- formals(fs_pca)
   expect_identical(
     names(fx),
@@ -247,12 +259,31 @@ test_that("plot defaults to FALSE without a label_col and prints nothing", {
   expect_null(fx$label_col)
   expect_identical(fx$scale_data, TRUE)
   expect_identical(fx$center_data, TRUE)
-  expect_identical(fx$verbose, TRUE)
-  expect_identical(deparse(fx$plot), "!is.null(label_col)")
+  # plot is now an unconditional FALSE, not the old !is.null(label_col)
+  expect_identical(fx$plot, FALSE)
+  expect_false(is.language(fx$plot))
+  # verbose defaults to FALSE and is the last argument
+  expect_identical(fx$verbose, FALSE)
+  expect_identical(names(fx)[length(fx)], "verbose")
+})
 
+test_that("plot defaults to FALSE and the default call prints nothing", {
   # no messages, no warnings, and nothing sent to the console
-  res <- expect_silent(fs_pca(pca_toy(), num_pc = 2, verbose = FALSE))
+  res <- expect_silent(fs_pca(pca_toy(), num_pc = 2))
   expect_false("plot" %in% names(res))
+
+  # The default no longer keys off label_col, so supplying one does not turn
+  # printing on. Whether $plot is attached depends on 'ggplot2' being
+  # installed, so only the five always-present components are asserted here;
+  # the ggplot2-gated block below covers $plot itself.
+  d <- pca_toy()
+  d$grp <- rep(c("a", "b", "c"), 4)
+  res_lab <- fs_pca(d, num_pc = 2, label_col = "grp")
+  expect_identical(
+    names(res_lab)[1:5],
+    c("pc_loadings", "pc_scores", "var_explained", "pca_df", "meta")
+  )
+  expect_identical(res_lab$meta$numeric_cols, c("x1", "x2", "x3", "x4"))
 })
 
 test_that("plot = TRUE warns and skips when it cannot draw", {
@@ -262,19 +293,33 @@ test_that("plot = TRUE warns and skips when it cannot draw", {
   expect_false("plot" %in% names(res))
 
   one_pc <- data.frame(x = c(1, 3, 2, 7, 5, 4), g = rep(c("a", "b"), 3))
-  expect_warning(res1 <- fs_pca(one_pc, label_col = "g", verbose = FALSE),
+  expect_warning(res1 <- fs_pca(one_pc, label_col = "g", plot = TRUE,
+                                verbose = FALSE),
                  "plot = TRUE requires at least 2 principal components")
   expect_false("plot" %in% names(res1))
   expect_length(res1$var_explained, 1L)
+
+  # and with the new default that same call is quiet and draws nothing
+  res2 <- expect_silent(fs_pca(one_pc, label_col = "g"))
+  expect_false("plot" %in% names(res2))
 })
 
-test_that("plot = TRUE with a label column returns the ggplot in $plot", {
+test_that("the ggplot object is returned in $plot whether or not plot = TRUE", {
   skip_if_not_installed("ggplot2")
 
   d <- pca_toy()
   d$grp <- rep(c("a", "b", "c"), 4)
 
-  # fs_pca() prints the plot, so send it to a throwaway device
+  # plot = FALSE (the default) still builds and returns the object
+  res <- fs_pca(d, num_pc = 2, label_col = "grp")
+  expect_s3_class(res$plot, "ggplot")
+  expect_identical(
+    names(res),
+    c("pc_loadings", "pc_scores", "var_explained", "pca_df", "meta", "plot")
+  )
+  expect_true("grp" %in% names(res$pca_df))
+
+  # plot = TRUE additionally prints it, so send that to a throwaway device
   pdf_file <- tempfile(fileext = ".pdf")
   grDevices::pdf(pdf_file)
   withr::defer({
@@ -282,14 +327,11 @@ test_that("plot = TRUE with a label column returns the ggplot in $plot", {
     unlink(pdf_file)
   })
 
-  res <- fs_pca(d, num_pc = 2, label_col = "grp", verbose = FALSE)
-
-  expect_s3_class(res$plot, "ggplot")
-  expect_identical(
-    names(res),
-    c("pc_loadings", "pc_scores", "var_explained", "pca_df", "meta", "plot")
-  )
-  expect_true("grp" %in% names(res$pca_df))
+  printed <- fs_pca(d, num_pc = 2, label_col = "grp", plot = TRUE,
+                    verbose = FALSE)
+  expect_s3_class(printed$plot, "ggplot")
+  expect_identical(names(printed), names(res))
+  expect_equal(printed$var_explained, res$var_explained)
 })
 
 test_that("fs_pca leaves the caller's RNG state untouched", {

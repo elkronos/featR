@@ -5,28 +5,30 @@
 \title{Supervised Filter-Based Feature Selection}
 \usage{
 fs_supervised(
-  x,
-  y,
+  data,
+  target,
   method = c("auto", "correlation", "anova"),
   threshold = 0,
   direction = c("above", "below"),
   action = c("keep", "remove"),
   include_equal = FALSE,
   na_rm = TRUE,
-  out = c("matrix", "dt", "data.frame", "mask", "indices", "names", "list"),
-  log_progress = FALSE
+  output = c("result", "matrix", "dt", "data.frame", "mask", "indices", "names", "list"),
+  verbose = FALSE
 )
 }
 \arguments{
-\item{x}{Numeric matrix, data.frame, or data.table (all numeric columns).}
+\item{data}{A data.frame, data.table, or matrix containing \code{target} and
+the candidate feature columns. Every column other than \code{target} must be
+numeric.}
 
-\item{y}{Target vector (numeric, factor, character, or logical) with one
-element per row of \code{x}.}
+\item{target}{Character. Name of the target column in \code{data}. It is
+removed from the candidate features and used as the scoring target.}
 
 \item{method}{One of \code{"auto"}, \code{"correlation"}, \code{"anova"}.}
 
 \item{threshold}{Non-negative, finite numeric scalar threshold applied to
-the feature scores (not to \code{y} directly). Default 0.}
+the feature scores (not to the target directly). Default 0.}
 
 \item{direction}{One of \code{"above"}, \code{"below"}; compares scores to
 \code{threshold}.}
@@ -37,76 +39,102 @@ features meeting the condition are retained or dropped.}
 \item{include_equal}{Logical; if TRUE, comparisons are inclusive
 (greater/less than or equal) instead of strict.}
 
-\item{na_rm}{Logical; if TRUE, rows with NA in \code{x} or \code{y} are dropped when
-computing scores.}
+\item{na_rm}{Logical; if TRUE, rows with NA in a feature or in the target
+are dropped when computing that feature's score.}
 
-\item{out}{One of \code{"matrix"}, \code{"dt"}, \code{"data.frame"},
-\code{"mask"}, \code{"indices"}, \code{"names"}, \code{"list"}.
+\item{output}{One of \code{"result"} (default), \code{"matrix"},
+\code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
+\code{"names"}, \code{"list"}.
 \itemize{
-\item \code{"matrix"} (default): numeric matrix of selected features.
+\item \code{"result"} (default): an \code{fs_result} object (see
+Value).
+\item \code{"matrix"}: numeric matrix of selected features.
 \item \code{"dt"}: data.table of selected features.
 \item \code{"data.frame"}: data.frame of selected features.
-\item \code{"mask"}: logical vector of length \code{ncol(x)}.
-\item \code{"indices"}: integer vector of selected column indices.
+\item \code{"mask"}: logical vector, one element per candidate feature.
+\item \code{"indices"}: integer vector of selected column indices,
+indexing the candidate features (that is, \code{data} without \code{target}).
 \item \code{"names"}: character vector of selected column names.
 \item \code{"list"}: list with components:
 \code{filtered} (matrix), \code{mask}, \code{indices}, \code{names},
 \code{scores}, and \code{meta}.
 }}
 
-\item{log_progress}{Logical; emit progress messages.}
+\item{verbose}{Logical; emit progress messages. Default FALSE.}
 }
 \value{
-Depends on the \code{out} argument (see above). When no feature meets
-the selection criteria, a warning is issued and the tabular shapes
-(\code{"matrix"}, \code{"dt"}, \code{"data.frame"}) are returned with
-zero columns while preserving the input row count.
+With the default \code{output = "result"}, an object of class
+\code{fs_result} with elements:
+\itemize{
+\item \code{selected}: character vector of selected feature names.
+\item \code{scores}: named numeric vector of per-feature scores, in column
+order, \code{NA} where the score is undefined.
+\item \code{method}: \code{"supervised_"} followed by the resolved scoring
+method, for example \code{"supervised_correlation"}.
+\item \code{task}: \code{"regression"} for a numeric target,
+\code{"classification"} for a factor target, \code{NA} otherwise.
+\item \code{model}: \code{NULL}.
+\item \code{details}: a list holding \code{mask}, \code{indices}, \code{filtered} (the
+filtered data.table), \code{threshold}, \code{direction}, \code{action}, and
+\code{n_features} (the number of candidate features).
+\item \code{call}: the matched call.
+}
+Any other \code{output} returns that shape instead, exactly as documented
+above. When no feature meets the selection criteria, a warning is issued
+and the tabular shapes (\code{"matrix"}, \code{"dt"},
+\code{"data.frame"}) are returned with zero columns while preserving the
+input row count.
 }
 \description{
-Performs supervised, univariate, filter-based feature selection by scoring
-each feature with respect to a target \code{y} and selecting or dropping
-features based on a threshold on the score.
+Performs supervised, univariate, filter-based feature selection: every
+column of \code{data} except \code{target} is scored against the target, and
+features are selected or dropped by comparing that score to \code{threshold}.
 }
 \details{
 Supported methods:
 \itemize{
-\item \code{"correlation"}: Absolute Pearson correlation (numeric target),
-so scores lie in \code{[0, 1]}.
+\item \code{"correlation"}: Absolute Pearson correlation (numeric
+target), so scores lie in \code{[0, 1]}.
 \item \code{"anova"}: One-way ANOVA F-statistic (categorical target),
 so scores lie in \code{[0, Inf)}.
-\item \code{"auto"}: Chooses \code{"correlation"} for numeric \code{y} and
-\code{"anova"} for categorical \code{y}. Because the two score scales
+\item \code{"auto"}: Chooses \code{"correlation"} for a numeric target
+and \code{"anova"} for a categorical one. Because the two score scales
 differ, a message reports the resolved method when
-\code{log_progress = TRUE}.
+\code{verbose = TRUE}.
 }
 
 Features whose score is undefined (\code{NA}) are never selected, under
 both \code{action = "keep"} and \code{action = "remove"}; a warning
 reports how many such features were excluded.
+
+Columns are subset by integer index, never by name, so duplicated column
+names cannot select the wrong columns.
 }
 \examples{
-set.seed(123)
-X <- matrix(rnorm(200), ncol = 5)
-y_num <- rnorm(nrow(X))
-y_fac <- factor(sample(letters[1:3], nrow(X), replace = TRUE))
-
-# Correlation-based selection (numeric y)
-out_corr <- fs_supervised(
-  x = X, y = y_num,
-  method = "correlation",
-  threshold = 0.3,
-  direction = "above",
-  action = "keep",
-  out = "list"
+df <- data.frame(
+  strong = c(1, 2, 3, 4),
+  mirror = c(4, 3, 2, 1),
+  weak   = c(1, 0, 1, 0),
+  y      = c(1, 2, 3, 4)
 )
 
-# ANOVA-based selection (factor y)
-out_anova <- fs_supervised(
-  x = X, y = y_fac,
-  method = "anova",
-  threshold = 1.0,
-  direction = "above",
-  action = "keep",
-  out = "matrix"
+# Default: an fs_result
+res <- fs_supervised(df, target = "y", method = "correlation",
+                     threshold = 0.5)
+res$selected
+res$scores
+res$details$filtered
+
+# The classic shapes are still available
+fs_supervised(df, target = "y", method = "correlation", threshold = 0.5,
+              output = "names")
+
+# ANOVA against a factor target
+df_fac <- data.frame(
+  wide = c(1, 2, 10, 11),
+  mild = c(1, 3, 2, 4),
+  grp  = factor(c("a", "a", "b", "b"))
 )
+fs_supervised(df_fac, target = "grp", method = "anova", threshold = 1,
+              output = "matrix")
 }

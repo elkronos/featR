@@ -6,27 +6,28 @@
 \usage{
 fs_bayes(
   data,
-  response_col,
-  predictor_cols,
+  target,
+  predictors,
   date_col = NULL,
   brm_family = stats::gaussian(),
   prior = NULL,
   brm_args = list(),
-  parallel_combinations = FALSE,
-  n_cores = NULL,
+  rule = c("1se", "best"),
   max_comb_size = NULL,
   sample_combinations = NULL,
+  parallel_combinations = FALSE,
   seed = NULL,
-  show_progress = TRUE,
-  verbose = TRUE
+  verbose = FALSE,
+  n_cores = 1L
 )
 }
 \arguments{
 \item{data}{A data.frame or data.table.}
 
-\item{response_col}{Character. Name of the response variable.}
+\item{target}{Character. Name of the target (response) column.}
 
-\item{predictor_cols}{Character vector. Names of predictor variables.}
+\item{predictors}{Character vector. Names of the candidate predictor
+columns.}
 
 \item{date_col}{Character or NULL. Name of a date column. When provided, an
 \code{iso_week_id} feature (ISO year * 100 + ISO week) is added to the
@@ -44,18 +45,18 @@ warmup, seed). \code{chains} and \code{cores} are respected when evaluating
 combinations sequentially (\code{cores} is capped at the detected core
 count), but both are forced to 1 when \code{parallel_combinations = TRUE}.}
 
-\item{parallel_combinations}{Logical. Evaluate predictor combinations in
-parallel via parallel::mclapply(). Not available on Windows (falls back
-to sequential evaluation with a message). Default FALSE.}
-
-\item{n_cores}{Integer or NULL. Worker count used when
-\code{parallel_combinations = TRUE}. NULL (the default) means 1, i.e.
-sequential; requests are capped at the detected core count.}
+\item{rule}{Selection rule: \code{"1se"} (default) keeps the most parsimonious
+model within one standard error of the best elpd; \code{"best"} keeps the raw
+elpd maximum.}
 
 \item{max_comb_size}{Integer or NULL. Max predictors in any combination.}
 
 \item{sample_combinations}{Integer or NULL. Randomly sample this many
 combinations instead of evaluating all of them.}
+
+\item{parallel_combinations}{Logical. Evaluate predictor combinations in
+parallel via parallel::mclapply(). Not available on Windows (falls back
+to sequential evaluation with a message). Default FALSE.}
 
 \item{seed}{Optional integer. When supplied, seeds the random sampling of
 combinations (see \code{sample_combinations}) locally; the previous RNG state
@@ -63,30 +64,56 @@ is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
 asked. Note this does not seed the samplers; pass \code{seed} inside
 \code{brm_args} to control brms itself.}
 
-\item{show_progress}{Logical. Show a progress bar for sequential
-evaluation when the suggested pbapply package is installed. Default TRUE.}
+\item{verbose}{Logical. Print progress information, and show a progress bar
+for sequential evaluation when the suggested pbapply package is
+installed. Default FALSE.}
 
-\item{verbose}{Logical. Print progress information. Default TRUE.}
+\item{n_cores}{Integer. Worker count used when
+\code{parallel_combinations = TRUE}. Default 1 (sequential); requests are
+capped at the detected core count.}
 }
 \value{
-A list with:
+An object of class \code{fs_result} with:
 \describe{
-\item{Model}{Best fitted brmsfit object.}
-\item{Data}{data.table with appended fitted values and residual metrics.}
-\item{MAE}{Mean absolute error of the selected model. This is an
-in-sample, post-selection error: it is computed on the same data used
-to fit and select the model, so it is optimistic and should not be
-read as an out-of-sample error estimate.}
-\item{RMSE}{Root mean squared error of the selected model; in-sample and
-post-selection, with the same caveat as MAE.}
-\item{SelectedPredictors}{Character vector of predictors in the best model.}
-\item{SelectedFormula}{Formula string for the best model.}
-\item{BestELPD}{elpd_loo for the best model (may be NA).}
+\item{selected}{Character vector of the predictors in the chosen model.}
+\item{scores}{\code{NULL}: no per-feature score is comparable across
+combination models. \code{details$n_features} records how many candidate
+predictors were offered.}
+\item{method}{"bayes".}
+\item{task}{"regression", or "classification" when \code{brm_family} is one of
+the categorical brms families.}
+\item{model}{The selected \code{brmsfit}.}
+\item{details}{A list with \code{data} (the modeling data.table with appended
+\code{fitted_values}, \code{residuals}, \code{abs_residuals} and \code{squared_residuals}
+columns), \code{mae} and \code{rmse} (in-sample, post-selection errors computed on
+the same rows used to fit and select, so they are optimistic),
+\code{formula} (the selected model's formula string), \code{best_elpd} (the
+selected model's elpd_loo, possibly \code{NA}), \code{loo_comparison} (the
+\code{loo::loo_compare()} table -- a matrix or data.frame depending on the
+loo version -- or \code{NULL} when fewer than two models could be compared), \code{n_failed_fits} (how many combinations failed to fit) and
+\code{n_features} (the number of candidate predictors, including
+\code{iso_week_id} when \code{date_col} is supplied).}
+\item{call}{The matched call.}
 }
 }
 \description{
-Evaluates predictor combinations with brms models and selects the best
-combination by elpd_loo (leave-one-out expected log predictive density).
+Fits a brms model for every candidate predictor combination and compares
+them with \code{loo::loo_compare()}, returning the selected combination as an
+\code{fs_result}.
+}
+\details{
+Model selection uses \code{loo::loo_compare()} rather than the raw elpd
+maximum. With \code{rule = "1se"} (the default) the chosen model is the most
+parsimonious one -- fewest predictors, ties broken by the higher elpd --
+whose elpd difference from the best model is no larger than one standard
+error of that difference (the \code{se_diff} column of the comparison table).
+With \code{rule = "best"} the raw elpd maximum wins, which is the older
+behavior and is more prone to over-fitting the comparison. The full
+comparison table is always returned in \code{details$loo_comparison}.
+
+Every candidate model compiles and samples a Stan program, so the number of
+combinations grows expensive quickly; use \code{max_comb_size} or
+\code{sample_combinations} to bound the search.
 }
 \examples{
 # Each candidate model compiles a Stan program, so this example is not run
@@ -101,10 +128,11 @@ d <- data.frame(
   x2 = x2
 )
 res <- fs_bayes(
-  d, "y", c("x1", "x2"),
+  d, target = "y", predictors = c("x1", "x2"),
   brm_args = list(chains = 1, iter = 500, refresh = 0),
-  show_progress = FALSE, verbose = FALSE
+  rule = "1se", verbose = FALSE
 )
-res$SelectedFormula
+res$selected
+res$details$loo_comparison
 }
 }

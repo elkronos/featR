@@ -109,16 +109,47 @@ step_coef_summary <- function(model) {
   summary(model)$coefficients
 }
 
+#' Absolute t statistics of the retained coefficients
+#'
+#' The intercept is dropped: it is never a selected feature. The result is the
+#' per-feature score reported by `fs_stepwise()`; see the caveat about
+#' post-selection inference in the function documentation.
+#'
+#' @param coefs A coefficient matrix from `summary.lm()`.
+#' @return Named numeric vector of `|t|`, empty when no non-intercept
+#'   coefficient survived.
+#' @noRd
+step_abs_t <- function(coefs) {
+  empty <- stats::setNames(numeric(0), character(0))
+  if (!is.matrix(coefs) || nrow(coefs) == 0L ||
+      !"t value" %in% colnames(coefs)) {
+    return(empty)
+  }
+  keep <- rownames(coefs) != "(Intercept)"
+  if (!any(keep)) {
+    return(empty)
+  }
+  out <- abs(as.numeric(coefs[keep, "t value"]))
+  names(out) <- rownames(coefs)[keep]
+  out
+}
+
 #' Stepwise linear-regression feature selection via AIC
 #'
 #' Uses `MASS::stepAIC()` to perform forward, backward, or both-direction
-#' stepwise selection on a linear regression of `dependent_var` against all
-#' other columns of `data`. For `step_type = "forward"` and `"both"` a proper
-#' null model and scope are set up so that forward moves are possible.
+#' stepwise selection on a linear regression of `target` against all other
+#' columns of `data`. For `direction = "forward"` and `"both"` a proper null
+#' model and scope are set up so that forward moves are possible.
 #'
 #' @details
 #' Requires the suggested package 'MASS'. The function is
-#' linear-regression-only: the dependent variable must be numeric.
+#' linear-regression-only: the target must be numeric.
+#'
+#' \strong{Post-selection inference caveat.} The reported `scores` (absolute
+#' t statistics) and the p-values in `details$coefficients` are computed on
+#' the same data that drove the search. They are optimistically biased -- the
+#' selective-inference problem -- and must not be used for formal inference,
+#' only as a rough ordering of the retained terms.
 #'
 #' The fitted models reference the data through a small private environment
 #' attached to the model formula, so `predict()`, `summary()`, `anova()`,
@@ -134,83 +165,93 @@ step_coef_summary <- function(model) {
 #' before the search, because `stepAIC()` cannot compare models fitted on
 #' differing row sets.
 #'
-#' @param data A data.frame containing the dependent variable and the
-#'   candidate predictors (all other columns).
-#' @param dependent_var Character string naming the numeric dependent
-#'   variable. (Unquoted symbols are not accepted.)
-#' @param step_type Direction of the search: `"backward"`, `"forward"`, or
-#'   `"both"` (default).
+#' @param data A data.frame containing the target and the candidate
+#'   predictors (all other columns).
+#' @param target Character string naming the numeric target column.
+#'   (Unquoted symbols are not accepted.)
+#' @param direction Direction of the search: `"both"` (default),
+#'   `"backward"`, or `"forward"`.
 #' @param verbose Logical. If `TRUE`, emits progress messages and enables the
 #'   `stepAIC()` trace output. Default `FALSE`.
 #' @param ... Additional arguments passed to `MASS::stepAIC()` (e.g. `k`,
 #'   `steps`), excluding `trace`, which is controlled by `verbose` (a
 #'   user-supplied `trace` is dropped with a warning).
 #'
-#' @return A list with:
-#' \itemize{
-#'   \item \code{final_model}: the model selected by \code{stepAIC()}.
-#'   \item \code{importance}: the coefficient summary matrix of the final
-#'     model. \strong{Caveat}: p-values obtained after stepwise selection on
-#'     the same data are optimistically biased (the selective-inference
-#'     problem) and must not be used for formal inference.
-#'   \item \code{selected_terms}: character vector of selected predictors
-#'     (excluding the intercept).
-#'   \item \code{call}: a list describing the inputs used.
+#' @return An object of class `fs_result` with:
+#' \describe{
+#'   \item{selected}{Character vector of the selected predictor terms
+#'     (excluding the intercept).}
+#'   \item{scores}{Named numeric vector of absolute t statistics from the
+#'     final model's coefficient table, excluding the intercept.
+#'     \strong{Caveat}: these statistics (and the p-values in
+#'     `details$coefficients`) are computed after selection on the same data,
+#'     so they are optimistically biased and are not valid for inference.}
+#'   \item{method}{"stepwise".}
+#'   \item{task}{"regression"; `fs_stepwise()` fits linear models only.}
+#'   \item{model}{The `lm` selected by `stepAIC()`.}
+#'   \item{details}{A list with `final_model` (the same `lm`), `coefficients`
+#'     (the `summary()` coefficient matrix, same caveat as `scores`),
+#'     `selected_terms` (the selected term labels), `direction` (the search
+#'     direction actually used), `n_features` (the number of candidate
+#'     predictors offered to the search) and `dropped_na_rows` (how many rows
+#'     were removed for missing values).}
+#'   \item{call}{The matched call.}
 #' }
 #'
 #' @examples
 #' \donttest{
 #' if (requireNamespace("MASS", quietly = TRUE)) {
-#'   out <- fs_stepwise(mtcars, dependent_var = "mpg", step_type = "both")
-#'   out$selected_terms
-#'   out$importance
+#'   res <- fs_stepwise(mtcars, target = "mpg", direction = "both")
+#'   res$selected
+#'   res$scores
 #' }
 #' }
 #' @export
 fs_stepwise <- function(data,
-                        dependent_var,
-                        step_type = "both",
+                        target,
+                        direction = c("both", "backward", "forward"),
                         verbose = FALSE,
                         ...) {
+  cl_call <- match.call()
+
   fs_require("MASS", "stepwise selection")
 
+  direction <- match.arg(direction)
   assert_data_frame(data, "data")
-  assert_target(data, dependent_var, arg = "dependent_var")
-  assert_string(step_type, "step_type")
-  if (!step_type %in% c("backward", "forward", "both")) {
-    stop("'step_type' must be one of 'backward', 'forward', or 'both'.",
-         call. = FALSE)
-  }
+  assert_target(data, target, arg = "target")
   assert_flag(verbose, "verbose")
 
-  dep_var <- dependent_var
+  dep_var <- target
 
   if (!is.numeric(data[[dep_var]])) {
-    stop("fs_stepwise() fits linear regressions only; the dependent variable must be numeric.",
+    stop("fs_stepwise() fits linear regressions only; the target must be numeric.",
          call. = FALSE)
   }
   if (ncol(data) < 2L) {
-    stop("'data' must contain at least one predictor besides the dependent variable.",
+    stop("'data' must contain at least one predictor besides the target.",
          call. = FALSE)
   }
 
   data <- as.data.frame(data)
+  n_candidates <- length(setdiff(names(data), dep_var))
 
   # stepAIC() fails mid-search when the number of usable rows changes between
   # candidate models, so drop incomplete rows up front.
+  dropped_na_rows <- 0L
   if (anyNA(data)) {
     n_before <- nrow(data)
     data <- stats::na.omit(data)
+    dropped_na_rows <- n_before - nrow(data)
     warning(sprintf("Dropped %d row(s) with missing values before stepwise selection.",
-                    n_before - nrow(data)), call. = FALSE)
+                    dropped_na_rows), call. = FALSE)
     if (nrow(data) == 0L) {
       stop("No rows remain after removing missing values.", call. = FALSE)
     }
   }
 
   if (verbose) {
-    message(sprintf("Starting stepwise selection ('%s') for dependent variable '%s'.",
-                    step_type, dep_var))
+    message(sprintf("Starting stepwise selection ('%s') for target '%s'.",
+                    direction, dep_var))
   }
 
   # Private environment that carries the data for model fitting; it persists
@@ -219,7 +260,7 @@ fs_stepwise <- function(data,
   fit_env <- new.env(parent = parent.frame())
   assign(".fs_stepwise_data", data, envir = fit_env)
 
-  parts <- step_build_models(dep_var, direction = step_type,
+  parts <- step_build_models(dep_var, direction = direction,
                              fit_env = fit_env)
 
   step_model <- step_run_stepwise(
@@ -231,7 +272,7 @@ fs_stepwise <- function(data,
     fit_env = fit_env
   )
 
-  imp <- step_coef_summary(step_model)
+  coefficients <- step_coef_summary(step_model)
   terms_selected <- attr(stats::terms(step_model), "term.labels")
 
   if (verbose) {
@@ -246,14 +287,20 @@ fs_stepwise <- function(data,
     ))
   }
 
-  list(
-    final_model = step_model,
-    importance = imp,
-    selected_terms = terms_selected,
-    call = list(
-      dependent_var = dep_var,
-      step_type = step_type,
-      verbose = verbose
-    )
+  new_fs_result(
+    selected = terms_selected,
+    scores   = step_abs_t(coefficients),
+    method   = "stepwise",
+    task     = "regression",
+    model    = step_model,
+    details  = list(
+      final_model     = step_model,
+      coefficients    = coefficients,
+      selected_terms  = terms_selected,
+      direction       = direction,
+      n_features      = n_candidates,
+      dropped_na_rows = dropped_na_rows
+    ),
+    call = cl_call
   )
 }

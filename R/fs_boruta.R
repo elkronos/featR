@@ -283,7 +283,8 @@ boruta_prune_correlated <- function(predictors,
 #' @param target Name of the target column in `data`. A factor target is
 #'   treated as classification, a numeric target as regression; any other type
 #'   is an error, as is a target containing NAs.
-#' @param maxRuns Whole number >= 1. Maximum number of Boruta iterations.
+#' @param maxRuns Whole number of at least 11 (the minimum Boruta itself
+#'   accepts). Maximum number of Boruta iterations.
 #'   Default 250.
 #' @param cutoff_features Optional whole number capping the number of returned
 #'   features. When supplied, the top features by median Boruta importance are
@@ -357,7 +358,9 @@ fs_boruta <- function(data,
   data <- as.data.frame(data)
 
   assert_target(data, target, "target")
-  maxRuns <- assert_count(maxRuns, "maxRuns")
+  # Boruta::Boruta.default() itself stops below 11 runs; validate here so the
+  # error names the featR argument instead of surfacing from the dependency.
+  maxRuns <- assert_count(maxRuns, "maxRuns", lower = 11L)
   if (!is.null(cutoff_features)) {
     cutoff_features <- assert_count(cutoff_features, "cutoff_features")
   }

@@ -20,8 +20,10 @@ fs_correlation(
 )
 }
 \arguments{
-\item{data}{A data frame or matrix with at least 2 columns. For
-\code{"pearson"}, \code{"spearman"},
+\item{data}{A data frame or matrix with at least 2 columns and unique
+column names (a correlation matrix with duplicated dimnames is ambiguous,
+so duplicates are rejected rather than silently resolved to the first
+match). For \code{"pearson"}, \code{"spearman"},
 \code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:
 all columns must be ordered factors. For \code{"pointbiserial"}: columns
 may be numeric (continuous) or dichotomous (exactly 2 unique non-NA values).}

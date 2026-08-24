@@ -85,6 +85,23 @@ their own decomposition structure.
 * `fs_mars()` checks for MLmetrics before selecting caret's multi-class
   summary, instead of a test that could never fail; multi-class targets no
   longer fail after the resamples have been computed.
+* `fs_correlation()` rejects duplicated column names instead of silently
+  resolving every lookup to the first match, which could replace one column's
+  correlations with another's and drop both members of the pair.
+* `fs_boruta()` validates `maxRuns` against Boruta's own minimum of 11, so the
+  error names the featR argument rather than surfacing from the dependency.
+* `fs_lasso()` reports non-finite predictor values as a user-input problem,
+  naming the offending columns, rather than as an internal error.
+* `fs_elastic()` no longer errors with "missing value where TRUE/FALSE needed"
+  when a tuning result column contains `NA`.
+* `summary()` on an `fs_result` ranks p-value scores ascending, so `fs_chi()`
+  lists its most significant features first instead of last.
+* `print()` on an `fs_result` reports the recorded candidate count in
+  preference to the number of scored features, so methods that score only a
+  subset (such as `fs_recursivefeature()`) no longer report "Selected 2 of 2".
+* The `fs_result` constructor rejects an unnamed numeric `scores` vector and a
+  zero-length `task`, both of which `print()` and `summary()` could not
+  display.
 
 * `fs_mars()` no longer fails on every call (a data.table was indexed with the
   matrix returned by `caret::createDataPartition()`).

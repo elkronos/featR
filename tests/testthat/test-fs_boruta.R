@@ -19,7 +19,11 @@ test_that("fs_boruta validates arguments before requiring Boruta", {
   expect_error(fs_boruta(d, "y", cutoff_cor = 1.5),
                "'cutoff_cor' must be between 0 and 1")
   expect_error(fs_boruta(d, "y", maxRuns = 0),
-               "'maxRuns' must be between 1 and Inf")
+               "'maxRuns' must be between 11 and Inf")
+  # Boruta itself refuses fewer than 11 runs; featR catches it first so the
+  # error names the featR argument rather than surfacing from the dependency.
+  expect_error(fs_boruta(d, "y", maxRuns = 10),
+               "'maxRuns' must be between 11 and Inf")
   expect_error(fs_boruta(d, "y", resolve_tentative = "yes"),
                "'resolve_tentative' must be TRUE or FALSE")
   expect_error(fs_boruta(d, "y", verbose = "yes"),

@@ -30,8 +30,10 @@
 #' message (not a warning) is emitted when no pair at all exceeds
 #' \code{threshold}, whatever \code{verbose} is set to.
 #'
-#' @param data A data frame or matrix with at least 2 columns. For
-#'   \code{"pearson"}, \code{"spearman"},
+#' @param data A data frame or matrix with at least 2 columns and unique
+#'   column names (a correlation matrix with duplicated dimnames is ambiguous,
+#'   so duplicates are rejected rather than silently resolved to the first
+#'   match). For \code{"pearson"}, \code{"spearman"},
 #'   \code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:
 #'   all columns must be ordered factors. For \code{"pointbiserial"}: columns
 #'   may be numeric (continuous) or dichotomous (exactly 2 unique non-NA values).
@@ -258,6 +260,23 @@ corr_validate_inputs <- function(data, threshold, method, prune, na.rm,
 
   if (ncol(data) < 2L) {
     stop("`data` must have at least 2 columns to compute correlations.")
+  }
+
+  # A correlation matrix with duplicated dimnames is ambiguous: every lookup
+  # into it (pruning, pair reporting, scoring) resolves to the first match, so
+  # the second copy's correlations would be silently replaced by the first's
+  # and both columns could be dropped together. Reject rather than guess.
+  nms <- colnames(data)
+  if (is.null(nms) || anyDuplicated(nms) > 0L) {
+    if (is.null(nms)) {
+      stop("`data` must have column names.", call. = FALSE)
+    }
+    dupes <- unique(nms[duplicated(nms)])
+    stop("`data` must have unique column names; duplicated: ",
+         paste(utils::head(dupes, 5L), collapse = ", "),
+         if (length(dupes) > 5L) ", ..." else "",
+         ". Rename the duplicates before calling fs_correlation().",
+         call. = FALSE)
   }
 
   assert_string(method, "method")

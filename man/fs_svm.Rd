@@ -2,7 +2,7 @@
 % Please edit documentation in R/fs_svm.R
 \name{fs_svm}
 \alias{fs_svm}
-\title{Train and Evaluate an SVM with Optional Feature Selection and Class Balancing}
+\title{Train and evaluate an SVM, with optional SVM-RFE feature selection}
 \usage{
 fs_svm(
   data,
@@ -10,11 +10,14 @@ fs_svm(
   task,
   train_ratio = 0.7,
   nfolds = 5,
-  tune_grid = NULL,
-  seed = NULL,
-  feature_select = FALSE,
-  class_imbalance = FALSE,
   kernel = c("linear", "radial", "polynomial"),
+  tune_grid = NULL,
+  feature_select = FALSE,
+  select_method = c("svm_rfe", "rf_rfe"),
+  n_features = NULL,
+  class_imbalance = FALSE,
+  seed = NULL,
+  verbose = FALSE,
   n_cores = 1L
 )
 }
@@ -28,40 +31,71 @@ fs_svm(
 \item{train_ratio}{Training set proportion, strictly between 0 and 1
 (default \code{0.7}).}
 
-\item{nfolds}{Number of CV folds, a whole number > 1 (default \code{5}).}
+\item{nfolds}{Number of CV folds, a whole number > 1 (default \code{5}).
+Also the number of folds used by the SVM-RFE subset-size search.}
+
+\item{kernel}{One of \code{"linear"} (default), \code{"radial"}, or
+\code{"polynomial"}.}
 
 \item{tune_grid}{Optional tuning grid data frame. If \code{NULL}, a
 default grid for the chosen kernel is used.}
+
+\item{feature_select}{Logical; if \code{TRUE}, run feature selection on the
+dummy-encoded training predictors (default \code{FALSE}).}
+
+\item{select_method}{Which selector to run when
+\code{feature_select = TRUE}: \code{"svm_rfe"} (default, true SVM-RFE,
+linear kernel only) or \code{"rf_rfe"} (random-forest screening).}
+
+\item{n_features}{Optional whole number of features to keep. For
+\code{"svm_rfe"} the top \code{n_features} ranked features are kept and
+the cross-validated size search is skipped; for \code{"rf_rfe"} the
+selection is truncated to the \code{n_features} most important. Default
+\code{NULL} (the size is chosen automatically).}
+
+\item{class_imbalance}{Logical; if \code{TRUE} and the task is
+classification, up-samples classes within CV resampling (default
+\code{FALSE}).}
 
 \item{seed}{Optional seed, applied locally for the duration of the call
 and restored afterwards; also used to set reproducible RNG streams on
 parallel workers when \code{n_cores > 1}. Default \code{NULL} (never
 seeds by default).}
 
-\item{feature_select}{Logical; if \code{TRUE}, performs random-forest RFE
-on the dummy-encoded predictors (default \code{FALSE}).}
-
-\item{class_imbalance}{Logical; if \code{TRUE} and the task is
-classification, up-samples classes within CV resampling (default
-\code{FALSE}).}
-
-\item{kernel}{One of \code{"linear"}, \code{"radial"}, or
-\code{"polynomial"}.}
+\item{verbose}{Logical; if \code{TRUE}, report progress (including each
+SVM-RFE elimination step). Default \code{FALSE}.}
 
 \item{n_cores}{Number of parallel workers (default \code{1}, sequential).
 Requests are capped at the detected core count; when greater than 1 a
 cluster is created for the duration of the call and stopped on exit.}
 }
 \value{
-A list with components:
-\itemize{
-\item \code{model}: Trained \code{caret} model object.
-\item \code{test_set}: Test set (original columns, coerced target,
-aligned factor levels).
-\item \code{predictions}: Predictions on the test set.
-\item \code{performance}: Performance metrics.
-\item \code{selected_features}: Names of selected encoded features
-(when \code{feature_select = TRUE}), otherwise \code{NULL}.
+An object of class \code{fs_result} with:
+\describe{
+\item{selected}{Character vector of selected encoded feature names. When
+\code{feature_select = FALSE} this is every encoded predictor;
+otherwise it is the surviving subset, ordered from most to least
+important.}
+\item{scores}{Named numeric vector of the SVM-RFE criterion (the squared
+primal weights \code{w^2} of the first, full-feature fit) or, for
+\code{select_method = "rf_rfe"}, the mean random-forest importance.
+\code{NULL} when \code{feature_select = FALSE}.}
+\item{method}{\code{"svm_"} followed by the kernel, for example
+\code{"svm_linear"}. The selector that ran, if any, is reported in
+\code{details$selection$method}.}
+\item{task}{\code{"classification"} or \code{"regression"}.}
+\item{model}{The fitted \code{caret::train} object.}
+\item{details}{A list with \code{test_set} (the test split with its
+coerced target and aligned factor levels), \code{predictions} (test-set
+predictions), \code{performance} (a \code{caret::confusionMatrix} for
+classification, or a named RMSE/Rsquared/MAE vector for regression),
+\code{selection} (\code{NULL} when no selection ran, otherwise a list
+with \code{method}, \code{ranking} from most to least important,
+\code{scores}, and the size search's \code{sizes}, \code{size_scores}
+and \code{size_metric}), \code{encoder} (the fitted
+\code{caret::dummyVars} object) and \code{n_features} (the number of
+encoded predictors considered).}
+\item{call}{The matched call.}
 }
 }
 \description{
@@ -72,13 +106,22 @@ via cross-validation. Optional parallel training uses an explicit worker
 count.
 }
 \details{
-Notes:
 \itemize{
-\item Feature selection (\code{feature_select = TRUE}) is
-\emph{random-forest} recursive feature elimination via
-\code{caret::rfFuncs}, used as a screening step before the SVM; it is
-not SVM-RFE. If RFE fails or selects nothing, the top random-forest
-importance features are used instead, with a warning.
+\item Feature selection (\code{feature_select = TRUE}) defaults to
+\strong{SVM-RFE} (Guyon, Weston, Barnhill and Vapnik, 2002). A linear
+SVM is fitted on the centered and scaled encoded training matrix, the
+features are ranked by the squared primal weight \code{w^2}, the
+lowest-ranked feature is dropped (the lowest 10\\% while more than 50
+features remain), and the SVM is \emph{refitted} on the reduced set
+until one feature is left. Reversing the elimination order gives the
+ranking, so rank 1 is the feature eliminated last. SVM-RFE requires
+\code{kernel = "linear"}; combining it with another kernel is an error.
+\item \code{select_method = "rf_rfe"} keeps the older random-forest
+screening (\code{caret::rfFuncs}) and works with every kernel. If
+\code{rfe()} fails or selects nothing, the top random-forest importance
+features are used instead, with a warning.
+\item Selection always runs on the training split only, so the test set
+never informs which features survive.
 \item Class-imbalance handling (\code{class_imbalance = TRUE},
 classification only) up-samples \emph{within} each cross-validation
 resample via \code{caret::trainControl(sampling = "up")}, so no
@@ -94,8 +137,8 @@ values; more than 10 unique values is an error suggesting
 
 Suggested packages required at runtime: \pkg{caret} and \pkg{kernlab}
 always, \pkg{e1071} for classification metrics, \pkg{randomForest} when
-\code{feature_select = TRUE}, and \pkg{doParallel}/\pkg{foreach} when
-\code{n_cores > 1}.
+\code{feature_select = TRUE} and \code{select_method = "rf_rfe"}, and
+\pkg{doParallel}/\pkg{foreach} when \code{n_cores > 1}.
 }
 \examples{
 \donttest{
@@ -107,11 +150,27 @@ if (requireNamespace("caret", quietly = TRUE) &&
     target = "Species",
     task = "classification",
     nfolds = 3,
-    seed = 42,
     kernel = "linear",
-    tune_grid = data.frame(C = 1)
+    tune_grid = data.frame(C = 1),
+    seed = 42
   )
-  res$performance
+  res$details$performance
+
+  # SVM-RFE keeps the two most useful measurements
+  sel <- fs_svm(
+    data = iris,
+    target = "Species",
+    task = "classification",
+    nfolds = 3,
+    kernel = "linear",
+    tune_grid = data.frame(C = 1),
+    feature_select = TRUE,
+    select_method = "svm_rfe",
+    n_features = 2,
+    seed = 42
+  )
+  sel$selected
+  sel$scores
 }
 }
 }

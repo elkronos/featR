@@ -4,36 +4,40 @@
 
 #' Validate fs_lasso() input parameters
 #'
-#' @param x A data frame or matrix of predictor variables.
-#' @param y A numeric vector of response values (no NA/NaN/Inf).
+#' Runs after the target column has been located and extracted, so the
+#' response checks can name the offending column.
+#'
+#' @param y The extracted target vector.
+#' @param target Name of the target column, used in error messages.
 #' @param alpha A numeric value in (0, 1]; 1 = lasso, (0, 1) = elastic net.
 #' @param nfolds Integer > 1 specifying the number of CV folds.
 #' @param standardize Logical; whether glmnet should standardize predictors.
-#' @param parallel Logical; whether to use a parallel backend for CV.
-#' @param verbose Logical; whether to print progress messages.
-#' @param seed Either NULL or a single whole number for reproducibility.
-#' @param custom_folds Optional integer vector of fold IDs (same length as y).
+#' @param custom_folds Optional integer vector of fold IDs (one per row of
+#'   `data`).
 #' @param return_model Logical; whether to return the fitted cv.glmnet object.
+#' @param seed Either NULL or a single whole number for reproducibility.
+#' @param verbose Logical; whether to print progress messages.
+#' @param parallel Logical; whether to use a parallel backend for CV.
 #' @return Invisibly TRUE when all parameters are valid; otherwise errors.
 #' @noRd
-lasso_validate <- function(x, y, alpha, nfolds, standardize,
-                           parallel, verbose, seed, custom_folds,
-                           return_model) {
-  assert_data_frame(x, arg = "x", allow_matrix = TRUE)
-
+lasso_validate <- function(y, target, alpha, nfolds, standardize, custom_folds,
+                           return_model, seed, verbose, parallel) {
   if (!is.numeric(y)) {
-    stop("'y' must be a numeric vector.")
+    stop(sprintf(
+      "Target column '%s' must be numeric: fs_lasso() fits the gaussian family only.",
+      target
+    ), call. = FALSE)
   }
   if (any(!is.finite(y))) {
-    stop("'y' contains non-finite values (NA/NaN/Inf).")
-  }
-  if (NROW(x) != length(y)) {
-    stop("'x' and 'y' must have the same number of rows/observations.")
+    stop(sprintf(
+      "Target column '%s' contains non-finite values (NA/NaN/Inf).",
+      target
+    ), call. = FALSE)
   }
 
   assert_number(alpha, "alpha")
   if (alpha <= 0 || alpha > 1) {
-    stop("'alpha' must be a numeric value in (0, 1].")
+    stop("'alpha' must be a numeric value in (0, 1].", call. = FALSE)
   }
 
   assert_count(nfolds, "nfolds", lower = 2L)
@@ -46,81 +50,103 @@ lasso_validate <- function(x, y, alpha, nfolds, standardize,
   if (!is.null(seed)) {
     assert_number(seed, "seed")
     if (seed != round(seed) || abs(seed) > .Machine$integer.max) {
-      stop("'seed' must be a single whole number (integer-sized) or NULL.")
+      stop("'seed' must be a single whole number (integer-sized) or NULL.",
+           call. = FALSE)
     }
   }
 
   if (!is.null(custom_folds)) {
     if (!is.numeric(custom_folds)) {
-      stop("'custom_folds' must be an integer vector.")
+      stop("'custom_folds' must be an integer vector.", call. = FALSE)
     }
     # Check for NA before any integer-ness comparison: comparing a double NA
     # yields NA and would crash the conditions below.
     if (anyNA(custom_folds)) {
-      stop("'custom_folds' contains missing values (NA); fold IDs must be complete.")
+      stop("'custom_folds' contains missing values (NA); fold IDs must be complete.",
+           call. = FALSE)
     }
     if (any(!is.finite(custom_folds))) {
-      stop("'custom_folds' contains non-finite values.")
+      stop("'custom_folds' contains non-finite values.", call. = FALSE)
     }
     if (!(is.integer(custom_folds) || all(custom_folds == round(custom_folds)))) {
-      stop("'custom_folds' must be an integer vector.")
+      stop("'custom_folds' must be an integer vector.", call. = FALSE)
     }
     if (length(custom_folds) != length(y)) {
-      stop("'custom_folds' must be the same length as 'y'.")
+      stop("'custom_folds' must have one entry per row of 'data'.", call. = FALSE)
     }
     if (any(custom_folds < 1)) {
-      stop("'custom_folds' contains invalid IDs (must be >= 1).")
+      stop("'custom_folds' contains invalid IDs (must be >= 1).", call. = FALSE)
     }
     # Range-check on the raw values before any as.integer() conversion, so
     # IDs beyond integer range cannot become NA.
     if (any(custom_folds > nfolds)) {
-      stop("'custom_folds' contains fold IDs greater than 'nfolds'.")
+      stop("'custom_folds' contains fold IDs greater than 'nfolds'.", call. = FALSE)
     }
 
     unique_folds <- sort(unique(as.integer(custom_folds)))
     if (length(unique_folds) > nfolds) {
-      stop("'custom_folds' defines more unique folds than 'nfolds'.")
+      stop("'custom_folds' defines more unique folds than 'nfolds'.", call. = FALSE)
     }
 
     missing_folds <- setdiff(seq_len(nfolds), unique_folds)
     if (length(missing_folds) > 0L) {
       stop("'custom_folds' leaves some folds in 1..nfolds empty (",
            paste(missing_folds, collapse = ", "),
-           "); every fold must contain at least one observation.")
+           "); every fold must contain at least one observation.",
+           call. = FALSE)
     }
   }
 
   invisible(TRUE)
 }
 
-#' Impute missing values in a numeric matrix with column means
+#' Apply the requested missing-value policy to a design matrix
 #'
-#' Columns that are entirely NA cannot be imputed and raise an error naming
-#' the offending columns. When imputation does run, a single warning notes
-#' that the means are computed on the full data prior to cross-validation.
+#' Columns that are entirely NA can never be imputed and raise an error naming
+#' them, whichever policy is in force. Otherwise `impute = "none"` errors and
+#' names the columns that carry NAs, while `impute = "mean"` fills them with
+#' column means computed on the full data and warns about the leakage that
+#' implies. Column names are design-matrix columns, so a factor level shows up
+#' under its expanded dummy name.
 #'
 #' @param x A numeric matrix with column names.
-#' @return The matrix with missing values imputed.
+#' @param impute Either "none" or "mean".
+#' @return The matrix, with missing values imputed when `impute = "mean"`.
 #' @noRd
-lasso_impute_means <- function(x) {
+lasso_handle_missing <- function(x, impute) {
   if (!is.matrix(x) || !is.numeric(x)) {
-    stop("Internal error: 'lasso_impute_means' expects a numeric matrix.")
+    stop("Internal error: 'lasso_handle_missing' expects a numeric matrix.")
   }
-  if (anyNA(x)) {
-    n_obs <- colSums(!is.na(x))
-    if (any(n_obs == 0L)) {
-      bad <- colnames(x)[n_obs == 0L]
-      stop("Column(s) entirely missing (all NA): ",
-           paste0("'", bad, "'", collapse = ", "),
-           ". Remove or impute these columns before calling fs_lasso().")
-    }
-    warning("Missing predictor values were imputed with column means computed on the full data prior to cross-validation (mild information leakage; per-fold imputation is deferred).")
-    col_means <- colMeans(x, na.rm = TRUE)
-    for (j in seq_along(col_means)) {
-      missing_idx <- which(is.na(x[, j]))
-      if (length(missing_idx)) {
-        x[missing_idx, j] <- col_means[j]
-      }
+  if (!anyNA(x)) {
+    return(x)
+  }
+
+  n_obs <- colSums(!is.na(x))
+  if (any(n_obs == 0L)) {
+    bad <- colnames(x)[n_obs == 0L]
+    stop("Column(s) entirely missing (all NA): ",
+         paste0("'", bad, "'", collapse = ", "),
+         ". Remove or impute these columns before calling fs_lasso().",
+         call. = FALSE)
+  }
+
+  incomplete <- colnames(x)[colSums(is.na(x)) > 0L]
+  if (identical(impute, "none")) {
+    stop("Missing values in predictor column(s): ",
+         paste0("'", incomplete, "'", collapse = ", "),
+         ". Imputing before cross-validation leaks information across folds, ",
+         "so fs_lasso() does not do it for you: impute before calling ",
+         "fs_lasso(), or set impute = \"mean\" to accept the leak.",
+         call. = FALSE)
+  }
+
+  warning("Missing predictor values were imputed with column means computed on the full data prior to cross-validation (mild information leakage; per-fold imputation is deferred).",
+          call. = FALSE)
+  col_means <- colMeans(x, na.rm = TRUE)
+  for (j in seq_along(col_means)) {
+    missing_idx <- which(is.na(x[, j]))
+    if (length(missing_idx)) {
+      x[missing_idx, j] <- col_means[j]
     }
   }
   x
@@ -129,40 +155,35 @@ lasso_impute_means <- function(x) {
 #' Prepare predictors as a numeric dense matrix without missing values
 #'
 #' Builds the design matrix through `stats::model.frame(na.action =
-#' stats::na.pass)` so rows with NA survive to the imputation step:
+#' stats::na.pass)` so rows with NA survive to the missing-value policy:
 #' `stats::model.matrix()` alone silently ignores its `na.action` argument
 #' and would drop those rows.
 #'
-#' @param x A data frame or matrix of predictors.
+#' @param x A data frame of predictors (target column already removed).
+#' @param impute Either "none" or "mean".
 #' @return A purely numeric dense matrix with no missing values.
 #' @noRd
-lasso_prepare <- function(x) {
-  if (is.data.frame(x)) {
-    mm <- stats::model.matrix(
-      ~ . - 1,
-      data = stats::model.frame(~ . - 1, as.data.frame(x),
-                                na.action = stats::na.pass)
-    )
-  } else if (is.matrix(x)) {
-    if (!is.numeric(x)) {
-      stop("Non-numeric matrices are not supported; please supply a data.frame so factors/characters can be handled via model.matrix.")
-    }
-    mm <- x
-  } else {
-    stop("Internal error: 'x' must be a data.frame or matrix.")
+lasso_prepare <- function(x, impute) {
+  if (!is.data.frame(x)) {
+    stop("Internal error: 'lasso_prepare' expects a data.frame.")
   }
+
+  mm <- stats::model.matrix(
+    ~ . - 1,
+    data = stats::model.frame(~ . - 1, x, na.action = stats::na.pass)
+  )
 
   if (is.null(colnames(mm))) {
     colnames(mm) <- paste0("V", seq_len(ncol(mm)))
   }
 
-  mm <- lasso_impute_means(mm)
+  mm <- lasso_handle_missing(mm, impute)
 
   if (!is.numeric(mm)) {
     stop("Internal error: predictors are not numeric after preparation.")
   }
   if (any(!is.finite(mm))) {
-    stop("Internal error: predictors contain non-finite values after imputation.")
+    stop("Internal error: predictors contain non-finite values after preparation.")
   }
 
   mm
@@ -253,34 +274,45 @@ lasso_fit <- function(x_sparse, y, alpha, nfolds, standardize,
   do.call(glmnet::cv.glmnet, args)
 }
 
-#' Extract variable importance from a fitted cv.glmnet model
-#'
-#' Coefficients (excluding the intercept) at `lambda.min`, ordered by
-#' absolute value.
+#' Named coefficient vector at lambda.min, intercept dropped
 #'
 #' @param lasso_model A fitted cv.glmnet model.
 #' @param feature_names Optional character vector of feature names; when
 #'   NULL, coefficient row names are used where available.
-#' @return A data.frame with columns Variable, Coefficient, AbsCoefficient.
+#' @return A named numeric vector, one entry per design-matrix column.
 #' @noRd
-lasso_importance <- function(lasso_model, feature_names = NULL) {
+lasso_coefficients <- function(lasso_model, feature_names = NULL) {
   cf <- stats::coef(lasso_model, s = "lambda.min")
   # cf is a sparse matrix; the first row is the intercept
   cf_vec <- as.vector(cf)[-1L]
 
   if (is.null(feature_names)) {
     all_names <- rownames(cf)
-    feature_names <- if (!is.null(all_names)) all_names[-1L] else paste0("V", seq_along(cf_vec))
+    feature_names <- if (!is.null(all_names)) {
+      all_names[-1L]
+    } else {
+      paste0("V", seq_along(cf_vec))
+    }
   }
 
   if (length(feature_names) != length(cf_vec)) {
     stop("Internal error: length of 'feature_names' does not match number of coefficients.")
   }
 
+  stats::setNames(cf_vec, feature_names)
+}
+
+#' Build the variable-importance table from a named coefficient vector
+#'
+#' @param coefs A named numeric vector of coefficients.
+#' @return A data.frame with columns Variable, Coefficient, AbsCoefficient,
+#'   ordered by decreasing absolute coefficient.
+#' @noRd
+lasso_importance <- function(coefs) {
   importance_df <- data.frame(
-    Variable = feature_names,
-    Coefficient = cf_vec,
-    AbsCoefficient = abs(cf_vec),
+    Variable = names(coefs),
+    Coefficient = unname(coefs),
+    AbsCoefficient = abs(unname(coefs)),
     stringsAsFactors = FALSE
   )
 
@@ -291,69 +323,117 @@ lasso_importance <- function(lasso_model, feature_names = NULL) {
 
 #' Lasso Feature Selection with Cross-Validation
 #'
-#' Fits a lasso (or elastic-net) model with `glmnet::cv.glmnet()` and returns
-#' variable importance and, optionally, the fitted model. Currently designed
-#' for numeric regression (gaussian family).
+#' Fits a lasso (or elastic-net) model with `glmnet::cv.glmnet()` and reports
+#' which predictors survive at `lambda.min`. Numeric outcomes only (gaussian
+#' family).
 #'
 #' @details
-#' Importance is the absolute value of each coefficient at `lambda.min`, on
-#' the ORIGINAL predictor scale (glmnet standardizes internally for fitting
-#' when `standardize = TRUE`, but reports coefficients back on the input
-#' scale). Rankings therefore depend on the units of the predictors; rescale
-#' the predictors yourself if you need scale-free comparisons.
+#' The design matrix is built internally from every column of `data` except
+#' `target`, via `stats::model.frame(na.action = stats::na.pass)` followed by
+#' `stats::model.matrix()`: factors and characters are expanded to dummies and
+#' rows carrying NAs are preserved rather than silently dropped.
 #'
-#' Missing predictor values are imputed with column means computed on the
-#' full data before cross-validation (a warning is raised); columns that are
-#' entirely NA are an error.
+#' `scores` ranks features on the STANDARDIZED coefficient scale when
+#' `standardize = TRUE`: each coefficient is multiplied by the standard
+#' deviation of its design-matrix column, which makes the ranking independent
+#' of the units the predictors happen to be measured in. glmnet standardizes
+#' internally for fitting but reports coefficients back on the input scale, so
+#' those raw coefficients are kept in `details$coefficients`. With
+#' `standardize = FALSE`, `scores` is the raw table and the two are identical.
 #'
-#' @param x A data frame or matrix of predictor variables. Factors and
-#'   characters in a data frame are expanded via `model.matrix()`; rows with
-#'   missing values are preserved and mean-imputed.
-#' @param y A numeric vector of response values (no NA/NaN/Inf).
+#' Missing predictor values are an error under the default
+#' `impute = "none"`, because imputing before cross-validation lets the folds
+#' see each other. `impute = "mean"` reproduces the older behavior (column
+#' means computed on the full data) and warns. Columns that are entirely NA
+#' are an error either way.
+#'
+#' @param data A data.frame or data.table holding the target and the candidate
+#'   predictors. A numeric matrix with column names is also accepted;
+#'   non-numeric matrices are not (supply a data.frame so factors and
+#'   characters can be expanded by `model.matrix()`).
+#' @param target Single string naming the outcome column in `data`. It must be
+#'   numeric and free of NA/NaN/Inf.
 #' @param alpha Numeric in (0, 1]; default 1 (lasso). Use values in (0, 1)
 #'   for elastic-net.
 #' @param nfolds Integer > 1; default 5.
-#' @param standardize Logical; default TRUE.
-#' @param parallel Logical; default FALSE. When TRUE, cross-validation runs
-#'   on `n_cores` workers (requires the 'doParallel' and 'foreach' packages).
-#' @param verbose Logical; default FALSE.
+#' @param standardize Logical; default TRUE. Passed to `glmnet::cv.glmnet()`
+#'   and also controls the scale `scores` is ranked on (see Details).
+#' @param custom_folds Optional integer vector of fold IDs (one per row of
+#'   `data`, covering 1..`nfolds` with no empty folds); default NULL.
+#' @param impute How to handle missing predictor values: `"none"` (default)
+#'   errors and names the offending columns, `"mean"` imputes column means
+#'   computed on the full data and warns about the leakage.
+#' @param return_model Logical; keep the fitted cv.glmnet object in the result
+#'   (and pass `keep = TRUE` to `cv.glmnet()`); default FALSE.
 #' @param seed Optional whole number for reproducibility, applied locally and
 #'   restored on exit; default NULL (never seeds by default).
-#' @param return_model Logical; include the fitted cv.glmnet object in the
-#'   output (and pass `keep = TRUE` to `cv.glmnet()`); default FALSE.
-#' @param custom_folds Optional integer vector of fold IDs (same length as
-#'   `y`, covering 1..`nfolds` with no empty folds); default NULL.
+#' @param verbose Logical; default FALSE.
+#' @param parallel Logical; default FALSE. When TRUE, cross-validation runs
+#'   on `n_cores` workers (requires the 'doParallel' and 'foreach' packages).
 #' @param n_cores Integer >= 1; number of workers used only when
 #'   `parallel = TRUE`. Default 2. Values above the detected core count are
 #'   capped.
-#' @return A list with:
-#'   \item{importance}{data.frame of variable importance at `lambda.min` (see Details on scale-dependence).}
-#'   \item{lambda_min}{Value of lambda minimizing CV error.}
-#'   \item{lambda_1se}{Value of lambda within 1 SE of the minimum.}
-#'   \item{model}{(Optional) The fitted cv.glmnet object if `return_model = TRUE`.}
+#' @return An `fs_result` object with:
+#'   \item{selected}{Design-matrix columns whose coefficient at `lambda.min` is
+#'     non-zero, ordered by decreasing `scores` magnitude.}
+#'   \item{scores}{data.frame with columns Variable, Coefficient and
+#'     AbsCoefficient, ordered by decreasing AbsCoefficient, on the
+#'     standardized scale when `standardize = TRUE` (see Details).}
+#'   \item{method}{`"lasso"`.}
+#'   \item{task}{`"regression"`.}
+#'   \item{model}{The fitted cv.glmnet object when `return_model = TRUE`, else
+#'     NULL.}
+#'   \item{details}{List of `lambda_min` (lambda minimizing CV error),
+#'     `lambda_1se` (largest lambda within 1 SE of the minimum),
+#'     `coefficients` (the same table as `scores` but always on the raw
+#'     coefficient scale) and `n_features` (number of design-matrix columns
+#'     considered).}
+#'   \item{call}{The matched call.}
 #' @examples
 #' \donttest{
 #' if (requireNamespace("glmnet", quietly = TRUE) &&
 #'     requireNamespace("Matrix", quietly = TRUE)) {
 #'   n <- 100
-#'   X <- data.frame(
+#'   df <- data.frame(
 #'     x1 = rnorm(n),
 #'     x2 = rnorm(n),
 #'     cat = sample(letters[1:3], n, TRUE)
 #'   )
-#'   y <- 2 * X$x1 - 3 * X$x2 + rnorm(n)
-#'   result <- fs_lasso(x = X, y = y, seed = 123)
-#'   head(result$importance)
+#'   df$y <- 2 * df$x1 - 3 * df$x2 + rnorm(n)
+#'   res <- fs_lasso(df, "y", seed = 123)
+#'   selected(res)
+#'   head(res$scores)
 #' }
 #' }
 #' @export
-fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE,
-                     parallel = FALSE, verbose = FALSE, seed = NULL,
-                     return_model = FALSE, custom_folds = NULL,
-                     n_cores = 2L) {
+fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
+                     custom_folds = NULL, impute = c("none", "mean"),
+                     return_model = FALSE, seed = NULL, verbose = FALSE,
+                     parallel = FALSE, n_cores = 2L) {
 
-  lasso_validate(x, y, alpha, nfolds, standardize,
-                 parallel, verbose, seed, custom_folds, return_model)
+  mc <- match.call()
+
+  assert_data_frame(data, arg = "data", allow_matrix = TRUE)
+  if (is.matrix(data) && !is.numeric(data)) {
+    stop("Non-numeric matrices are not supported; please supply a data.frame so factors/characters can be handled via model.matrix.",
+         call. = FALSE)
+  }
+  # A data.table would route the subsetting below through data.table's NSE;
+  # as.data.frame() also copies, so the caller's object is never touched.
+  data <- as.data.frame(data)
+
+  assert_target(data, target)
+  impute <- match.arg(impute)
+
+  predictor_names <- setdiff(names(data), target)
+  if (length(predictor_names) == 0L) {
+    stop(sprintf("'data' must contain at least one predictor column besides '%s'.",
+                 target), call. = FALSE)
+  }
+
+  y <- data[[target]]
+  lasso_validate(y, target, alpha, nfolds, standardize, custom_folds,
+                 return_model, seed, verbose, parallel)
   n_cores <- resolve_cores(n_cores, "n_cores")
 
   fs_require(c("glmnet", "Matrix"), "lasso feature selection")
@@ -362,11 +442,11 @@ fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE,
   }
 
   # Prepare predictors -> dense numeric matrix with names, no NA
-  x_dense <- lasso_prepare(x)
+  x_dense <- lasso_prepare(data[, predictor_names, drop = FALSE], impute)
 
   # Sanity check: row alignment
   if (nrow(x_dense) != length(y)) {
-    stop("Internal error: prepared predictor matrix and response 'y' have different numbers of rows.")
+    stop("Internal error: prepared predictor matrix and the target have different numbers of rows.")
   }
 
   # Convert to sparse for glmnet
@@ -377,17 +457,40 @@ fs_lasso <- function(x, y, alpha = 1, nfolds = 5, standardize = TRUE,
                            parallel, n_cores, custom_folds, seed, verbose,
                            return_model)
 
-  # Importance
-  feature_names <- colnames(x_dense)
-  importance_df <- lasso_importance(lasso_model, feature_names)
+  # Coefficients at lambda.min, on the raw scale and on the standardized one
+  coefs_raw <- lasso_coefficients(lasso_model, colnames(x_dense))
+  importance_raw <- lasso_importance(coefs_raw)
 
-  out <- list(
-    importance = importance_df,
-    lambda_min = lasso_model$lambda.min,
-    lambda_1se = lasso_model$lambda.1se
-  )
-  if (isTRUE(return_model)) {
-    out$model <- lasso_model
+  if (isTRUE(standardize)) {
+    sds <- apply(x_dense, 2L, stats::sd)
+    sds[!is.finite(sds)] <- 0
+    scores_df <- lasso_importance(coefs_raw * sds[names(coefs_raw)])
+  } else {
+    scores_df <- importance_raw
   }
-  out
+
+  # Selection is decided on the raw coefficients (a constant column has a
+  # standardized coefficient of 0 even when its raw coefficient is not).
+  nonzero <- names(coefs_raw)[!is.na(coefs_raw) & coefs_raw != 0]
+  selected_features <- scores_df$Variable[scores_df$Variable %in% nonzero]
+
+  if (isTRUE(verbose)) {
+    message(sprintf("Selected %d of %d design-matrix column(s) at lambda.min.",
+                    length(selected_features), nrow(importance_raw)))
+  }
+
+  new_fs_result(
+    selected = selected_features,
+    scores   = scores_df,
+    method   = "lasso",
+    task     = "regression",
+    model    = if (isTRUE(return_model)) lasso_model else NULL,
+    details  = list(
+      lambda_min   = lasso_model$lambda.min,
+      lambda_1se   = lasso_model$lambda.1se,
+      coefficients = importance_raw,
+      n_features   = nrow(importance_raw)
+    ),
+    call = mc
+  )
 }

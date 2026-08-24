@@ -2,13 +2,16 @@
 % Please edit documentation in R/fs_randomforest.R
 \name{fs_randomforest}
 \alias{fs_randomforest}
-\title{Fit and evaluate a random forest model}
+\title{Random forest importance and held-out evaluation}
 \usage{
 fs_randomforest(
   data,
   target,
-  type = c("classification", "regression"),
-  control = list()
+  task = c("classification", "regression"),
+  control = list(),
+  seed = NULL,
+  verbose = FALSE,
+  n_cores = 1L
 )
 }
 \arguments{
@@ -16,38 +19,59 @@ fs_randomforest(
 
 \item{target}{Character scalar; name of the target column.}
 
-\item{type}{One of \code{"classification"} or \code{"regression"}.}
+\item{task}{One of \code{"classification"} or \code{"regression"}.}
 
-\item{control}{List of options (see Details).}
+\item{control}{List of method-specific options (see Details).}
+
+\item{seed}{Optional whole number for reproducibility. Applied for the
+duration of the call only; the previous RNG state is restored on exit.
+Default \code{NULL} (the RNG is never seeded unless requested).}
+
+\item{verbose}{Logical; print progress messages. Default \code{FALSE}.}
+
+\item{n_cores}{Integer >= 1. Number of workers used to grow the forest
+(default 1 = sequential; no cluster is created). Capped at the detected
+core count and at \code{control$ntree}; values above 1 require the suggested
+packages 'foreach' and 'doParallel'. See the OOB note below.}
 }
 \value{
-An object of class \code{fs_rf_result} containing:
-\itemize{
-\item \code{model} : the fitted \code{randomForest} object
-\item \code{metrics} : named list of evaluation metrics
-\item \code{predictions} : predictions on the test set
-\item \code{probabilities} : class probabilities (classification)
-\item \code{importance} : variable importance data.frame (if requested)
-\item \code{confusion} : confusion matrix (classification)
-\item \code{oob} : out-of-bag metrics (if \code{control$oob = TRUE};
-\code{NULL} with a warning when trained in parallel)
-\item \code{target}, \code{type}, \code{feature_names},
-\code{train_index}, \code{control}
-\item \code{test_data} : held-out test set (if
-\code{return_test_data = TRUE})
+An object of class \code{fs_result} with:
+\describe{
+\item{selected}{Character vector. The predictors kept by
+\code{control$feature_select} when a hook is supplied; otherwise every
+predictor that reached the forest, since a plain random forest
+ranks rather than selects. Ordered by decreasing importance when
+importance was computed.}
+\item{scores}{Named numeric vector of permutation importance
+(\code{randomForest::importance(type = 1)}), or \code{NULL} when
+\code{control$importance = FALSE}.}
+\item{method}{"randomforest".}
+\item{task}{"classification" or "regression".}
+\item{model}{The fitted \code{randomForest} object.}
+\item{details}{A list with \code{metrics} (accuracy/kappa/auc, or RMSE/MAE/R2),
+\code{predictions} (test-set predictions), \code{probabilities} (class
+probabilities, classification only), \code{importance} (the
+feature/importance data.frame, sorted descending), \code{confusion}
+(classification only), \code{oob} (out-of-bag metrics, \code{NULL} when
+trained in parallel or switched off), \code{feature_names} (predictors
+the forest actually used), \code{train_index} (training rows of the
+cleaned and optionally down-sampled data), \code{test_data} (the held-out
+rows, only when \code{control$return_test_data = TRUE}), \code{control} (the
+merged control list) and \code{n_features} (candidate predictors before
+selection).}
+\item{call}{The matched call.}
 }
 }
 \description{
-Splits \code{data} into train and test sets, optionally preprocesses, imputes,
-and downsamples, trains a \code{randomForest} model (optionally across several
-workers), and evaluates it on the held-out test set.
+Splits \code{data} into train and test partitions, optionally preprocesses,
+selects, imputes, and downsamples, trains a \code{randomForest} model
+(optionally across several workers), and evaluates it on the held-out test
+set. Permutation importance is reported as the per-feature score.
 }
 \details{
 \strong{control list (defaults)}:
 \itemize{
-\item \code{seed = NULL} (optional; applied for the duration of the call
-only, and the previous RNG state is restored on exit)
-\item \code{split_ratio = 0.75}
+\item \code{train_ratio = 0.75} (training proportion of the split)
 \item \code{sample_size = NULL} (optional downsampling size before split)
 \item \code{ntree = 500}
 \item \code{importance = TRUE}
@@ -62,41 +86,45 @@ unscaled permutation importance)
 \item \code{classwt = NULL}
 \item \code{strata = NULL}
 \item \code{replace = TRUE}
-\item \code{n_cores = 1} (capped at the available cores and at
-\code{ntree}; values above 1 require the suggested packages 'foreach'
-and 'doParallel')
-\item \code{preprocess = NULL} (function \code{dt -> dt}, applied before
-the split)
-\item \code{feature_select = NULL} (function \code{dt -> dt}; must retain
-the target; see the warning below)
+\item \code{preprocess = NULL} (function \code{dt -> dt}, applied to the
+full data before the split)
+\item \code{feature_select = NULL} (function \code{dt -> dt}; runs on the
+training split only, and must select existing columns while retaining
+the target -- see the note below)
 \item \code{impute = TRUE} (median/mode values learned on the training
 data for every predictor and applied to NAs in train and test)
 \item \code{drop_zerovar = TRUE} (near-zero variance removal using
 training data only)
-\item \code{oob = TRUE} (include OOB metrics in the result object; see
-the note below about parallel training)
-\item \code{return_test_data = FALSE}
+\item \code{oob = TRUE} (include OOB metrics in \code{details$oob}; see the
+note below about parallel training)
+\item \code{return_test_data = FALSE} (when TRUE, the held-out rows are
+returned in \code{details$test_data})
 \item \code{positive_class = NULL} (optional level name for binary AUC;
 defaults to the second factor level)
 }
+Unknown \code{control} entries are rejected, so typos and arguments that moved
+out of \code{control} (\code{seed}, \code{n_cores}, the former \code{split_ratio}) fail loudly.
 
-\strong{Warning -- potential data leakage}: \code{control$feature_select}
-runs on the \emph{full} dataset \emph{before} the train/test split. Any
-selection rule that looks at the target therefore sees the test rows, and
-the reported test metrics can be optimistically biased. Interpret them
-accordingly; a redesign is deferred to a future release.
+\strong{Selection is train-only}: \code{control$feature_select} runs
+\emph{after} the train/test split and sees the training rows only, so a
+selection rule that looks at the target no longer leaks the held-out rows
+into the reported test metrics. Because the same columns must be applied to
+the test rows, the hook may only subset and reorder existing columns; put
+any feature engineering in \code{control$preprocess}, which still runs on
+the full data before the split. Near-zero-variance removal happens after
+the hook, so \code{details$feature_names} (the predictors the forest
+actually used) can be a subset of \code{selected}.
 
 \strong{OOB metrics and parallel training}: when \code{n_cores > 1} the
 forest is assembled with \code{randomForest::combine()}, which drops the
 out-of-bag error structures (\code{err.rate}, \code{mse},
-\code{confusion}). In that case \code{oob} is returned as \code{NULL} with
-a warning if \code{control$oob = TRUE}.
+\code{confusion}). In that case \code{details$oob} is \code{NULL} and a
+warning is emitted if \code{control$oob = TRUE}.
 
 Character predictors are converted to factors (levels learned on the
 training split; test values unseen in training become NA and are imputed
 when \code{control$impute = TRUE}). AUC for binary classification requires
-the suggested package 'pROC'; when it is not installed a message is emitted
-and AUC is \code{NA}.
+the suggested package 'pROC'; when it is not installed AUC is \code{NA}.
 }
 \examples{
 \donttest{
@@ -105,11 +133,12 @@ if (requireNamespace("randomForest", quietly = TRUE) &&
   res <- fs_randomforest(
     iris,
     target = "Species",
-    type = "classification",
-    control = list(ntree = 100, seed = 42)
+    task = "classification",
+    control = list(ntree = 100),
+    seed = 42
   )
-  res$metrics
-  head(res$importance)
+  res$selected
+  res$details$metrics
 }
 }
 }

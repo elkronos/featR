@@ -6,98 +6,102 @@
 \usage{
 fs_recursivefeature(
   data,
-  response_var,
-  seed = NULL,
+  target,
+  sizes = NULL,
+  train_ratio = 0.8,
   rfe_control = list(method = "cv", number = 5),
   train_control = list(method = "cv", number = 5),
-  sizes = NULL,
-  parallel = FALSE,
-  feature_funcs = NULL,
+  model_method = "rf",
   handle_categorical = FALSE,
   return_final_model = FALSE,
-  model_method = "rf"
+  seed = NULL,
+  verbose = FALSE,
+  parallel = FALSE
 )
 }
 \arguments{
-\item{data}{A data.frame with the response and predictors.}
+\item{data}{A data.frame (or data.table) with the target and predictors.}
 
-\item{response_var}{Response column name (character) or a single column
-index (numeric).}
-
-\item{seed}{Optional integer seed. Applied for the duration of the call
-only (previous RNG state is restored on exit); default \code{NULL} never
-seeds.}
-
-\item{rfe_control}{List of arguments for \code{caret::rfeControl()}; must
-contain at least \code{method} and \code{number}. Any \code{functions} or
-\code{allowParallel} entries are dropped with a warning (use \code{feature_funcs}
-and \code{parallel} instead).}
-
-\item{train_control}{List of arguments for \code{caret::trainControl()} used
-when \code{return_final_model = TRUE}.}
+\item{target}{Character. Name of the target column in \code{data}.}
 
 \item{sizes}{Numeric vector of feature-subset sizes to evaluate; \code{NULL}
 uses \code{1:p}. Out-of-range values are dropped with a warning.}
 
-\item{parallel}{Logical. If \code{TRUE}, registers a two-worker PSOCK cluster
-(capped at the available cores) for the duration of the call; requires
-the suggested packages 'foreach' and 'doParallel'.}
+\item{train_ratio}{Numeric in (0, 1). Training proportion of the stratified
+split (default 0.8).}
 
-\item{feature_funcs}{A caret RFE function set (e.g. \code{caret::rfFuncs},
-\code{caret::lmFuncs}). \code{NULL} uses \code{caret::rfFuncs}.}
+\item{rfe_control}{List of arguments for \code{caret::rfeControl()}; must contain
+at least \code{method} and \code{number}. \code{functions} selects the caret RFE function
+set (default \code{caret::rfFuncs}). Any \code{allowParallel} entry is dropped with
+a warning; use the \code{parallel} argument instead.}
 
-\item{handle_categorical}{Logical; one-hot encode predictors with
-full-rank dummies (fitted on the training rows, applied to the test
-rows).}
-
-\item{return_final_model}{Logical; train a final caret model on the
-training rows using the selected features.}
+\item{train_control}{List of arguments for \code{caret::trainControl()} used when
+\code{return_final_model = TRUE}.}
 
 \item{model_method}{caret model key for the final model (e.g. \code{"rf"},
 \code{"lm"}).}
+
+\item{handle_categorical}{Logical; one-hot encode predictors with full-rank
+dummies (fitted on the training rows, applied to the test rows).}
+
+\item{return_final_model}{Logical; train a final caret model on the training
+rows using the selected features, and return it as \code{model}.}
+
+\item{seed}{Optional whole number seed. Applied for the duration of the call
+only (previous RNG state is restored on exit); default \code{NULL} never seeds.}
+
+\item{verbose}{Logical; print progress messages and let \code{caret::rfe()}
+report its own progress. Default \code{FALSE}.}
+
+\item{parallel}{Logical. If \code{TRUE}, registers a two-worker PSOCK cluster
+(capped at the available cores) for the duration of the call; requires the
+suggested packages 'foreach' and 'doParallel'.}
 }
 \value{
-A list with components:
+An object of class \code{fs_result} with:
 \describe{
-\item{ResponseName}{Resolved response column name.}
-\item{TaskType}{\code{"classification"} or \code{"regression"}.}
-\item{TrainIndex}{Row indices of the training partition.}
-\item{TestIndex}{Row indices of the testing partition.}
-\item{Preprocessor}{\code{dummyVars} encoder used, if any; else \code{NULL}.}
-\item{RFE}{The \code{rfe} object returned by caret.}
-\item{OptimalNumberOfVariables}{Optimal subset size selected by RFE.}
-\item{OptimalVariables}{Names of the selected variables.}
-\item{VariableImportance}{Aggregated variable importance from
-\code{caret::varImp()} on the RFE object (one row per variable), not the
-raw per-resample table.}
-\item{ResamplingResults}{Resampling performance summary from RFE.}
-\item{TestMetrics}{\code{caret::postResample()} metrics of the RFE model on
-the held-out test rows.}
-\item{FinalModel}{\code{caret::train} object trained on the training rows if
-\code{return_final_model = TRUE}; else \code{NULL}.}
-\item{FinalModelVariables}{Predictors actually used by the final model
-(after NZV/linear-combination filtering), or \code{NULL}.}
+\item{selected}{Character vector of the variables RFE kept
+(\code{optVariables} at the optimal subset size).}
+\item{scores}{Named numeric vector of resample-averaged importance from
+\code{caret::varImp()} on the \code{rfe} object (its "Overall" column), or
+\code{NULL} when caret reports none.}
+\item{method}{"rfe".}
+\item{task}{"classification" or "regression".}
+\item{model}{The final \code{caret::train} model when
+\code{return_final_model = TRUE}, otherwise the \code{rfe} object.}
+\item{details}{A list, in snake_case, with \code{rfe} (the caret \code{rfe} object,
+always present even when \code{model} holds the final model),
+\code{optimal_size} (the subset size RFE chose), \code{test_metrics}
+(\code{caret::postResample()} on the held-out rows), \code{resampling_results}
+(the RFE resampling summary), \code{variable_importance} (the
+\code{caret::varImp()} data.frame), \code{preprocessor} (the \code{dummyVars}
+encoder, or \code{NULL}), \code{train_index} and \code{test_index} (row indices of
+the two partitions), \code{final_model_variables} (predictors the final
+model actually used after NZV/linear-combination filtering, or
+\code{NULL}) and \code{n_features} (candidate predictors offered to RFE).}
+\item{call}{The matched call.}
 }
 }
 \description{
-Splits the data into stratified train/test partitions (80/20), optionally
-one-hot encodes the predictors (encoder fitted on the training rows only),
-runs \code{caret::rfe()} on the training set, evaluates the selected feature set
-on the held-out test rows, and optionally trains a final caret model on the
+Splits the data into stratified train/test partitions, optionally one-hot
+encodes the predictors (encoder fitted on the training rows only), runs
+\code{caret::rfe()} on the training set, evaluates the selected feature set on
+the held-out test rows, and optionally trains a final caret model on the
 training rows.
 }
 \details{
-Requires the suggested package 'caret'. The default \code{feature_funcs}
-(\code{caret::rfFuncs}) fits random forests, so the suggested package
-'randomForest' must also be installed unless you supply a different
-function set. Parallel execution additionally requires 'foreach' and
-'doParallel'; classification metrics use \code{caret::postResample()}, which
-needs 'e1071'.
+Requires the suggested package 'caret'. The RFE function set comes from
+\code{rfe_control$functions} and defaults to \code{caret::rfFuncs}, which fits random
+forests, so the suggested package 'randomForest' must also be installed
+unless you supply a different set (for example
+\code{rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)}).
+Parallel execution additionally requires 'foreach' and 'doParallel';
+classification metrics use \code{caret::postResample()}, which needs 'e1071'.
 
-\code{TestMetrics} is computed by predicting on the held-out test rows with the
-fitted RFE model and summarizing with \code{caret::postResample()}. When
-\code{return_final_model = TRUE}, the final model is trained on the
-\emph{training rows only} (not the full data), so \code{TestMetrics} remains an
+\code{details$test_metrics} is computed by predicting on the held-out test rows
+with the fitted RFE model and summarizing with \code{caret::postResample()}.
+When \code{return_final_model = TRUE}, the final model is trained on the
+\emph{training rows only} (not the full data), so those metrics remain an
 honest estimate. Predictors containing missing values are rejected; impute
 before calling.
 }
@@ -108,13 +112,13 @@ if (requireNamespace("caret", quietly = TRUE) &&
     requireNamespace("e1071", quietly = TRUE)) {
   res <- fs_recursivefeature(
     iris,
-    response_var = "Species",
-    seed = 42,
+    target = "Species",
+    sizes = 1:4,
     rfe_control = list(method = "cv", number = 3),
-    sizes = 1:4
+    seed = 42
   )
-  res$OptimalVariables
-  res$TestMetrics
+  res$selected
+  res$details$test_metrics
 }
 }
 }

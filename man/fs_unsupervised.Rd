@@ -5,19 +5,20 @@
 \title{Unsupervised Filter-Based Feature Selection}
 \usage{
 fs_unsupervised(
-  x,
+  data,
   method = c("variance", "mad", "iqr", "range", "missing_prop", "n_unique"),
   threshold = 0,
   direction = c("above", "below"),
   action = c("keep", "remove"),
   include_equal = FALSE,
   na_rm = TRUE,
-  output = c("matrix", "dt", "data.frame", "mask", "indices", "names", "list"),
-  log_progress = FALSE
+  output = c("result", "matrix", "dt", "data.frame", "mask", "indices", "names", "list"),
+  verbose = FALSE
 )
 }
 \arguments{
-\item{x}{Numeric matrix, data.frame, or data.table (all numeric columns).}
+\item{data}{A data.frame, data.table, or matrix; all columns must be
+numeric.}
 
 \item{method}{One of \code{"variance"}, \code{"mad"}, \code{"iqr"},
 \code{"range"}, \code{"missing_prop"}, \code{"n_unique"}.}
@@ -37,13 +38,16 @@ features meeting the condition are retained or dropped.}
 \item{na_rm}{Logical; if TRUE, remove NAs when computing scores (where
 applicable).}
 
-\item{output}{One of \code{"matrix"}, \code{"dt"}, \code{"data.frame"},
-\code{"mask"}, \code{"indices"}, \code{"names"}, \code{"list"}.
+\item{output}{One of \code{"result"} (default), \code{"matrix"},
+\code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
+\code{"names"}, \code{"list"}.
 \itemize{
-\item \code{"matrix"} (default): numeric matrix of selected features.
+\item \code{"result"} (default): an \code{fs_result} object (see
+Value).
+\item \code{"matrix"}: numeric matrix of selected features.
 \item \code{"dt"}: data.table of selected features.
 \item \code{"data.frame"}: data.frame of selected features.
-\item \code{"mask"}: logical vector of length \code{ncol(x)}.
+\item \code{"mask"}: logical vector of length \code{ncol(data)}.
 \item \code{"indices"}: integer vector of selected column indices.
 \item \code{"names"}: character vector of selected column names.
 \item \code{"list"}: list with components:
@@ -51,13 +55,29 @@ applicable).}
 \code{scores}, and \code{meta}.
 }}
 
-\item{log_progress}{Logical; emit progress messages.}
+\item{verbose}{Logical; emit progress messages. Default FALSE.}
 }
 \value{
-Depends on the \code{output} argument (see above). When no feature
-meets the selection criteria, a warning is issued and the tabular shapes
-(\code{"matrix"}, \code{"dt"}, \code{"data.frame"}) are returned with
-zero columns while preserving the input row count.
+With the default \code{output = "result"}, an object of class
+\code{fs_result} with elements:
+\itemize{
+\item \code{selected}: character vector of selected feature names.
+\item \code{scores}: named numeric vector of per-feature scores, in column
+order, \code{NA} where the score is undefined.
+\item \code{method}: \code{"unsupervised_"} followed by the scoring method, for
+example \code{"unsupervised_variance"}.
+\item \code{task}: \code{NA_character_} (unsupervised selection has no task).
+\item \code{model}: \code{NULL}.
+\item \code{details}: a list holding \code{mask}, \code{indices}, \code{filtered} (the
+filtered data.table), \code{threshold}, \code{direction}, \code{action}, and
+\code{n_features} (the number of candidate features).
+\item \code{call}: the matched call.
+}
+Any other \code{output} returns that shape instead, exactly as documented
+above. When no feature meets the selection criteria, a warning is issued
+and the tabular shapes (\code{"matrix"}, \code{"dt"},
+\code{"data.frame"}) are returned with zero columns while preserving the
+input row count.
 }
 \description{
 Performs unsupervised, univariate, filter-based feature selection by
@@ -87,31 +107,29 @@ defaults are used with this method.
 Features whose score is undefined (\code{NA}) are never selected, under
 both \code{action = "keep"} and \code{action = "remove"}; a warning
 reports how many such features were excluded.
+
+Columns are subset by integer index, never by name, so duplicated column
+names cannot select the wrong columns.
 }
 \examples{
-set.seed(123)
-X <- matrix(rnorm(200), ncol = 5)
-
-# Keep features with variance > 0.5
-out_var <- fs_unsupervised(
-  x = X,
-  method = "variance",
-  threshold = 0.5,
-  direction = "above",
-  action = "keep",
-  output = "list"
+df <- data.frame(
+  spread = c(1, 2, 3, 4, 100),
+  flat   = c(2, 2, 2, 2, 2),
+  gappy  = c(1, NA, 3, NA, 5)
 )
+
+# Default: an fs_result
+res <- fs_unsupervised(df, method = "variance", threshold = 0.5)
+res$selected
+res$scores
+res$details$filtered
+
+# The classic shapes are still available
+fs_unsupervised(df, method = "variance", threshold = 0.5,
+                output = "matrix")
 
 # Remove features with missing proportion >= 0.2
-X_na <- X
-X_na[sample(length(X_na), 20)] <- NA
-out_missing <- fs_unsupervised(
-  x = X_na,
-  method = "missing_prop",
-  threshold = 0.2,
-  direction = "above",
-  action = "remove",
-  include_equal = TRUE,
-  output = "matrix"
-)
+fs_unsupervised(df, method = "missing_prop", threshold = 0.2,
+                direction = "above", action = "remove",
+                include_equal = TRUE, output = "names")
 }

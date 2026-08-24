@@ -10,8 +10,8 @@ fs_pca(
   scale_data = TRUE,
   center_data = TRUE,
   label_col = NULL,
-  plot = !is.null(label_col),
-  verbose = TRUE
+  plot = FALSE,
+  verbose = FALSE
 )
 }
 \arguments{
@@ -31,14 +31,18 @@ Default \code{TRUE}.}
 \item{label_col}{Optional name of a column used to label and color points;
 the column is excluded from the PCA features.}
 
-\item{plot}{Logical; if \code{TRUE} (the default whenever \code{label_col} is
-supplied) and at least two components are available, a PC1 vs PC2
-scatterplot is printed and returned as \verb{$plot}.}
+\item{plot}{Logical; if \code{TRUE}, the PC1 vs PC2 scatterplot is printed.
+Default \code{FALSE}, unconditionally: it no longer depends on whether
+\code{label_col} was supplied. The plot object is returned in \verb{$plot} either
+way whenever one can be built (see Details).}
 
-\item{verbose}{Logical; emit progress messages. Default \code{TRUE}.}
+\item{verbose}{Logical; emit progress messages. Default \code{FALSE}.}
 }
 \value{
-A list with components:
+A plain list. \code{fs_pca()} is dimensionality reduction rather than
+feature selection, so it returns its own PCA structure and not the
+\code{fs_result} object produced by the package's selection functions. The
+components are:
 \itemize{
 \item \code{pc_loadings}: matrix of variable loadings (features x PCs).
 \item \code{pc_scores}: matrix of observation scores (rows kept x PCs).
@@ -47,7 +51,7 @@ A list with components:
 \item \code{pca_df}: data.table of scores plus label columns.
 \item \code{meta}: list with \code{numeric_cols}, \code{rows_kept}, \code{n_rows_used},
 \code{n_cols_used}.
-\item \code{plot}: the ggplot object (only when a plot was produced).
+\item \code{plot}: the ggplot object; present only when a plot could be built.
 }
 }
 \description{
@@ -68,17 +72,30 @@ suggested package 'bigstatsr' is installed; otherwise it falls back to
 \code{var_explained} always reports the proportion of \emph{total} variance
 explained by each retained component. With the 'bigstatsr' engine only the
 retained components are computed, so the entries do not sum to 1 (they sum
-to the fraction of variance captured by those components). Plotting
-requires the suggested package 'ggplot2'.
+to the fraction of variance captured by those components).
+
+\code{plot} controls printing only, never construction. Whenever a plot can be
+built at all (a \code{label_col} was supplied, at least two components were
+retained, and the suggested package 'ggplot2' is installed) the ggplot
+object is returned in \verb{$plot}, whether or not \code{plot} is \code{TRUE}. Setting
+\code{plot = TRUE} additionally prints it, and in that case 'ggplot2' is
+required: its absence becomes an error rather than a silently missing
+\verb{$plot}. \code{plot = TRUE} without a \code{label_col}, or with fewer than two
+retained components, warns and skips the plot.
 }
 \examples{
-res <- fs_pca(mtcars, num_pc = 2, label_col = "cyl", plot = FALSE)
+res <- fs_pca(mtcars, num_pc = 2, label_col = "cyl")
 res$var_explained
 head(res$pca_df)
 
 \donttest{
 if (requireNamespace("ggplot2", quietly = TRUE)) {
-  res <- fs_pca(iris, label_col = "Species")
+  # nothing is printed, but the ggplot object is still there
+  res <- fs_pca(iris, label_col = "Species", verbose = TRUE)
+  res$plot
+
+  # plot = TRUE prints it as well
+  res <- fs_pca(iris, label_col = "Species", plot = TRUE)
 }
 }
 }

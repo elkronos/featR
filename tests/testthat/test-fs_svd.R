@@ -1,6 +1,11 @@
 # Tests for fs_svd(). The exact path is pure base R (base::svd()), and every
 # argument check runs before fs_require("RSpectra"), so everything below runs
 # unconditionally except the two blocks that actually reach RSpectra::svds().
+#
+# Post-unification conventions exercised here: the first argument is `x` (it is
+# a matrix of values, not a data.frame of observations, so neither `matrix_data`
+# nor `data` fits), n_singular_values sits directly after it, and verbose
+# defaults to FALSE and is the last argument.
 
 # Deterministic 6 x 4 matrix (no RNG). Full column rank and every column has
 # non-zero variance, so it is safe for scale_input = TRUE.
@@ -175,11 +180,11 @@ test_that("invalid n_singular_values errors instead of being silently repaired",
   # over-specification is an error now, not a silent truncation to min(dim)
   expect_error(
     fs_svd(X, n_singular_values = 5),
-    "'n_singular_values' \\(5\\) exceeds min\\(dim\\(matrix_data\\)\\) \\(4\\)"
+    "'n_singular_values' \\(5\\) exceeds min\\(dim\\(x\\)\\) \\(4\\)"
   )
   expect_error(
     fs_svd(X, n_singular_values = 10, svd_method = "exact", scale_input = FALSE),
-    "'n_singular_values' \\(10\\) exceeds min\\(dim\\(matrix_data\\)\\) \\(4\\)"
+    "'n_singular_values' \\(10\\) exceeds min\\(dim\\(x\\)\\) \\(4\\)"
   )
 })
 
@@ -284,20 +289,43 @@ test_that("the removed memoise_result argument is gone", {
   expect_error(fs_svd(X, memoise_result = TRUE), "unused argument")
 })
 
+test_that("the input argument is 'x', not the old 'matrix_data'", {
+  X <- svd_toy()
+
+  expect_false("matrix_data" %in% names(formals(fs_svd)))
+  # no shim: the old name is simply an unused argument now
+  expect_error(fs_svd(matrix_data = X), "unused argument")
+  expect_error(fs_svd(matrix_data = X, scale_input = FALSE), "unused argument")
+
+  # the new name works both positionally and by name
+  by_name <- fs_svd(x = X, scale_input = FALSE)
+  by_position <- fs_svd(X, scale_input = FALSE)
+  expect_equal(by_name$singular_values, by_position$singular_values)
+})
+
 test_that("fs_svd signature and defaults are stable", {
   fx <- formals(fs_svd)
 
   expect_identical(
     names(fx),
-    c("matrix_data", "scale_input", "n_singular_values", "svd_method",
+    c("x", "n_singular_values", "scale_input", "svd_method",
       "svd_threshold", "approx_args", "verbose")
   )
-  expect_identical(fx$scale_input, TRUE)
   expect_null(fx$n_singular_values)
+  expect_identical(fx$scale_input, TRUE)
   expect_identical(eval(fx$svd_method), c("auto", "exact", "approx"))
   expect_identical(fx$svd_threshold, 100)
   expect_identical(eval(fx$approx_args), list())
+  # verbose defaults to FALSE and is the last argument
   expect_identical(fx$verbose, FALSE)
+  expect_identical(names(fx)[length(fx)], "verbose")
+
+  # the second argument is n_singular_values, so it can be passed positionally
+  X <- svd_toy()
+  expect_equal(
+    fs_svd(X, 2, scale_input = FALSE)$singular_values,
+    fs_svd(X, n_singular_values = 2, scale_input = FALSE)$singular_values
+  )
 })
 
 # --- solver selection -------------------------------------------------------
@@ -318,9 +346,9 @@ test_that("'auto' explains why a large matrix still used the exact solver", {
   )
   expect_true(any(grepl(
     paste0("svd_method = 'auto' selected the exact solver despite a large ",
-           "matrix because all min(dim(matrix_data)) singular values were ",
-           "requested; set n_singular_values < min(dim(matrix_data)) to ",
-           "enable the approximate solver."),
+           "matrix because all min(dim(x)) singular values were requested; ",
+           "set n_singular_values < min(dim(x)) to enable the approximate ",
+           "solver."),
     msgs, fixed = TRUE
   )))
   expect_length(res$singular_values, 4L)
@@ -336,7 +364,7 @@ test_that("svd_method = 'approx' falls back to exact when all values are request
     res <- fs_svd(X, scale_input = FALSE, svd_method = "approx")
   )
   expect_true(any(grepl(
-    paste0("Requested n_singular_values equals min(dim(matrix_data)), but ",
+    paste0("Requested n_singular_values equals min(dim(x)), but ",
            "RSpectra::svds() requires fewer; falling back to exact SVD."),
     msgs, fixed = TRUE
   )))

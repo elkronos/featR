@@ -4,40 +4,13 @@
 # Validation and small utilities
 # -----------------------------
 
-#' Resolve the response column name
-#'
-#' Converts a response specification (column name or single column index) to a
-#' column name present in `data`.
-#'
-#' @param data A data.frame.
-#' @param response_var A single column name (character) or column index.
-#' @return A single character string with the resolved column name.
+#' Print a progress message when verbose
 #' @noRd
-rfe_response_name <- function(data, response_var) {
-  if (is.numeric(response_var)) {
-    if (length(response_var) != 1L || !is.finite(response_var) ||
-        response_var != as.integer(response_var)) {
-      stop("'response_var' must be a single finite integer index or a column name.",
-           call. = FALSE)
-    }
-    response_var <- as.integer(response_var)
-    if (response_var < 1L || response_var > ncol(data)) {
-      stop("'response_var' index is out of bounds.", call. = FALSE)
-    }
-    return(colnames(data)[response_var])
-  }
-  if (is.character(response_var) && length(response_var) == 1L &&
-      !is.na(response_var)) {
-    if (!response_var %in% colnames(data)) {
-      stop("'response_var' name not found in 'data'.", call. = FALSE)
-    }
-    return(response_var)
-  }
-  stop("'response_var' must be a single column name (character) or a single column index (integer).",
-       call. = FALSE)
+rfe_message <- function(msg, verbose) {
+  if (isTRUE(verbose)) message(msg)
 }
 
-#' Infer task type from a response vector
+#' Infer task type from a target vector
 #'
 #' Factors, characters, and logicals imply classification; everything else is
 #' treated as regression.
@@ -65,6 +38,12 @@ rfe_validate_rfe_control <- function(control_params) {
   }
   assert_string(control_params$method, "rfe_control$method")
   assert_count(control_params$number, "rfe_control$number", lower = 1L)
+
+  if (!is.null(control_params$functions) &&
+      !is.list(control_params$functions)) {
+    stop("'rfe_control$functions' must be a caret RFE function set (a list), for example caret::rfFuncs or caret::lmFuncs.",
+         call. = FALSE)
+  }
 
   if (identical(control_params$method, "repeatedcv")) {
     if (!("repeats" %in% names(control_params))) {
@@ -106,6 +85,36 @@ rfe_validate_train_control <- function(control_params) {
   invisible(TRUE)
 }
 
+#' Named importance vector from caret::varImp() on an rfe object
+#'
+#' `caret::varImp.rfe()` returns a data.frame whose row names are the variable
+#' names and whose "Overall" column holds the resample-averaged importance at
+#' the optimal subset size.
+#'
+#' @param var_imp The data.frame returned by `caret::varImp()`.
+#' @return A named numeric vector, or NULL when nothing usable is present.
+#' @noRd
+rfe_importance_scores <- function(var_imp) {
+  if (!is.data.frame(var_imp) || nrow(var_imp) == 0L) {
+    return(NULL)
+  }
+  nms <- rownames(var_imp)
+  if (is.null(nms)) {
+    return(NULL)
+  }
+  if ("Overall" %in% names(var_imp) && is.numeric(var_imp[["Overall"]])) {
+    return(stats::setNames(as.numeric(var_imp[["Overall"]]), nms))
+  }
+  num <- vapply(var_imp, is.numeric, logical(1L))
+  if (!any(num)) {
+    return(NULL)
+  }
+  stats::setNames(
+    as.numeric(rowMeans(as.matrix(var_imp[, num, drop = FALSE]), na.rm = TRUE)),
+    nms
+  )
+}
+
 # -----------------------------
 # Encoding (train-fitted, applied to others)
 # -----------------------------
@@ -113,29 +122,27 @@ rfe_validate_train_control <- function(control_params) {
 #' Fit a one-hot encoder on training predictors
 #'
 #' Fits a `caret::dummyVars()` transformer on the training predictors only
-#' (the response is excluded). Uses `fullRank = TRUE` so downstream models do
+#' (the target is excluded). Uses `fullRank = TRUE` so downstream models do
 #' not receive a rank-deficient all-levels design.
 #'
 #' @param train_df Training data.frame.
-#' @param response_name Response column name.
+#' @param target Target column name.
 #' @return A fitted `dummyVars` object.
 #' @noRd
-rfe_fit_encoder <- function(train_df, response_name) {
-  predictors <- train_df[, setdiff(colnames(train_df), response_name),
-                         drop = FALSE]
+rfe_fit_encoder <- function(train_df, target) {
+  predictors <- train_df[, setdiff(colnames(train_df), target), drop = FALSE]
   caret::dummyVars(~ ., data = predictors, fullRank = TRUE)
 }
 
-#' Apply a fitted one-hot encoder and reattach the response
+#' Apply a fitted one-hot encoder and reattach the target
 #'
 #' @param data_df data.frame to transform.
-#' @param response_name Response column name.
+#' @param target Target column name.
 #' @param dv Fitted `dummyVars` object.
-#' @return A data.frame with the response first, then encoded predictors.
+#' @return A data.frame with the target first, then encoded predictors.
 #' @noRd
-rfe_apply_encoder <- function(data_df, response_name, dv) {
-  predictors <- data_df[, setdiff(colnames(data_df), response_name),
-                        drop = FALSE]
+rfe_apply_encoder <- function(data_df, target, dv) {
+  predictors <- data_df[, setdiff(colnames(data_df), target), drop = FALSE]
   X <- as.data.frame(stats::predict(dv, newdata = predictors))
   if (nrow(X) != nrow(data_df)) {
     stop(sprintf(paste(
@@ -145,7 +152,7 @@ rfe_apply_encoder <- function(data_df, response_name, dv) {
     ), nrow(X), nrow(data_df)), call. = FALSE)
   }
   data.frame(
-    stats::setNames(list(data_df[[response_name]]), response_name),
+    stats::setNames(list(data_df[[target]]), target),
     X,
     check.names = FALSE
   )
@@ -196,47 +203,50 @@ rfe_stop_parallel <- function(cl) {
 
 #' Run recursive feature elimination on the training data
 #'
-#' @param train_df Training data.frame containing the response.
-#' @param response_name Response column name.
+#' @param train_df Training data.frame containing the target.
+#' @param target Target column name.
 #' @param sizes Numeric vector of subset sizes, or NULL for `1:ncol(X)`.
 #' @param rfe_control_params List for `caret::rfeControl()` (method/number at
-#'   least). `functions`/`allowParallel` entries are dropped with a warning.
-#' @param feature_funcs caret RFE function set; default `caret::rfFuncs`.
+#'   least). `functions` selects the caret RFE function set and defaults to
+#'   `caret::rfFuncs`; an `allowParallel` entry is dropped with a warning.
 #' @param parallel Logical; passed to `rfeControl(allowParallel = )`.
+#' @param verbose Logical; used as `rfeControl(verbose = )` unless the caller
+#'   set it in `rfe_control`.
 #' @return A caret `rfe` object.
 #' @noRd
-rfe_perform <- function(train_df, response_name, sizes, rfe_control_params,
-                        feature_funcs = NULL, parallel = FALSE) {
+rfe_perform <- function(train_df, target, sizes, rfe_control_params,
+                        parallel = FALSE, verbose = FALSE) {
   rfe_validate_rfe_control(rfe_control_params)
 
   train_df <- as.data.frame(train_df)
-  if (!response_name %in% colnames(train_df)) {
-    stop("Response column not found in the training data.", call. = FALSE)
+  if (!target %in% colnames(train_df)) {
+    stop("Target column not found in the training data.", call. = FALSE)
   }
 
+  feature_funcs <- rfe_control_params$functions
   if (is.null(feature_funcs)) {
     feature_funcs <- caret::rfFuncs
   }
+  rfe_control_params$functions <- NULL
 
-  # rfeControl() cannot receive these twice; drop user-supplied duplicates.
-  for (nm in c("functions", "allowParallel")) {
-    if (nm %in% names(rfe_control_params)) {
-      warning(sprintf("'rfe_control$%s' is ignored; use the '%s' argument of fs_recursivefeature() instead.",
-                      nm, if (nm == "functions") "feature_funcs" else "parallel"),
-              call. = FALSE)
-      rfe_control_params[[nm]] <- NULL
-    }
+  # rfeControl() cannot receive allowParallel twice; the 'parallel' argument
+  # of fs_recursivefeature() owns it.
+  if ("allowParallel" %in% names(rfe_control_params)) {
+    warning("'rfe_control$allowParallel' is ignored; use the 'parallel' argument of fs_recursivefeature() instead.",
+            call. = FALSE)
+    rfe_control_params$allowParallel <- NULL
   }
 
-  ctrl <- do.call(
-    caret::rfeControl,
-    c(
-      list(functions = feature_funcs, allowParallel = parallel),
-      rfe_control_params
-    )
+  ctrl_args <- c(
+    list(functions = feature_funcs, allowParallel = isTRUE(parallel)),
+    rfe_control_params
   )
+  if (!("verbose" %in% names(ctrl_args))) {
+    ctrl_args$verbose <- isTRUE(verbose)
+  }
+  ctrl <- do.call(caret::rfeControl, ctrl_args)
 
-  X <- train_df[, setdiff(colnames(train_df), response_name), drop = FALSE]
+  X <- train_df[, setdiff(colnames(train_df), target), drop = FALSE]
 
   # Mirror the final-model coercions so RFE sees the same predictor types.
   for (nm in colnames(X)) {
@@ -250,7 +260,7 @@ rfe_perform <- function(train_df, response_name, sizes, rfe_control_params,
          call. = FALSE)
   }
 
-  y_vec <- train_df[[response_name]]
+  y_vec <- train_df[[target]]
   if (rfe_task_type(y_vec) == "classification" && !is.factor(y_vec)) {
     y_vec <- as.factor(y_vec)
   }
@@ -279,8 +289,8 @@ rfe_perform <- function(train_df, response_name, sizes, rfe_control_params,
 
 #' Train the final caret model on the selected predictors
 #'
-#' @param data_df data.frame with the response and predictors (training rows).
-#' @param response_name Response column name.
+#' @param data_df data.frame with the target and predictors (training rows).
+#' @param target Target column name.
 #' @param optimal_vars Character vector of selected predictor names.
 #' @param train_control_params List of `caret::trainControl()` arguments.
 #' @param model_method caret model key (e.g. "rf", "lm").
@@ -288,7 +298,7 @@ rfe_perform <- function(train_df, response_name, sizes, rfe_control_params,
 #'   and linear-combination filtering) are stored in
 #'   `attr(model, "predictors_used")`.
 #' @noRd
-rfe_train_final <- function(data_df, response_name, optimal_vars,
+rfe_train_final <- function(data_df, target, optimal_vars,
                             train_control_params = list(method = "cv",
                                                         number = 5),
                             model_method = "rf") {
@@ -300,18 +310,18 @@ rfe_train_final <- function(data_df, response_name, optimal_vars,
          paste(missing_vars, collapse = ", "), call. = FALSE)
   }
 
-  df <- data_df[, c(response_name, optimal_vars), drop = FALSE]
+  df <- data_df[, c(target, optimal_vars), drop = FALSE]
 
-  # Coerce the response appropriately.
-  task <- rfe_task_type(df[[response_name]])
+  # Coerce the target appropriately.
+  task <- rfe_task_type(df[[target]])
   if (task == "classification") {
-    df[[response_name]] <- as.factor(df[[response_name]])
+    df[[target]] <- as.factor(df[[target]])
   } else {
-    df[[response_name]] <- as.numeric(df[[response_name]])
+    df[[target]] <- as.numeric(df[[target]])
   }
 
   # Reasonable predictor types: logical -> integer, character -> factor.
-  pred_names <- setdiff(colnames(df), response_name)
+  pred_names <- setdiff(colnames(df), target)
   for (nm in pred_names) {
     if (is.logical(df[[nm]])) {
       df[[nm]] <- as.integer(df[[nm]])
@@ -329,7 +339,7 @@ rfe_train_final <- function(data_df, response_name, optimal_vars,
       warning("Removing near-zero variance predictor(s) before final training: ",
               paste(removed, collapse = ", "), call. = FALSE)
       pred_names <- setdiff(pred_names, removed)
-      df <- df[, c(response_name, pred_names), drop = FALSE]
+      df <- df[, c(target, pred_names), drop = FALSE]
     }
   }
 
@@ -344,7 +354,7 @@ rfe_train_final <- function(data_df, response_name, optimal_vars,
         warning("Removing linearly dependent predictor(s) before final training: ",
                 paste(drop_lc, collapse = ", "), call. = FALSE)
         pred_names <- setdiff(pred_names, drop_lc)
-        df <- df[, c(response_name, pred_names), drop = FALSE]
+        df <- df[, c(target, pred_names), drop = FALSE]
       }
     }
   }
@@ -355,7 +365,7 @@ rfe_train_final <- function(data_df, response_name, optimal_vars,
   }
 
   tr_ctrl <- do.call(caret::trainControl, train_control_params)
-  form <- stats::as.formula(paste(backtick(response_name), "~ ."))
+  form <- stats::as.formula(paste(backtick(target), "~ ."))
 
   model_obj <- caret::train(form, data = df, method = model_method,
                             trControl = tr_ctrl)
@@ -369,74 +379,76 @@ rfe_train_final <- function(data_df, response_name, optimal_vars,
 
 #' Recursive feature elimination with held-out evaluation
 #'
-#' Splits the data into stratified train/test partitions (80/20), optionally
-#' one-hot encodes the predictors (encoder fitted on the training rows only),
-#' runs `caret::rfe()` on the training set, evaluates the selected feature set
-#' on the held-out test rows, and optionally trains a final caret model on the
+#' Splits the data into stratified train/test partitions, optionally one-hot
+#' encodes the predictors (encoder fitted on the training rows only), runs
+#' `caret::rfe()` on the training set, evaluates the selected feature set on
+#' the held-out test rows, and optionally trains a final caret model on the
 #' training rows.
 #'
 #' @details
-#' Requires the suggested package 'caret'. The default `feature_funcs`
-#' (`caret::rfFuncs`) fits random forests, so the suggested package
-#' 'randomForest' must also be installed unless you supply a different
-#' function set. Parallel execution additionally requires 'foreach' and
-#' 'doParallel'; classification metrics use `caret::postResample()`, which
-#' needs 'e1071'.
+#' Requires the suggested package 'caret'. The RFE function set comes from
+#' `rfe_control$functions` and defaults to `caret::rfFuncs`, which fits random
+#' forests, so the suggested package 'randomForest' must also be installed
+#' unless you supply a different set (for example
+#' `rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)`).
+#' Parallel execution additionally requires 'foreach' and 'doParallel';
+#' classification metrics use `caret::postResample()`, which needs 'e1071'.
 #'
-#' `TestMetrics` is computed by predicting on the held-out test rows with the
-#' fitted RFE model and summarizing with `caret::postResample()`. When
-#' `return_final_model = TRUE`, the final model is trained on the
-#' \emph{training rows only} (not the full data), so `TestMetrics` remains an
+#' `details$test_metrics` is computed by predicting on the held-out test rows
+#' with the fitted RFE model and summarizing with `caret::postResample()`.
+#' When `return_final_model = TRUE`, the final model is trained on the
+#' \emph{training rows only} (not the full data), so those metrics remain an
 #' honest estimate. Predictors containing missing values are rejected; impute
 #' before calling.
 #'
-#' @param data A data.frame with the response and predictors.
-#' @param response_var Response column name (character) or a single column
-#'   index (numeric).
-#' @param seed Optional integer seed. Applied for the duration of the call
-#'   only (previous RNG state is restored on exit); default `NULL` never
-#'   seeds.
-#' @param rfe_control List of arguments for `caret::rfeControl()`; must
-#'   contain at least `method` and `number`. Any `functions` or
-#'   `allowParallel` entries are dropped with a warning (use `feature_funcs`
-#'   and `parallel` instead).
-#' @param train_control List of arguments for `caret::trainControl()` used
-#'   when `return_final_model = TRUE`.
+#' @param data A data.frame (or data.table) with the target and predictors.
+#' @param target Character. Name of the target column in `data`.
 #' @param sizes Numeric vector of feature-subset sizes to evaluate; `NULL`
 #'   uses `1:p`. Out-of-range values are dropped with a warning.
-#' @param parallel Logical. If `TRUE`, registers a two-worker PSOCK cluster
-#'   (capped at the available cores) for the duration of the call; requires
-#'   the suggested packages 'foreach' and 'doParallel'.
-#' @param feature_funcs A caret RFE function set (e.g. `caret::rfFuncs`,
-#'   `caret::lmFuncs`). `NULL` uses `caret::rfFuncs`.
-#' @param handle_categorical Logical; one-hot encode predictors with
-#'   full-rank dummies (fitted on the training rows, applied to the test
-#'   rows).
-#' @param return_final_model Logical; train a final caret model on the
-#'   training rows using the selected features.
+#' @param train_ratio Numeric in (0, 1). Training proportion of the stratified
+#'   split (default 0.8).
+#' @param rfe_control List of arguments for `caret::rfeControl()`; must contain
+#'   at least `method` and `number`. `functions` selects the caret RFE function
+#'   set (default `caret::rfFuncs`). Any `allowParallel` entry is dropped with
+#'   a warning; use the `parallel` argument instead.
+#' @param train_control List of arguments for `caret::trainControl()` used when
+#'   `return_final_model = TRUE`.
 #' @param model_method caret model key for the final model (e.g. `"rf"`,
 #'   `"lm"`).
+#' @param handle_categorical Logical; one-hot encode predictors with full-rank
+#'   dummies (fitted on the training rows, applied to the test rows).
+#' @param return_final_model Logical; train a final caret model on the training
+#'   rows using the selected features, and return it as `model`.
+#' @param seed Optional whole number seed. Applied for the duration of the call
+#'   only (previous RNG state is restored on exit); default `NULL` never seeds.
+#' @param verbose Logical; print progress messages and let `caret::rfe()`
+#'   report its own progress. Default `FALSE`.
+#' @param parallel Logical. If `TRUE`, registers a two-worker PSOCK cluster
+#'   (capped at the available cores) for the duration of the call; requires the
+#'   suggested packages 'foreach' and 'doParallel'.
 #'
-#' @return A list with components:
+#' @return An object of class `fs_result` with:
 #' \describe{
-#'   \item{ResponseName}{Resolved response column name.}
-#'   \item{TaskType}{`"classification"` or `"regression"`.}
-#'   \item{TrainIndex}{Row indices of the training partition.}
-#'   \item{TestIndex}{Row indices of the testing partition.}
-#'   \item{Preprocessor}{`dummyVars` encoder used, if any; else `NULL`.}
-#'   \item{RFE}{The `rfe` object returned by caret.}
-#'   \item{OptimalNumberOfVariables}{Optimal subset size selected by RFE.}
-#'   \item{OptimalVariables}{Names of the selected variables.}
-#'   \item{VariableImportance}{Aggregated variable importance from
-#'     `caret::varImp()` on the RFE object (one row per variable), not the
-#'     raw per-resample table.}
-#'   \item{ResamplingResults}{Resampling performance summary from RFE.}
-#'   \item{TestMetrics}{`caret::postResample()` metrics of the RFE model on
-#'     the held-out test rows.}
-#'   \item{FinalModel}{`caret::train` object trained on the training rows if
-#'     `return_final_model = TRUE`; else `NULL`.}
-#'   \item{FinalModelVariables}{Predictors actually used by the final model
-#'     (after NZV/linear-combination filtering), or `NULL`.}
+#'   \item{selected}{Character vector of the variables RFE kept
+#'         (`optVariables` at the optimal subset size).}
+#'   \item{scores}{Named numeric vector of resample-averaged importance from
+#'         `caret::varImp()` on the `rfe` object (its "Overall" column), or
+#'         `NULL` when caret reports none.}
+#'   \item{method}{"rfe".}
+#'   \item{task}{"classification" or "regression".}
+#'   \item{model}{The final `caret::train` model when
+#'         `return_final_model = TRUE`, otherwise the `rfe` object.}
+#'   \item{details}{A list, in snake_case, with `rfe` (the caret `rfe` object,
+#'         always present even when `model` holds the final model),
+#'         `optimal_size` (the subset size RFE chose), `test_metrics`
+#'         (`caret::postResample()` on the held-out rows), `resampling_results`
+#'         (the RFE resampling summary), `variable_importance` (the
+#'         `caret::varImp()` data.frame), `preprocessor` (the `dummyVars`
+#'         encoder, or `NULL`), `train_index` and `test_index` (row indices of
+#'         the two partitions), `final_model_variables` (predictors the final
+#'         model actually used after NZV/linear-combination filtering, or
+#'         `NULL`) and `n_features` (candidate predictors offered to RFE).}
+#'   \item{call}{The matched call.}
 #' }
 #'
 #' @examples
@@ -446,71 +458,84 @@ rfe_train_final <- function(data_df, response_name, optimal_vars,
 #'     requireNamespace("e1071", quietly = TRUE)) {
 #'   res <- fs_recursivefeature(
 #'     iris,
-#'     response_var = "Species",
-#'     seed = 42,
+#'     target = "Species",
+#'     sizes = 1:4,
 #'     rfe_control = list(method = "cv", number = 3),
-#'     sizes = 1:4
+#'     seed = 42
 #'   )
-#'   res$OptimalVariables
-#'   res$TestMetrics
+#'   res$selected
+#'   res$details$test_metrics
 #' }
 #' }
 #' @export
-fs_recursivefeature <- function(data, response_var,
-                                seed = NULL,
+fs_recursivefeature <- function(data,
+                                target,
+                                sizes = NULL,
+                                train_ratio = 0.8,
                                 rfe_control = list(method = "cv", number = 5),
                                 train_control = list(method = "cv",
                                                      number = 5),
-                                sizes = NULL,
-                                parallel = FALSE,
-                                feature_funcs = NULL,
+                                model_method = "rf",
                                 handle_categorical = FALSE,
                                 return_final_model = FALSE,
-                                model_method = "rf") {
-  fs_require("caret", "recursive feature elimination")
+                                seed = NULL,
+                                verbose = FALSE,
+                                parallel = FALSE) {
+  cl_call <- match.call()
 
   assert_data_frame(data, "data")
   # Plain data.frame semantics for all subsetting below (a data.table input
   # would otherwise dispatch to NSE-based [.data.table).
   data <- as.data.frame(data)
-  assert_flag(parallel, "parallel")
-  assert_flag(handle_categorical, "handle_categorical")
-  assert_flag(return_final_model, "return_final_model")
-  assert_string(model_method, "model_method")
+  assert_target(data, target, "target")
   if (!is.null(sizes) && !is.numeric(sizes)) {
     stop("'sizes' must be a numeric vector or NULL.", call. = FALSE)
   }
+  assert_number(train_ratio, "train_ratio")
+  if (train_ratio <= 0 || train_ratio >= 1) {
+    stop("'train_ratio' must be strictly between 0 and 1.", call. = FALSE)
+  }
+  assert_string(model_method, "model_method")
+  assert_flag(handle_categorical, "handle_categorical")
+  assert_flag(return_final_model, "return_final_model")
+  assert_flag(verbose, "verbose")
+  assert_flag(parallel, "parallel")
 
-  y_name <- rfe_response_name(data, response_var)
-  y_raw <- data[[y_name]]
+  fs_require("caret", "recursive feature elimination")
+
+  y_raw <- data[[target]]
   task <- rfe_task_type(y_raw)
 
   # Seed applies to the split and to RFE resampling; restored on exit.
   local_seed(seed)
 
   y_part <- if (task == "classification") as.factor(y_raw) else as.numeric(y_raw)
-  train_idx <- fs_split_index(y_part, p = 0.8)
+  train_idx <- fs_split_index(y_part, p = train_ratio)
   test_idx <- setdiff(seq_len(nrow(data)), train_idx)
   train_raw <- data[train_idx, , drop = FALSE]
   test_raw <- data[test_idx, , drop = FALSE]
+  if (length(test_idx) == 0L) {
+    stop("Test partition is empty; decrease 'train_ratio' or supply more data.",
+         call. = FALSE)
+  }
+  rfe_message(sprintf("Training on %d rows; holding out %d rows.",
+                      length(train_idx), length(test_idx)), verbose)
 
   preproc <- NULL
   if (handle_categorical) {
-    preproc <- rfe_fit_encoder(train_raw, response_name = y_name)
-    train_df <- rfe_apply_encoder(train_raw, response_name = y_name,
-                                  dv = preproc)
-    test_df <- rfe_apply_encoder(test_raw, response_name = y_name,
-                                 dv = preproc)
+    preproc <- rfe_fit_encoder(train_raw, target = target)
+    train_df <- rfe_apply_encoder(train_raw, target = target, dv = preproc)
+    test_df <- rfe_apply_encoder(test_raw, target = target, dv = preproc)
   } else {
-    pred_names <- setdiff(colnames(train_raw), y_name)
-    train_df <- train_raw[, c(y_name, pred_names), drop = FALSE]
-    test_df <- test_raw[, c(y_name, pred_names), drop = FALSE]
+    pred_names <- setdiff(colnames(train_raw), target)
+    train_df <- train_raw[, c(target, pred_names), drop = FALSE]
+    test_df <- test_raw[, c(target, pred_names), drop = FALSE]
   }
 
   # Coerce character/logical predictors to factor (levels from the training
   # rows) and align the test columns to those levels, so RFE, prediction, and
   # final training all see consistent types.
-  for (nm in setdiff(colnames(train_df), y_name)) {
+  for (nm in setdiff(colnames(train_df), target)) {
     if (is.character(train_df[[nm]]) || is.logical(train_df[[nm]])) {
       train_df[[nm]] <- factor(train_df[[nm]])
     }
@@ -519,26 +544,30 @@ fs_recursivefeature <- function(data, response_var,
     }
   }
 
+  n_features <- length(setdiff(colnames(train_df), target))
+
   cl <- rfe_start_parallel(parallel)
   on.exit(rfe_stop_parallel(cl), add = TRUE)
 
+  rfe_message("Running recursive feature elimination on the training rows...",
+              verbose)
   rfe_obj <- rfe_perform(
     train_df = train_df,
-    response_name = y_name,
+    target = target,
     sizes = sizes,
     rfe_control_params = rfe_control,
-    feature_funcs = feature_funcs,
-    parallel = parallel
+    parallel = parallel,
+    verbose = verbose
   )
 
   # ---- Evaluate on the held-out test rows ------------------------------------
-  test_x <- test_df[, setdiff(colnames(test_df), y_name), drop = FALSE]
+  test_x <- test_df[, setdiff(colnames(test_df), target), drop = FALSE]
   preds <- stats::predict(rfe_obj, test_x)
   if (is.data.frame(preds)) {
     preds <- if ("pred" %in% colnames(preds)) preds[["pred"]] else preds[[1L]]
   }
 
-  test_y <- test_df[[y_name]]
+  test_y <- test_df[[target]]
   if (task == "classification") {
     fs_require("e1071", "classification test metrics (caret::postResample)")
     test_y <- as.factor(test_y)
@@ -547,7 +576,7 @@ fs_recursivefeature <- function(data, response_var,
   }
   test_metrics <- caret::postResample(preds, test_y)
 
-  optimal_num <- rfe_obj$optsize
+  optimal_size <- rfe_obj$optsize
   optimal_vars <- rfe_obj$optVariables
   var_imp <- caret::varImp(rfe_obj)
   resamp <- rfe_obj$results
@@ -556,10 +585,12 @@ fs_recursivefeature <- function(data, response_var,
   final_model_vars <- NULL
 
   if (return_final_model) {
-    # Train on the TRAINING rows only, so TestMetrics stays honest.
+    # Train on the TRAINING rows only, so the test metrics stay honest.
+    rfe_message("Training the final model on the training rows only...",
+                verbose)
     final_model <- rfe_train_final(
       data_df = train_df,
-      response_name = y_name,
+      target = target,
       optimal_vars = optimal_vars,
       train_control_params = train_control,
       model_method = model_method
@@ -567,19 +598,24 @@ fs_recursivefeature <- function(data, response_var,
     final_model_vars <- attr(final_model, "predictors_used")
   }
 
-  list(
-    ResponseName = y_name,
-    TaskType = task,
-    TrainIndex = train_idx,
-    TestIndex = test_idx,
-    Preprocessor = preproc,
-    RFE = rfe_obj,
-    OptimalNumberOfVariables = optimal_num,
-    OptimalVariables = optimal_vars,
-    VariableImportance = var_imp,
-    ResamplingResults = resamp,
-    TestMetrics = test_metrics,
-    FinalModel = final_model,
-    FinalModelVariables = final_model_vars
+  new_fs_result(
+    selected = as.character(optimal_vars),
+    scores   = rfe_importance_scores(var_imp),
+    method   = "rfe",
+    task     = task,
+    model    = if (return_final_model) final_model else rfe_obj,
+    details  = list(
+      rfe                   = rfe_obj,
+      optimal_size          = optimal_size,
+      test_metrics          = test_metrics,
+      resampling_results    = resamp,
+      variable_importance   = var_imp,
+      preprocessor          = preproc,
+      train_index           = train_idx,
+      test_index            = test_idx,
+      final_model_variables = final_model_vars,
+      n_features            = n_features
+    ),
+    call = cl_call
   )
 }

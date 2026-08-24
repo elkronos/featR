@@ -6,54 +6,70 @@
 \usage{
 fs_boruta(
   data,
-  target_var,
-  seed = NULL,
-  doTrace = 0,
+  target,
   maxRuns = 250,
   cutoff_features = NULL,
   cutoff_cor = 0.7,
-  resolve_tentative = TRUE
+  resolve_tentative = TRUE,
+  seed = NULL,
+  verbose = FALSE
 )
 }
 \arguments{
 \item{data}{A data frame (or data-frame-like object, or matrix).}
 
-\item{target_var}{Name of the target variable.}
+\item{target}{Name of the target column in \code{data}. A factor target is
+treated as classification, a numeric target as regression.}
+
+\item{maxRuns}{Maximum number of Boruta iterations. Default 250.}
+
+\item{cutoff_features}{Optional whole number capping the number of returned
+features. When supplied, the top features by median Boruta importance are
+retained. Default NULL (no cap).}
+
+\item{cutoff_cor}{Numeric correlation cutoff between 0 and 1 used to drop
+redundant features from the selected set. Within each group of features
+correlated above the cutoff, the feature with the highest median Boruta
+importance is kept and the rest are dropped. Set NULL to skip this step.
+Default 0.7.}
+
+\item{resolve_tentative}{Logical; if TRUE, apply \code{Boruta::TentativeRoughFix()}
+and return only confirmed attributes. If FALSE, tentative attributes are
+included in the selected set. Default TRUE.}
 
 \item{seed}{Optional integer for reproducibility. Applied locally: the
 previous RNG state is restored when the function exits. Default NULL
 (the RNG is never seeded unless requested).}
 
-\item{doTrace}{Integer verbosity for Boruta (0 silent, 1 reports
-decisions, 2 reports each importance run). Default 0.}
-
-\item{maxRuns}{Maximum number of Boruta iterations. Default 250.}
-
-\item{cutoff_features}{Optional whole number to cap the number of returned
-features. When specified, the top features by Boruta mean importance are
-retained.}
-
-\item{cutoff_cor}{Numeric correlation cutoff between 0 and 1 used to drop
-redundant features via caret::findCorrelation() (requires the suggested
-caret package; set NULL to skip this step). Default 0.7.}
-
-\item{resolve_tentative}{Logical; if TRUE, apply Boruta::TentativeRoughFix()
-and return only confirmed attributes. If FALSE, tentative attributes are
-included in the selected set.}
+\item{verbose}{Logical; if TRUE, report progress. This maps to Boruta's
+\code{doTrace = 1} (decisions are reported as they are made); FALSE maps to
+\code{doTrace = 0}. Default FALSE.}
 }
 \value{
-A list with:
+An object of class \code{fs_result} with:
 \describe{
-\item{selected_features}{Character vector of selected feature names.}
-\item{boruta_obj}{The Boruta result object.}
+\item{selected}{Character vector of selected feature names, after
+optional correlation pruning and the optional \code{cutoff_features}
+cap.}
+\item{scores}{Named numeric vector of median Boruta importance for every
+candidate feature (\code{NA} for attributes with no importance history).}
+\item{method}{"boruta".}
+\item{task}{"classification" for a factor target, "regression" for a
+numeric one.}
+\item{model}{The Boruta object.}
+\item{details}{A list with \code{boruta_obj} (the Boruta object), \code{decisions}
+(the per-feature Confirmed/Tentative/Rejected factor),
+\code{dropped_correlated} (features removed by correlation pruning), and
+\code{n_features} (the number of candidate features).}
+\item{call}{The matched call.}
 }
 }
 \description{
 Runs the Boruta all-relevant feature selection algorithm on a dataset.
 Preprocesses predictors, optionally seeds the RNG locally, optionally
-resolves tentative features, and optionally removes highly correlated
-features among the selected set. Returns selected feature names and the
-Boruta object.
+resolves tentative features, and optionally prunes correlated features from
+the confirmed set. Pruning is importance-aware: within a group of correlated
+features the one with the highest median Boruta importance is kept.
 }
 \examples{
 \donttest{
@@ -63,8 +79,9 @@ if (requireNamespace("Boruta", quietly = TRUE)) {
     x1 = rep(c(0, 1), each = 20) + seq(0, 1, length.out = 40),
     x2 = seq_len(40) \%\% 3
   )
-  res <- fs_boruta(d, "y", seed = 42, maxRuns = 25, cutoff_cor = NULL)
-  res$selected_features
+  res <- fs_boruta(d, "y", maxRuns = 25, cutoff_cor = NULL, seed = 42)
+  res$selected
+  res$scores
 }
 }
 }

@@ -6,22 +6,22 @@
 \usage{
 fs_chi(
   data,
-  target_col,
+  target,
   sig_level = 0.05,
   continuity_correction = NULL,
   p_adjust_method = "bonferroni",
   simulation_B = 2000,
-  parallel = FALSE,
-  temp_multisession = FALSE,
   seed = NULL,
-  verbose = FALSE
+  verbose = FALSE,
+  parallel = FALSE,
+  n_cores = 2L
 )
 }
 \arguments{
 \item{data}{A data.frame or data.table with features and target. Character
 columns are coerced to factor. The input object is never modified.}
 
-\item{target_col}{Character scalar: name of the target column.}
+\item{target}{Character scalar: name of the target column.}
 
 \item{sig_level}{Numeric threshold for significance, strictly between 0
 and 1 (default 0.05).}
@@ -36,35 +36,43 @@ correction. Matching is case-insensitive.}
 \item{simulation_B}{Whole number >= 100: replicates for simulation-based
 p-values when expected counts are low (default 2000).}
 
-\item{parallel}{Logical; if TRUE, run features in parallel using the
-suggested furrr and future packages. Default FALSE.}
-
-\item{temp_multisession}{Logical; if TRUE and \code{parallel = TRUE},
-temporarily set a \code{future::multisession} plan (capped at 2 workers)
-and restore the previous plan on exit. If FALSE, whatever plan the user
-has set is used.}
-
 \item{seed}{Optional integer. Seeds the RNG locally (the previous RNG state
 is restored on exit), which makes simulation-based p-values reproducible
 in the sequential path. The parallel path draws from furrr's own
-L'Ecuyer-CMRG parallel streams (\code{furrr_options(seed = TRUE)}), so
-for the same \code{seed} parallel results are internally reproducible but
-differ from sequential results. Default NULL (never seeds).}
+L'Ecuyer-CMRG parallel streams (\code{furrr_options(seed = TRUE)}), so for the
+same \code{seed} parallel results are internally reproducible but differ from
+sequential results. Default NULL (never seeds).}
 
-\item{verbose}{Logical; if TRUE, prints informative messages.}
+\item{verbose}{Logical; if TRUE, prints informative messages. Default FALSE.}
+
+\item{parallel}{Logical; if TRUE, run features in parallel using the
+suggested furrr and future packages. Default FALSE (sequential).}
+
+\item{n_cores}{Whole number >= 1. Number of workers used when
+\code{parallel = TRUE}; requests are capped at the detected core count. A
+\code{future::multisession} plan is set for the duration of the call and the
+previous plan is restored on exit. Default 2.}
 }
 \value{
-A list with:
+An object of class \code{fs_result} with:
 \describe{
-\item{results}{data.frame with one row per feature: feature; n (for
-tested features, the number of complete feature-target pairs; for
-skipped features, the feature's non-NA row count); df (NA for
-simulation-based tests, where the asymptotic degrees of freedom do
-not apply); p_value; adj_p_value; significant; method
-("asymptotic" or "simulation"); correction_applied (TRUE/FALSE);
-min_expected (minimum expected cell count).}
-\item{significant_features}{Character vector of features with
+\item{selected}{Character vector of features with
 adj_p_value < sig_level.}
+\item{scores}{Named numeric vector of adjusted p-values, one per tested
+feature (smaller is stronger evidence of association).}
+\item{method}{"chi".}
+\item{task}{"classification".}
+\item{model}{NULL; the chi-square filter fits no model.}
+\item{details}{A list with \code{results} (the full results data.frame: one
+row per feature with feature; n (for tested features, the number of
+complete feature-target pairs; for skipped features, the feature's
+non-NA row count); df (NA for simulation-based tests, where the
+asymptotic degrees of freedom do not apply); p_value; adj_p_value;
+significant; method ("asymptotic" or "simulation");
+correction_applied (TRUE/FALSE); min_expected (minimum expected cell
+count)), plus \code{sig_level}, \code{p_adjust_method}, and \code{n_features} (the
+number of categorical features tested).}
+\item{call}{The matched call.}
 }
 }
 \description{
@@ -81,6 +89,6 @@ d <- data.frame(
   target = factor(rep(c("Yes", "No"), each = 50))
 )
 out <- fs_chi(d, "target")
-out$results
-out$significant_features
+out$selected
+out$details$results
 }

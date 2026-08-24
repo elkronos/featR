@@ -1,4 +1,10 @@
-# Random forest fitting and evaluation for featR.
+# Random forest fitting, importance, and evaluation for featR.
+
+#' Print a progress message when verbose
+#' @noRd
+rf_message <- function(msg, verbose) {
+  if (isTRUE(verbose)) message(msg)
+}
 
 #' Align factor levels between train and test predictors
 #'
@@ -19,23 +25,86 @@ rf_align_levels <- function(train, test) {
   list(train = train, test = test)
 }
 
-#' Fit and evaluate a random forest model
+#' Order features by decreasing importance
 #'
-#' Splits `data` into train and test sets, optionally preprocesses, imputes,
-#' and downsamples, trains a `randomForest` model (optionally across several
-#' workers), and evaluates it on the held-out test set.
+#' Features without a score keep their supplied order behind the scored ones.
+#'
+#' @param features Character vector.
+#' @param scores Named numeric vector, or NULL.
+#' @return `features`, reordered.
+#' @noRd
+rf_rank_features <- function(features, scores) {
+  if (is.null(scores) || length(features) < 2L) {
+    return(features)
+  }
+  v <- as.numeric(scores[features])
+  v[!is.finite(v)] <- -Inf
+  features[order(-v, seq_along(features))]
+}
+
+#' Apply a user feature-selection hook to the training split
+#'
+#' The hook receives a data.table of the training rows only (never the test
+#' rows) and must return a data.frame/data.table that still contains the
+#' target. Because the same column set has to be applied to the held-out rows,
+#' the hook may only select and reorder existing columns; creating new ones is
+#' an error.
+#'
+#' @param train_df Training data.frame.
+#' @param target Target column name.
+#' @param fun The user-supplied hook.
+#' @return Character vector of the predictor columns the hook kept.
+#' @noRd
+rf_apply_feature_select <- function(train_df, target, fun) {
+  if (!is.function(fun)) {
+    stop("'control$feature_select' must be a function(dt) -> dt.",
+         call. = FALSE)
+  }
+  out <- fun(as_dt(train_df))
+  if (!is.data.frame(out)) {
+    stop("'control$feature_select' must return a data.frame/data.table.",
+         call. = FALSE)
+  }
+  kept <- names(out)
+  if (!target %in% kept) {
+    stop("Feature selection removed the target column.", call. = FALSE)
+  }
+  unknown <- setdiff(kept, names(train_df))
+  if (length(unknown) > 0L) {
+    stop(sprintf(paste(
+      "'control$feature_select' returned column(s) not present in the data: %s.",
+      "The hook now runs on the training split only, so it must select",
+      "existing columns rather than create new ones; do any feature",
+      "engineering in 'control$preprocess' instead."
+    ), paste(unknown, collapse = ", ")), call. = FALSE)
+  }
+  setdiff(kept, target)
+}
+
+#' Random forest importance and held-out evaluation
+#'
+#' Splits `data` into train and test partitions, optionally preprocesses,
+#' selects, imputes, and downsamples, trains a `randomForest` model
+#' (optionally across several workers), and evaluates it on the held-out test
+#' set. Permutation importance is reported as the per-feature score.
 #'
 #' @param data A data.frame or data.table containing predictors and target.
 #' @param target Character scalar; name of the target column.
-#' @param type One of `"classification"` or `"regression"`.
-#' @param control List of options (see Details).
+#' @param task One of `"classification"` or `"regression"`.
+#' @param control List of method-specific options (see Details).
+#' @param seed Optional whole number for reproducibility. Applied for the
+#'   duration of the call only; the previous RNG state is restored on exit.
+#'   Default `NULL` (the RNG is never seeded unless requested).
+#' @param verbose Logical; print progress messages. Default `FALSE`.
+#' @param n_cores Integer >= 1. Number of workers used to grow the forest
+#'   (default 1 = sequential; no cluster is created). Capped at the detected
+#'   core count and at `control$ntree`; values above 1 require the suggested
+#'   packages 'foreach' and 'doParallel'. See the OOB note below.
 #'
 #' @details
 #' \strong{control list (defaults)}:
 #' \itemize{
-#'   \item \code{seed = NULL} (optional; applied for the duration of the call
-#'     only, and the previous RNG state is restored on exit)
-#'   \item \code{split_ratio = 0.75}
+#'   \item \code{train_ratio = 0.75} (training proportion of the split)
 #'   \item \code{sample_size = NULL} (optional downsampling size before split)
 #'   \item \code{ntree = 500}
 #'   \item \code{importance = TRUE}
@@ -50,56 +119,71 @@ rf_align_levels <- function(train, test) {
 #'   \item \code{classwt = NULL}
 #'   \item \code{strata = NULL}
 #'   \item \code{replace = TRUE}
-#'   \item \code{n_cores = 1} (capped at the available cores and at
-#'     \code{ntree}; values above 1 require the suggested packages 'foreach'
-#'     and 'doParallel')
-#'   \item \code{preprocess = NULL} (function \code{dt -> dt}, applied before
-#'     the split)
-#'   \item \code{feature_select = NULL} (function \code{dt -> dt}; must retain
-#'     the target; see the warning below)
+#'   \item \code{preprocess = NULL} (function \code{dt -> dt}, applied to the
+#'     full data before the split)
+#'   \item \code{feature_select = NULL} (function \code{dt -> dt}; runs on the
+#'     training split only, and must select existing columns while retaining
+#'     the target -- see the note below)
 #'   \item \code{impute = TRUE} (median/mode values learned on the training
 #'     data for every predictor and applied to NAs in train and test)
 #'   \item \code{drop_zerovar = TRUE} (near-zero variance removal using
 #'     training data only)
-#'   \item \code{oob = TRUE} (include OOB metrics in the result object; see
-#'     the note below about parallel training)
-#'   \item \code{return_test_data = FALSE}
+#'   \item \code{oob = TRUE} (include OOB metrics in `details$oob`; see the
+#'     note below about parallel training)
+#'   \item \code{return_test_data = FALSE} (when TRUE, the held-out rows are
+#'     returned in `details$test_data`)
 #'   \item \code{positive_class = NULL} (optional level name for binary AUC;
 #'     defaults to the second factor level)
 #' }
+#' Unknown `control` entries are rejected, so typos and arguments that moved
+#' out of `control` (`seed`, `n_cores`, the former `split_ratio`) fail loudly.
 #'
-#' \strong{Warning -- potential data leakage}: \code{control$feature_select}
-#' runs on the \emph{full} dataset \emph{before} the train/test split. Any
-#' selection rule that looks at the target therefore sees the test rows, and
-#' the reported test metrics can be optimistically biased. Interpret them
-#' accordingly; a redesign is deferred to a future release.
+#' \strong{Selection is train-only}: \code{control$feature_select} runs
+#' \emph{after} the train/test split and sees the training rows only, so a
+#' selection rule that looks at the target no longer leaks the held-out rows
+#' into the reported test metrics. Because the same columns must be applied to
+#' the test rows, the hook may only subset and reorder existing columns; put
+#' any feature engineering in \code{control$preprocess}, which still runs on
+#' the full data before the split. Near-zero-variance removal happens after
+#' the hook, so \code{details$feature_names} (the predictors the forest
+#' actually used) can be a subset of `selected`.
 #'
 #' \strong{OOB metrics and parallel training}: when \code{n_cores > 1} the
 #' forest is assembled with \code{randomForest::combine()}, which drops the
 #' out-of-bag error structures (\code{err.rate}, \code{mse},
-#' \code{confusion}). In that case \code{oob} is returned as \code{NULL} with
-#' a warning if \code{control$oob = TRUE}.
+#' \code{confusion}). In that case \code{details$oob} is \code{NULL} and a
+#' warning is emitted if \code{control$oob = TRUE}.
 #'
 #' Character predictors are converted to factors (levels learned on the
 #' training split; test values unseen in training become NA and are imputed
 #' when \code{control$impute = TRUE}). AUC for binary classification requires
-#' the suggested package 'pROC'; when it is not installed a message is emitted
-#' and AUC is \code{NA}.
+#' the suggested package 'pROC'; when it is not installed AUC is \code{NA}.
 #'
-#' @return An object of class \code{fs_rf_result} containing:
-#' \itemize{
-#'   \item \code{model} : the fitted \code{randomForest} object
-#'   \item \code{metrics} : named list of evaluation metrics
-#'   \item \code{predictions} : predictions on the test set
-#'   \item \code{probabilities} : class probabilities (classification)
-#'   \item \code{importance} : variable importance data.frame (if requested)
-#'   \item \code{confusion} : confusion matrix (classification)
-#'   \item \code{oob} : out-of-bag metrics (if \code{control$oob = TRUE};
-#'     \code{NULL} with a warning when trained in parallel)
-#'   \item \code{target}, \code{type}, \code{feature_names},
-#'     \code{train_index}, \code{control}
-#'   \item \code{test_data} : held-out test set (if
-#'     \code{return_test_data = TRUE})
+#' @return An object of class `fs_result` with:
+#' \describe{
+#'   \item{selected}{Character vector. The predictors kept by
+#'         `control$feature_select` when a hook is supplied; otherwise every
+#'         predictor that reached the forest, since a plain random forest
+#'         ranks rather than selects. Ordered by decreasing importance when
+#'         importance was computed.}
+#'   \item{scores}{Named numeric vector of permutation importance
+#'         (`randomForest::importance(type = 1)`), or `NULL` when
+#'         `control$importance = FALSE`.}
+#'   \item{method}{"randomforest".}
+#'   \item{task}{"classification" or "regression".}
+#'   \item{model}{The fitted `randomForest` object.}
+#'   \item{details}{A list with `metrics` (accuracy/kappa/auc, or RMSE/MAE/R2),
+#'         `predictions` (test-set predictions), `probabilities` (class
+#'         probabilities, classification only), `importance` (the
+#'         feature/importance data.frame, sorted descending), `confusion`
+#'         (classification only), `oob` (out-of-bag metrics, `NULL` when
+#'         trained in parallel or switched off), `feature_names` (predictors
+#'         the forest actually used), `train_index` (training rows of the
+#'         cleaned and optionally down-sampled data), `test_data` (the held-out
+#'         rows, only when `control$return_test_data = TRUE`), `control` (the
+#'         merged control list) and `n_features` (candidate predictors before
+#'         selection).}
+#'   \item{call}{The matched call.}
 #' }
 #'
 #' @examples
@@ -109,32 +193,38 @@ rf_align_levels <- function(train, test) {
 #'   res <- fs_randomforest(
 #'     iris,
 #'     target = "Species",
-#'     type = "classification",
-#'     control = list(ntree = 100, seed = 42)
+#'     task = "classification",
+#'     control = list(ntree = 100),
+#'     seed = 42
 #'   )
-#'   res$metrics
-#'   head(res$importance)
+#'   res$selected
+#'   res$details$metrics
 #' }
 #' }
 #' @export
 fs_randomforest <- function(data,
                             target,
-                            type = c("classification", "regression"),
-                            control = list()) {
-  # caret is used for splitting, near-zero variance filtering, and Kappa.
-  fs_require(c("randomForest", "caret"), "random forest modeling")
+                            task = c("classification", "regression"),
+                            control = list(),
+                            seed = NULL,
+                            verbose = FALSE,
+                            n_cores = 1L) {
+  cl_call <- match.call()
 
-  type <- match.arg(type)
+  task <- match.arg(task)
   assert_data_frame(data, "data")
   assert_target(data, target, arg = "target")
   if (!is.list(control)) {
     stop("'control' must be a list.", call. = FALSE)
   }
+  assert_flag(verbose, "verbose")
+  if (!is.null(seed)) {
+    assert_number(seed, "seed")
+  }
 
   # ---- Merge control with defaults -------------------------------------------
-  ctrl <- utils::modifyList(list(
-    seed = NULL,
-    split_ratio = 0.75,
+  ctrl_defaults <- list(
+    train_ratio = 0.75,
     sample_size = NULL,
     ntree = 500,
     importance = TRUE,
@@ -146,7 +236,6 @@ fs_randomforest <- function(data,
     classwt = NULL,
     strata = NULL,
     replace = TRUE,
-    n_cores = 1,
     preprocess = NULL,
     feature_select = NULL,
     impute = TRUE,
@@ -154,12 +243,21 @@ fs_randomforest <- function(data,
     oob = TRUE,
     return_test_data = FALSE,
     positive_class = NULL
-  ), control, keep.null = TRUE)
+  )
+  unknown <- setdiff(names(control), names(ctrl_defaults))
+  if (length(unknown) > 0L) {
+    stop(sprintf(
+      "Unknown 'control' entries: %s. Valid entries are: %s. Note that 'seed' and 'n_cores' are arguments of fs_randomforest(), not control entries, and 'split_ratio' is now 'train_ratio'.",
+      paste(unknown, collapse = ", "),
+      paste(names(ctrl_defaults), collapse = ", ")
+    ), call. = FALSE)
+  }
+  ctrl <- utils::modifyList(ctrl_defaults, control, keep.null = TRUE)
 
   # ---- Validate control values ------------------------------------------------
-  assert_number(ctrl$split_ratio, "control$split_ratio")
-  if (ctrl$split_ratio <= 0 || ctrl$split_ratio >= 1) {
-    stop("'control$split_ratio' must be strictly between 0 and 1.",
+  assert_number(ctrl$train_ratio, "control$train_ratio")
+  if (ctrl$train_ratio <= 0 || ctrl$train_ratio >= 1) {
+    stop("'control$train_ratio' must be strictly between 0 and 1.",
          call. = FALSE)
   }
   ntree <- assert_count(ctrl$ntree, "control$ntree", lower = 1L)
@@ -188,17 +286,21 @@ fs_randomforest <- function(data,
   if (!is.null(ctrl$positive_class)) {
     assert_string(ctrl$positive_class, "control$positive_class")
   }
-  if (!is.null(ctrl$seed)) {
-    assert_number(ctrl$seed, "control$seed")
-  }
+
+  # ---- Worker count (sequential by default; capped at cores and ntree) -------
+  n_cores <- resolve_cores(n_cores, arg = "n_cores")
+  n_cores <- min(n_cores, ntree)
+
+  # caret is used for splitting, near-zero variance filtering, and Kappa.
+  fs_require(c("randomForest", "caret"), "random forest modeling")
 
   # ---- Seed (restored when this function exits) ------------------------------
-  local_seed(ctrl$seed)
+  local_seed(seed)
 
   # ---- Convert to data.table (always a copy) ---------------------------------
   dt <- as_dt(data)
 
-  # ---- Custom preprocess ------------------------------------------------------
+  # ---- Custom preprocess (full data, before the split) -----------------------
   if (!is.null(ctrl$preprocess)) {
     if (!is.function(ctrl$preprocess)) {
       stop("'control$preprocess' must be a function(dt) -> dt.", call. = FALSE)
@@ -209,23 +311,9 @@ fs_randomforest <- function(data,
            call. = FALSE)
     }
     dt <- as_dt(dt)
-  }
-
-  # ---- Custom feature selection (see leakage warning in Details) -------------
-  if (!is.null(ctrl$feature_select)) {
-    if (!is.function(ctrl$feature_select)) {
-      stop("'control$feature_select' must be a function(dt) -> dt.",
-           call. = FALSE)
-    }
-    dt <- ctrl$feature_select(dt)
-    if (!is.data.frame(dt)) {
-      stop("'control$feature_select' must return a data.frame/data.table.",
-           call. = FALSE)
-    }
     if (!target %in% names(dt)) {
-      stop("Feature selection removed the target column.", call. = FALSE)
+      stop("Preprocessing removed the target column.", call. = FALSE)
     }
-    dt <- as_dt(dt)
   }
 
   # ---- Date -> numeric --------------------------------------------------------
@@ -236,7 +324,7 @@ fs_randomforest <- function(data,
   }
 
   # ---- Target type and NA handling -------------------------------------------
-  if (type == "classification") {
+  if (task == "classification") {
     dt[[target]] <- as.factor(dt[[target]])
 
     if (anyNA(dt[[target]])) {
@@ -273,7 +361,7 @@ fs_randomforest <- function(data,
     total_n <- nrow(dt)
     desired_total <- min(ctrl$sample_size, total_n)
 
-    if (type == "classification") {
+    if (task == "classification") {
       # by = c(target) forces evaluation of `target` to the user's column
       # name; a bare `by = target` would grab a column literally named
       # "target" whenever one exists.
@@ -290,15 +378,31 @@ fs_randomforest <- function(data,
     }
   }
 
+  n_candidates <- length(setdiff(names(dt), target))
+
   # ---- Train/test split (plain integer index) --------------------------------
-  index <- fs_split_index(dt[[target]], p = ctrl$split_ratio)
+  index <- fs_split_index(dt[[target]], p = ctrl$train_ratio)
   # Subset with data.frame semantics so no data.table NSE lookup is involved.
   df_all <- as.data.frame(dt)
   train_df <- df_all[index, , drop = FALSE]
   test_df <- df_all[-index, , drop = FALSE]
 
   if (nrow(test_df) == 0L) {
-    stop("Test split is empty; adjust 'control$split_ratio'.", call. = FALSE)
+    stop("Test split is empty; adjust 'control$train_ratio'.", call. = FALSE)
+  }
+  rf_message(sprintf("Training on %d rows; holding out %d rows.",
+                     nrow(train_df), nrow(test_df)), verbose)
+
+  # ---- Custom feature selection (TRAINING SPLIT ONLY: no test-set leakage) ---
+  hook_selected <- NULL
+  if (!is.null(ctrl$feature_select)) {
+    hook_selected <- rf_apply_feature_select(train_df, target,
+                                             ctrl$feature_select)
+    keep_cols <- c(target, hook_selected)
+    train_df <- train_df[, keep_cols, drop = FALSE]
+    test_df <- test_df[, keep_cols, drop = FALSE]
+    rf_message(sprintf("Feature selection kept %d of %d predictors.",
+                       length(hook_selected), n_candidates), verbose)
   }
 
   # ---- Character predictors -> factors (randomForest rejects characters) -----
@@ -391,8 +495,8 @@ fs_randomforest <- function(data,
   x_train <- train_df[, -target_idx, drop = FALSE]
   y_train <- train_df[[target]]
 
-  p <- ncol(x_train)
-  if (is.na(p) || p < 1L) {
+  n_pred <- ncol(x_train)
+  if (is.na(n_pred) || n_pred < 1L) {
     stop("No predictor columns left after preprocessing/feature selection/NZV removal.",
          call. = FALSE)
   }
@@ -400,18 +504,18 @@ fs_randomforest <- function(data,
   # ---- Compute mtry safely ----------------------------------------------------
   mtry_eff <- ctrl$mtry
   if (is.null(mtry_eff)) {
-    mtry_eff <- if (type == "classification") {
-      max(1L, floor(sqrt(p)))
+    mtry_eff <- if (task == "classification") {
+      max(1L, floor(sqrt(n_pred)))
     } else {
-      max(1L, floor(p / 3))
+      max(1L, floor(n_pred / 3))
     }
   }
-  mtry_eff <- min(max(1L, as.integer(mtry_eff)), p)
+  mtry_eff <- min(max(1L, as.integer(mtry_eff)), n_pred)
 
   # ---- Compute sampsize safely ------------------------------------------------
   sampsize_eff <- ctrl$sampsize
   if (!is.null(sampsize_eff)) {
-    if (type == "regression" && length(sampsize_eff) > 1L) {
+    if (task == "regression" && length(sampsize_eff) > 1L) {
       stop("'control$sampsize' must be a single scalar for regression.",
            call. = FALSE)
     }
@@ -429,10 +533,6 @@ fs_randomforest <- function(data,
       sampsize_eff <- pmin(sampsize_eff, nrow(x_train))
     }
   }
-
-  # ---- Worker count (sequential by default; capped at cores and ntree) -------
-  n_cores <- resolve_cores(ctrl$n_cores, arg = "control$n_cores")
-  n_cores <- min(n_cores, ntree)
 
   ntree_list <- if (n_cores > 1L) {
     base <- ntree %/% n_cores
@@ -471,6 +571,8 @@ fs_randomforest <- function(data,
   rf_args <- Filter(function(z) !is.null(z), rf_args) # drop NULLs
 
   # ---- Train model ------------------------------------------------------------
+  rf_message(sprintf("Growing %d trees on %d worker(s).", ntree, n_cores),
+             verbose)
   if (n_cores > 1L) {
     fs_require(c("foreach", "doParallel"), "parallel random forest training")
 
@@ -481,8 +583,8 @@ fs_randomforest <- function(data,
       try(parallel::stopCluster(cl), silent = TRUE)
     }, add = TRUE)
 
-    if (!is.null(ctrl$seed)) {
-      parallel::clusterSetRNGStream(cl, as.integer(ctrl$seed))
+    if (!is.null(seed)) {
+      parallel::clusterSetRNGStream(cl, as.integer(seed))
     }
 
     ntree_part <- NULL # foreach iteration variable; quiets R CMD check
@@ -515,7 +617,7 @@ fs_randomforest <- function(data,
   probs <- NULL
   confusion <- NULL
 
-  if (type == "classification") {
+  if (task == "classification") {
     preds <- stats::predict(rf_model, newdata = x_test, type = "class")
 
     suppressWarnings({
@@ -562,7 +664,8 @@ fs_randomforest <- function(data,
         )
         auc <- as.numeric(pROC::auc(roc_obj))
       } else {
-        message("Package 'pROC' is not installed; AUC was not computed.")
+        rf_message("Package 'pROC' is not installed; AUC was not computed.",
+                   verbose)
       }
     }
 
@@ -579,6 +682,7 @@ fs_randomforest <- function(data,
 
   # ---- Variable importance ----------------------------------------------------
   importance_df <- NULL
+  scores <- NULL
   if (isTRUE(ctrl$importance)) {
     imp <- randomForest::importance(rf_model, type = 1,
                                     scale = isTRUE(ctrl$scale_importance))
@@ -592,6 +696,8 @@ fs_randomforest <- function(data,
       )
       importance_df <- importance_df[order(-importance_df$importance), ,
                                      drop = FALSE]
+      scores <- stats::setNames(as.numeric(importance_df$importance),
+                                importance_df$feature)
     }
   }
 
@@ -604,32 +710,39 @@ fs_randomforest <- function(data,
         "randomForest::combine() drops err.rate/mse/confusion.",
         "Returning NULL 'oob'; use n_cores = 1 to obtain OOB metrics."
       ), call. = FALSE)
-    } else if (type == "classification" && !is.null(rf_model$err.rate)) {
+    } else if (task == "classification" && !is.null(rf_model$err.rate)) {
       oob <- list(accuracy = 1 - rf_model$err.rate[rf_model$ntree, "OOB"])
-    } else if (type == "regression" && !is.null(rf_model$mse)) {
+    } else if (task == "regression" && !is.null(rf_model$mse)) {
       oob <- list(RMSE = sqrt(utils::tail(rf_model$mse, 1L)))
     }
   }
 
   # ---- Assemble result --------------------------------------------------------
-  result <- list(
-    model = rf_model,
-    metrics = metrics,
-    predictions = preds,
-    probabilities = probs,
-    importance = importance_df,
-    confusion = confusion,
-    oob = oob,
-    target = target,
-    type = type,
-    feature_names = setdiff(names(train_df), target),
-    train_index = as.integer(index),
-    control = ctrl
-  )
-  if (isTRUE(ctrl$return_test_data)) {
-    result$test_data <- test_df
-  }
+  feature_names <- setdiff(names(train_df), target)
+  # A plain random forest ranks rather than selects, so without a hook every
+  # predictor is "selected"; with a hook, the hook's decision is the selection.
+  selected_features <- if (is.null(hook_selected)) feature_names else hook_selected
+  selected_features <- rf_rank_features(selected_features, scores)
 
-  class(result) <- c("fs_rf_result", class(result))
-  result
+  new_fs_result(
+    selected = selected_features,
+    scores   = scores,
+    method   = "randomforest",
+    task     = task,
+    model    = rf_model,
+    details  = list(
+      metrics       = metrics,
+      predictions   = preds,
+      probabilities = probs,
+      importance    = importance_df,
+      confusion     = confusion,
+      oob           = oob,
+      feature_names = feature_names,
+      train_index   = as.integer(index),
+      test_data     = if (isTRUE(ctrl$return_test_data)) test_df else NULL,
+      control       = ctrl,
+      n_features    = n_candidates
+    ),
+    call = cl_call
+  )
 }

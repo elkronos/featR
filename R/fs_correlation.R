@@ -1,22 +1,33 @@
 # Correlation-based feature selection.
 # polycor (polychoric) and foreach/doParallel (parallel point-biserial) are
-# Suggests and are only touched at run time.
+# Suggests and are only touched at run time. The redundancy pruning below is
+# built from base stats only, so caret is not needed here.
 
 #' Correlation-based feature selection
 #'
-#' Selects features from a dataset based on pairwise correlation.
+#' Flags variable pairs whose absolute correlation exceeds `threshold` and,
+#' by default, reduces each correlated group to a single representative.
 #'
 #' @param data A data frame or matrix. For \code{"pearson"}, \code{"spearman"},
 #'   \code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:
 #'   all columns must be ordered factors. For \code{"pointbiserial"}: columns
 #'   may be numeric (continuous) or dichotomous (exactly 2 unique non-NA values).
-#' @param threshold Numeric between 0 and 1. Pairs with |correlation| > threshold are selected.
+#' @param threshold Numeric between 0 and 1. Pairs with |correlation| > threshold
+#'   are flagged as redundant.
 #' @param method One of \code{"pearson"} (default), \code{"spearman"},
 #'   \code{"kendall"}, \code{"polychoric"}, \code{"pointbiserial"}.
 #'   Point-biserial correlations are computed as the Pearson correlation
 #'   between the continuous variable and a 0/1 indicator of the dichotomous
 #'   variable (1 for the second sorted unique value, e.g. the second factor
 #'   level), which is the definition of the point-biserial coefficient.
+#' @param prune Logical. If \code{TRUE} (default), \code{selected} is the
+#'   reduced non-redundant set: within each correlated group one representative
+#'   is kept and the other members are dropped, the representative being the
+#'   member with the LOWEST mean absolute correlation to the other retained
+#'   variables (the \code{caret::findCorrelation()} heuristic, implemented here
+#'   with base stats). Variables that were never flagged are always retained.
+#'   If \code{FALSE}, \code{selected} is every variable appearing in at least
+#'   one flagged pair, i.e. the redundant set, and nothing is dropped.
 #' @param na.rm Logical. If \code{TRUE}, missing values are removed pairwise
 #'   for \code{"pearson"}/\code{"spearman"}/\code{"kendall"}, per pair
 #'   (complete observations within each variable pair) for
@@ -26,30 +37,42 @@
 #'   \code{"polychoric"}, which stops with an error when missing values are
 #'   present (silently deleting cases would contradict the behaviour of the
 #'   other methods). Default \code{FALSE}.
-#' @param parallel Logical. Use parallel processing (via the suggested foreach
-#'   and doParallel packages) for point-biserial computations. Default \code{FALSE}.
-#' @param n_cores Integer >= 1. Number of workers if \code{parallel = TRUE};
-#'   requests are capped at the detected core count. Default \code{2}.
 #' @param sample_frac Numeric in (0, 1]. Fraction of rows to sample before computing
 #'   correlations. Default \code{1} (no sampling).
 #' @param output_format \code{"matrix"} (default) or \code{"data.frame"} for the
-#'   correlation matrix.
+#'   correlation matrix stored in \code{details$corr_matrix}.
 #' @param diag_value Value to assign to the diagonal of the correlation matrix.
 #'   Default \code{0}.
-#' @param no_vars_message Message printed if no variable pairs exceed \code{threshold}.
 #' @param seed Optional integer seed for reproducible sampling, applied
 #'   locally; the previous RNG state is restored afterwards. Default
 #'   \code{NULL} (never seeds).
 #' @param verbose Logical. Print progress messages. Default \code{FALSE}.
+#' @param parallel Logical. Use parallel processing (via the suggested foreach
+#'   and doParallel packages) for point-biserial computations. Default
+#'   \code{FALSE} (sequential).
+#' @param n_cores Whole number >= 1. Number of workers if \code{parallel = TRUE};
+#'   requests are capped at the detected core count. Default \code{2}.
 #'
-#' @return A list with:
+#' @return An object of class `fs_result` with:
 #' \describe{
-#'   \item{corr_matrix}{Correlation matrix (matrix or data frame, per \code{output_format}).}
-#'   \item{selected_vars}{Character vector of all variables that appear in at
-#'     least one pair with |r| > threshold. Note that this includes BOTH
-#'     members of each high-correlation pair, i.e. the redundant set; the
-#'     function does not choose which member of a pair to keep or drop (a
-#'     keep/drop redesign is deferred).}
+#'   \item{selected}{Character vector. With \code{prune = TRUE}, every variable
+#'     except the redundant group members that were dropped. With
+#'     \code{prune = FALSE}, every variable appearing in at least one flagged
+#'     pair (both members of each pair).}
+#'   \item{scores}{Named numeric vector giving each variable's maximum absolute
+#'     correlation with any other variable (NA when no correlation with that
+#'     variable could be computed).}
+#'   \item{method}{\code{paste0("correlation_", method)}, e.g.
+#'     "correlation_pearson".}
+#'   \item{task}{\code{NA_character_}; correlation filtering is unsupervised.}
+#'   \item{model}{NULL; no model is fitted.}
+#'   \item{details}{A list with `corr_matrix` (the correlation matrix, reshaped
+#'     to long form when \code{output_format = "data.frame"}), `pairs` (a
+#'     data.frame of the flagged pairs with columns Var1, Var2, Correlation,
+#'     strongest first), `dropped` (features removed by pruning; empty when
+#'     \code{prune = FALSE}), `redundant` (the unpruned pair-member set), and
+#'     `n_features` (the number of variables considered).}
+#'   \item{call}{The matched call.}
 #' }
 #'
 #' @examples
@@ -59,26 +82,32 @@
 #'   c = c(1.5, 0.9, 2.1, 0.4, 1.1, 0.8)
 #' )
 #' res <- fs_correlation(d, threshold = 0.9)
-#' res$selected_vars
+#' res$selected
+#' res$details$pairs
+#'
+#' # keep the legacy view: both members of every flagged pair
+#' fs_correlation(d, threshold = 0.9, prune = FALSE)$selected
 #' @export
-fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
-                           parallel = FALSE, n_cores = 2, sample_frac = 1,
+fs_correlation <- function(data, threshold, method = "pearson", prune = TRUE,
+                           na.rm = FALSE, sample_frac = 1,
                            output_format = "matrix", diag_value = 0,
-                           no_vars_message = "No variables meet the correlation threshold.",
-                           seed = NULL, verbose = FALSE) {
+                           seed = NULL, verbose = FALSE,
+                           parallel = FALSE, n_cores = 2L) {
+  cl <- match.call()
+
   # Validate inputs
   corr_validate_inputs(
-    data            = data,
-    threshold       = threshold,
-    method          = method,
-    na.rm           = na.rm,
-    parallel        = parallel,
-    n_cores         = n_cores,
-    sample_frac     = sample_frac,
-    output_format   = output_format,
-    diag_value      = diag_value,
-    no_vars_message = no_vars_message,
-    verbose         = verbose
+    data          = data,
+    threshold     = threshold,
+    method        = method,
+    prune         = prune,
+    na.rm         = na.rm,
+    sample_frac   = sample_frac,
+    output_format = output_format,
+    diag_value    = diag_value,
+    verbose       = verbose,
+    parallel      = parallel,
+    n_cores       = n_cores
   )
 
   # Method-specific suggested packages (fail early with a clear error)
@@ -126,17 +155,33 @@ fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
     ))
   }
 
-  # Find high-correlation pairs
-  high_corr_idx <- corr_find_high_correlation(corr_matrix, threshold)
+  all_vars <- rownames(corr_matrix)
 
-  if (nrow(high_corr_idx) == 0L) {
-    message(no_vars_message)
-    selected_vars <- character(0)
+  # Find high-correlation pairs and the variables they involve
+  high_corr_idx <- corr_find_high_correlation(corr_matrix, threshold)
+  pairs <- corr_pair_table(corr_matrix, high_corr_idx)
+
+  redundant <- intersect(all_vars, unique(c(pairs$Var1, pairs$Var2)))
+  if (length(redundant) == 0L) {
+    message("No variables meet the correlation threshold.")
+  }
+
+  # Per-variable score: strongest absolute correlation with any other variable
+  scores <- corr_max_abs_scores(corr_matrix)
+
+  # Reduce each correlated group to a single representative
+  dropped <- character(0)
+  if (isTRUE(prune)) {
+    dropped <- corr_prune_redundant(corr_matrix, threshold)
+    selected_vars <- setdiff(all_vars, dropped)
+    if (isTRUE(verbose) && length(dropped) > 0L) {
+      message(sprintf(
+        "Dropped %d redundant variable(s) (|r| > %g): %s",
+        length(dropped), threshold, paste(dropped, collapse = ", ")
+      ))
+    }
   } else {
-    selected_vars <- unique(c(
-      rownames(corr_matrix)[high_corr_idx[, 1]],
-      colnames(corr_matrix)[high_corr_idx[, 2]]
-    ))
+    selected_vars <- redundant
   }
 
   # Optional reshape
@@ -146,16 +191,30 @@ fs_correlation <- function(data, threshold, method = "pearson", na.rm = FALSE,
     corr_matrix <- cm_df
   }
 
-  list(corr_matrix = corr_matrix, selected_vars = selected_vars)
+  new_fs_result(
+    selected = selected_vars,
+    scores   = scores,
+    method   = paste0("correlation_", method),
+    task     = NA_character_,
+    model    = NULL,
+    details  = list(
+      corr_matrix = corr_matrix,
+      pairs       = pairs,
+      dropped     = dropped,
+      redundant   = redundant,
+      n_features  = length(all_vars)
+    ),
+    call = cl
+  )
 }
 
 # ----------------------------- Helpers --------------------------------------
 
 #' Validate fs_correlation() inputs
 #' @noRd
-corr_validate_inputs <- function(data, threshold, method, na.rm, parallel,
-                                 n_cores, sample_frac, output_format,
-                                 diag_value, no_vars_message, verbose) {
+corr_validate_inputs <- function(data, threshold, method, prune, na.rm,
+                                 sample_frac, output_format, diag_value,
+                                 verbose, parallel, n_cores) {
   assert_data_frame(data, "data", allow_matrix = TRUE)
 
   if (ncol(data) < 2L) {
@@ -169,9 +228,8 @@ corr_validate_inputs <- function(data, threshold, method, na.rm, parallel,
   }
 
   assert_number(threshold, "threshold", lower = 0, upper = 1)
+  assert_flag(prune, "prune")
   assert_flag(na.rm, "na.rm")
-  assert_flag(parallel, "parallel")
-  assert_count(n_cores, "n_cores")
 
   assert_number(sample_frac, "sample_frac", lower = 0, upper = 1)
   if (sample_frac <= 0) {
@@ -189,8 +247,9 @@ corr_validate_inputs <- function(data, threshold, method, na.rm, parallel,
     stop("`diag_value` must be a single numeric value or NA.")
   }
 
-  assert_string(no_vars_message, "no_vars_message")
   assert_flag(verbose, "verbose")
+  assert_flag(parallel, "parallel")
+  assert_count(n_cores, "n_cores")
 
   df <- as.data.frame(data)
 
@@ -419,6 +478,93 @@ corr_find_high_correlation <- function(corr_matrix, threshold) {
   # keep upper triangle to avoid duplicates
   idx <- idx[idx[, 1] < idx[, 2], , drop = FALSE]
   idx
+}
+
+#' Flagged-pair table, strongest absolute correlation first
+#' @noRd
+corr_pair_table <- function(corr_matrix, idx) {
+  m <- as.matrix(corr_matrix)
+
+  if (nrow(idx) == 0L) {
+    return(data.frame(
+      Var1 = character(0), Var2 = character(0), Correlation = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  out <- data.frame(
+    Var1        = rownames(m)[idx[, 1]],
+    Var2        = colnames(m)[idx[, 2]],
+    Correlation = as.numeric(m[idx]),
+    stringsAsFactors = FALSE
+  )
+  out <- out[order(abs(out$Correlation), decreasing = TRUE), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+#' Maximum absolute correlation of each variable with any other variable
+#'
+#' The diagonal is excluded (it holds `diag_value`, not a correlation), and NA
+#' cells are ignored. Variables with no computable correlation score NA.
+#' @noRd
+corr_max_abs_scores <- function(corr_matrix) {
+  m <- abs(as.matrix(corr_matrix))
+  diag(m) <- NA_real_
+
+  scores <- apply(m, 1L, function(v) {
+    v <- v[!is.na(v)]
+    if (length(v) == 0L) NA_real_ else max(v)
+  })
+
+  stats::setNames(as.numeric(scores), rownames(m))
+}
+
+#' Drop redundant members of correlated groups
+#'
+#' Reimplements the caret::findCorrelation() heuristic with base stats: while
+#' any pair among the retained variables still exceeds `threshold`, take the
+#' strongest such pair and drop whichever member has the LARGER mean absolute
+#' correlation to the other retained variables. The representative that
+#' survives each group is therefore the member with the LOWEST mean absolute
+#' correlation to everything else. Ties drop the later column, matching caret.
+#' NA correlations are treated as 0, so a pair whose correlation is unknown is
+#' never called redundant.
+#'
+#' @param corr_matrix A square, named correlation matrix.
+#' @param threshold Absolute-correlation cutoff.
+#' @return Character vector of dropped variable names, in the order dropped.
+#' @noRd
+corr_prune_redundant <- function(corr_matrix, threshold) {
+  m <- abs(as.matrix(corr_matrix))
+  m[!is.finite(m)] <- 0
+  diag(m) <- 0
+
+  keep <- rownames(m)
+  dropped <- character(0)
+
+  while (length(keep) > 1L) {
+    sub <- m[keep, keep, drop = FALSE]
+    if (!any(sub > threshold)) break
+
+    # strongest remaining pair, upper triangle only
+    ut <- sub
+    ut[lower.tri(ut, diag = TRUE)] <- -Inf
+    hits <- which(ut == max(ut), arr.ind = TRUE)
+    i <- hits[1L, 1L]
+    j <- hits[1L, 2L]
+
+    # mean absolute correlation with the other retained variables
+    avg <- rowSums(sub) / (length(keep) - 1L)
+
+    # i < j, so an exact tie drops the later column (caret's behaviour)
+    loser <- if (avg[[i]] > avg[[j]]) keep[[i]] else keep[[j]]
+
+    dropped <- c(dropped, loser)
+    keep <- setdiff(keep, loser)
+  }
+
+  dropped
 }
 
 #' Is dichotomous (exactly 2 unique non-NA values)

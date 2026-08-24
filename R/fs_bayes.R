@@ -7,29 +7,29 @@
 
 #' Validate data columns and types for fs_bayes()
 #'
-#' Checks that the response, predictor, and (if provided) date columns exist
-#' in the data. Performs minimal family-aware checks on the response.
+#' Checks that the target, predictor, and (if provided) date columns exist
+#' in the data. Performs minimal family-aware checks on the target.
 #'
 #' @param data A data.frame or data.table.
-#' @param response_col Character. Name of the response column.
-#' @param predictor_cols Character vector. Names of predictor columns.
+#' @param target Character. Name of the target column.
+#' @param predictors Character vector. Names of predictor columns.
 #' @param date_col Character or NULL. Name of the date column.
 #' @param brm_family A model family used for basic type checks.
 #' @return Invisibly TRUE if validation passes.
 #' @noRd
 bayes_validate_data <- function(data,
-                                response_col,
-                                predictor_cols,
+                                target,
+                                predictors,
                                 date_col = NULL,
                                 brm_family = stats::gaussian()) {
-  if (!response_col %in% names(data)) {
-    stop("Response column '", response_col, "' not found in data.")
+  if (!target %in% names(data)) {
+    stop("Response column '", target, "' not found in data.")
   }
-  if (length(predictor_cols) < 1L) {
+  if (length(predictors) < 1L) {
     stop("At least one predictor column must be provided.")
   }
-  if (any(!predictor_cols %in% names(data))) {
-    missing_preds <- predictor_cols[!predictor_cols %in% names(data)]
+  if (any(!predictors %in% names(data))) {
+    missing_preds <- predictors[!predictors %in% names(data)]
     stop("Missing predictor columns: ", paste(missing_preds, collapse = ", "))
   }
   if (!is.null(date_col) && !date_col %in% names(data)) {
@@ -38,7 +38,7 @@ bayes_validate_data <- function(data,
 
   # Minimal sanity checks re: family/response
   fam <- brm_family$family
-  y <- data[[response_col]]
+  y <- data[[target]]
 
   if (identical(fam, "gaussian") && !is.numeric(y)) {
     stop(
@@ -60,6 +60,26 @@ bayes_validate_data <- function(data,
   invisible(TRUE)
 }
 
+#' Map a brms family to a featR task label
+#'
+#' Only the families whose response is unambiguously categorical are reported
+#' as classification; everything else (including unrecognised or malformed
+#' family objects) falls back to "regression", which is what `fs_bayes()`
+#' assumes by default.
+#'
+#' @param brm_family A family object accepted by brms::brm().
+#' @return "classification" or "regression".
+#' @noRd
+bayes_task_from_family <- function(brm_family) {
+  fam <- tryCatch(brm_family$family, error = function(e) NULL)
+  if (is.null(fam) || !is.character(fam) || length(fam) != 1L || is.na(fam)) {
+    return("regression")
+  }
+  categorical <- c("bernoulli", "binomial", "beta_binomial", "categorical",
+                   "multinomial", "cumulative", "sratio", "cratio", "acat")
+  if (fam %in% categorical) "classification" else "regression"
+}
+
 #' Add ISO week feature from a date column
 #'
 #' Converts the date column to Date class if needed, adds "iso_week_id"
@@ -69,10 +89,10 @@ bayes_validate_data <- function(data,
 #'
 #' @param data A data.table (modified by reference).
 #' @param date_col Character. Name of the date column.
-#' @param predictor_cols Character vector. Current predictor columns.
-#' @return A list with updated `data` and `predictor_cols`.
+#' @param predictors Character vector. Current predictor columns.
+#' @return A list with updated `data` and `predictors`.
 #' @noRd
-bayes_add_week_feature <- function(data, date_col, predictor_cols) {
+bayes_add_week_feature <- function(data, date_col, predictors) {
   if (!inherits(data[[date_col]], "Date")) {
     data.table::set(data, j = date_col, value = as.Date(data[[date_col]]))
   }
@@ -81,9 +101,9 @@ bayes_add_week_feature <- function(data, date_col, predictor_cols) {
   iso_week <- as.integer(strftime(data[[date_col]], "%V"))
 
   data.table::set(data, j = "iso_week_id", value = iso_year * 100L + iso_week)
-  predictor_cols <- unique(c(predictor_cols, "iso_week_id"))
+  predictors <- unique(c(predictors, "iso_week_id"))
 
-  list(data = data, predictor_cols = predictor_cols)
+  list(data = data, predictors = predictors)
 }
 
 #' Generate predictor combinations
@@ -91,22 +111,22 @@ bayes_add_week_feature <- function(data, date_col, predictor_cols) {
 #' Generates all non-empty combinations up to a maximum size and, optionally,
 #' randomly samples a fixed number of combinations.
 #'
-#' @param predictor_cols Character vector of predictor names.
+#' @param predictors Character vector of predictor names.
 #' @param max_comb_size Integer or NULL. Maximum size of combinations.
-#'   If NULL, uses length(predictor_cols). Must be at least 1 if non-NULL.
+#'   If NULL, uses length(predictors). Must be at least 1 if non-NULL.
 #' @param sample_combinations Integer or NULL. If not NULL, randomly sample
 #'   this many combinations (must be >= 1).
 #' @param seed Optional seed for the sampling step, applied locally and
 #'   restored on exit (see local_seed()). Default NULL: never seeds.
 #' @return A list of character vectors (predictor subsets).
 #' @noRd
-bayes_generate_predictor_combinations <- function(predictor_cols,
+bayes_generate_predictor_combinations <- function(predictors,
                                                   max_comb_size = NULL,
                                                   sample_combinations = NULL,
                                                   seed = NULL) {
-  n <- length(predictor_cols)
+  n <- length(predictors)
   if (n < 1L) {
-    stop("predictor_cols must contain at least one predictor.")
+    stop("'predictors' must contain at least one predictor.")
   }
 
   if (!is.null(max_comb_size)) {
@@ -118,7 +138,7 @@ bayes_generate_predictor_combinations <- function(predictor_cols,
 
   comb_list <- lapply(
     X = seq_len(max_comb_size),
-    FUN = function(i) utils::combn(predictor_cols, i, simplify = FALSE)
+    FUN = function(i) utils::combn(predictors, i, simplify = FALSE)
   )
   combinations <- unlist(comb_list, recursive = FALSE)
 
@@ -148,7 +168,7 @@ bayes_fit_model <- function(data,
                             brm_family,
                             prior,
                             brm_args,
-                            verbose = TRUE) {
+                            verbose = FALSE) {
   if (verbose) {
     message("Fitting model: ", formula_str)
   }
@@ -220,26 +240,28 @@ bayes_add_metrics_to_data <- function(data, model) {
 
 #' Evaluate a predictor combination
 #'
-#' Fits and scores a model (LOO when applicable).
+#' Fits and scores a model (LOO when applicable). The `loo` object itself is
+#' returned alongside its elpd estimate so that `loo::loo_compare()` can be
+#' run across every successful fit.
 #'
 #' @param preds Character vector of predictor names for this combination.
 #' @param data A data.table.
-#' @param response_col Name of the response column.
+#' @param target Name of the target column.
 #' @param brm_family A model family accepted by brms::brm().
 #' @param prior A brms prior specification, or NULL.
 #' @param brm_args List. Additional arguments for brms::brm().
 #' @param verbose Logical.
-#' @return A list with elements preds, model, loo_val, formula_str.
+#' @return A list with elements preds, model, loo, loo_val, formula_str.
 #' @noRd
 bayes_evaluate_combination <- function(preds,
                                        data,
-                                       response_col,
+                                       target,
                                        brm_family,
                                        prior,
                                        brm_args,
-                                       verbose = TRUE) {
+                                       verbose = FALSE) {
   formula_str <- paste0(
-    backtick(response_col), " ~ ",
+    backtick(target), " ~ ",
     paste(backtick(preds), collapse = " + ")
   )
   model <- bayes_fit_model(
@@ -251,6 +273,7 @@ bayes_evaluate_combination <- function(preds,
     verbose     = verbose
   )
 
+  loo_obj <- NULL
   loo_val <- NA_real_
 
   if (!is.null(model)) {
@@ -258,7 +281,6 @@ bayes_evaluate_combination <- function(preds,
       if (verbose) {
         message("Skipping LOO for fixed_param algorithm: ", formula_str)
       }
-      loo_val <- NA_real_
     } else {
       loo_obj <- tryCatch(
         loo::loo(model),
@@ -281,9 +303,88 @@ bayes_evaluate_combination <- function(preds,
   list(
     preds       = preds,
     model       = model,
+    loo         = loo_obj,
     loo_val     = loo_val,
     formula_str = formula_str
   )
+}
+
+#' Build the loo_compare() table across successful fits
+#'
+#' @param results List of `bayes_evaluate_combination()` results.
+#' @param idx Integer positions in `results` that are usable (fitted model and
+#'   a finite elpd).
+#' @return The `loo::loo_compare()` table (a matrix or data.frame depending on
+#'   the loo version), whose rownames are `"model<i>"` for the corresponding
+#'   position `i` in `results`, or NULL when fewer than two comparable models
+#'   exist or the comparison fails.
+#' @noRd
+bayes_loo_comparison <- function(results, idx) {
+  if (length(idx) < 2L) {
+    return(NULL)
+  }
+  loo_objs <- lapply(results[idx], function(x) x$loo)
+  if (!all(vapply(loo_objs, function(l) inherits(l, "loo"), logical(1L)))) {
+    return(NULL)
+  }
+  names(loo_objs) <- paste0("model", idx)
+  tryCatch(loo::loo_compare(loo_objs), error = function(e) NULL)
+}
+
+#' Choose one model from the loo comparison
+#'
+#' `rule = "best"` keeps the raw elpd maximum (the first row of the
+#' comparison). `rule = "1se"` keeps the most parsimonious model -- fewest
+#' predictors, ties broken by the higher elpd -- among those whose elpd
+#' difference from the best model is no larger than one standard error of
+#' that difference (the `se_diff` column of `loo::loo_compare()`). When no
+#' usable comparison table is available the raw maximum is used.
+#'
+#' @param results List of `bayes_evaluate_combination()` results.
+#' @param idx Integer positions in `results` that are usable.
+#' @param comparison A `loo::loo_compare()` matrix, or NULL.
+#' @param rule "1se" or "best".
+#' @return A single integer position in `results`, or `NA_integer_` when
+#'   `idx` is empty.
+#' @noRd
+bayes_pick_model <- function(results, idx, comparison = NULL,
+                             rule = c("1se", "best")) {
+  rule <- match.arg(rule)
+  if (length(idx) == 0L) {
+    return(NA_integer_)
+  }
+
+  elpd <- vapply(results[idx], function(x) as.numeric(x$loo_val), numeric(1L))
+  n_pred <- vapply(results[idx], function(x) length(x$preds), integer(1L))
+  raw_best <- idx[order(-elpd, n_pred)][1L]
+
+  if (is.null(comparison) || !is.matrix(comparison) ||
+      !all(c("elpd_diff", "se_diff") %in% colnames(comparison))) {
+    return(raw_best)
+  }
+
+  row_idx <- suppressWarnings(
+    as.integer(sub("^model", "", rownames(comparison)))
+  )
+  if (length(row_idx) == 0L || anyNA(row_idx) || !all(row_idx %in% idx)) {
+    return(raw_best)
+  }
+
+  if (rule == "best") {
+    return(row_idx[1L])
+  }
+
+  elpd_diff <- as.numeric(comparison[, "elpd_diff"])
+  se_diff <- as.numeric(comparison[, "se_diff"])
+  within <- !is.na(elpd_diff) & !is.na(se_diff) & abs(elpd_diff) <= se_diff
+  within[1L] <- TRUE
+
+  candidates <- row_idx[within]
+  cand_n_pred <- vapply(results[candidates], function(x) length(x$preds),
+                        integer(1L))
+  cand_elpd <- vapply(results[candidates], function(x) as.numeric(x$loo_val),
+                      numeric(1L))
+  candidates[order(cand_n_pred, -cand_elpd)][1L]
 }
 
 ###############################################################################
@@ -292,12 +393,28 @@ bayes_evaluate_combination <- function(preds,
 
 #' Bayesian feature selection for model optimization
 #'
-#' Evaluates predictor combinations with brms models and selects the best
-#' combination by elpd_loo (leave-one-out expected log predictive density).
+#' Fits a brms model for every candidate predictor combination and compares
+#' them with `loo::loo_compare()`, returning the selected combination as an
+#' `fs_result`.
+#'
+#' @details
+#' Model selection uses `loo::loo_compare()` rather than the raw elpd
+#' maximum. With `rule = "1se"` (the default) the chosen model is the most
+#' parsimonious one -- fewest predictors, ties broken by the higher elpd --
+#' whose elpd difference from the best model is no larger than one standard
+#' error of that difference (the `se_diff` column of the comparison table).
+#' With `rule = "best"` the raw elpd maximum wins, which is the older
+#' behavior and is more prone to over-fitting the comparison. The full
+#' comparison table is always returned in `details$loo_comparison`.
+#'
+#' Every candidate model compiles and samples a Stan program, so the number of
+#' combinations grows expensive quickly; use `max_comb_size` or
+#' `sample_combinations` to bound the search.
 #'
 #' @param data A data.frame or data.table.
-#' @param response_col Character. Name of the response variable.
-#' @param predictor_cols Character vector. Names of predictor variables.
+#' @param target Character. Name of the target (response) column.
+#' @param predictors Character vector. Names of the candidate predictor
+#'   columns.
 #' @param date_col Character or NULL. Name of a date column. When provided, an
 #'   `iso_week_id` feature (ISO year * 100 + ISO week) is added to the
 #'   predictors. Note: `iso_week_id` enters the models as a continuous
@@ -310,37 +427,48 @@ bayes_evaluate_combination <- function(preds,
 #'   warmup, seed). `chains` and `cores` are respected when evaluating
 #'   combinations sequentially (`cores` is capped at the detected core
 #'   count), but both are forced to 1 when `parallel_combinations = TRUE`.
-#' @param parallel_combinations Logical. Evaluate predictor combinations in
-#'   parallel via parallel::mclapply(). Not available on Windows (falls back
-#'   to sequential evaluation with a message). Default FALSE.
-#' @param n_cores Integer or NULL. Worker count used when
-#'   `parallel_combinations = TRUE`. NULL (the default) means 1, i.e.
-#'   sequential; requests are capped at the detected core count.
+#' @param rule Selection rule: `"1se"` (default) keeps the most parsimonious
+#'   model within one standard error of the best elpd; `"best"` keeps the raw
+#'   elpd maximum.
 #' @param max_comb_size Integer or NULL. Max predictors in any combination.
 #' @param sample_combinations Integer or NULL. Randomly sample this many
 #'   combinations instead of evaluating all of them.
+#' @param parallel_combinations Logical. Evaluate predictor combinations in
+#'   parallel via parallel::mclapply(). Not available on Windows (falls back
+#'   to sequential evaluation with a message). Default FALSE.
 #' @param seed Optional integer. When supplied, seeds the random sampling of
 #'   combinations (see `sample_combinations`) locally; the previous RNG state
 #'   is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
 #'   asked. Note this does not seed the samplers; pass `seed` inside
 #'   `brm_args` to control brms itself.
-#' @param show_progress Logical. Show a progress bar for sequential
-#'   evaluation when the suggested pbapply package is installed. Default TRUE.
-#' @param verbose Logical. Print progress information. Default TRUE.
+#' @param verbose Logical. Print progress information, and show a progress bar
+#'   for sequential evaluation when the suggested pbapply package is
+#'   installed. Default FALSE.
+#' @param n_cores Integer. Worker count used when
+#'   `parallel_combinations = TRUE`. Default 1 (sequential); requests are
+#'   capped at the detected core count.
 #'
-#' @return A list with:
+#' @return An object of class `fs_result` with:
 #' \describe{
-#'   \item{Model}{Best fitted brmsfit object.}
-#'   \item{Data}{data.table with appended fitted values and residual metrics.}
-#'   \item{MAE}{Mean absolute error of the selected model. This is an
-#'     in-sample, post-selection error: it is computed on the same data used
-#'     to fit and select the model, so it is optimistic and should not be
-#'     read as an out-of-sample error estimate.}
-#'   \item{RMSE}{Root mean squared error of the selected model; in-sample and
-#'     post-selection, with the same caveat as MAE.}
-#'   \item{SelectedPredictors}{Character vector of predictors in the best model.}
-#'   \item{SelectedFormula}{Formula string for the best model.}
-#'   \item{BestELPD}{elpd_loo for the best model (may be NA).}
+#'   \item{selected}{Character vector of the predictors in the chosen model.}
+#'   \item{scores}{`NULL`: no per-feature score is comparable across
+#'     combination models. `details$n_features` records how many candidate
+#'     predictors were offered.}
+#'   \item{method}{"bayes".}
+#'   \item{task}{"regression", or "classification" when `brm_family` is one of
+#'     the categorical brms families.}
+#'   \item{model}{The selected `brmsfit`.}
+#'   \item{details}{A list with `data` (the modeling data.table with appended
+#'     `fitted_values`, `residuals`, `abs_residuals` and `squared_residuals`
+#'     columns), `mae` and `rmse` (in-sample, post-selection errors computed on
+#'     the same rows used to fit and select, so they are optimistic),
+#'     `formula` (the selected model's formula string), `best_elpd` (the
+#'     selected model's elpd_loo, possibly `NA`), `loo_comparison` (the
+#'     `loo::loo_compare()` table -- a matrix or data.frame depending on the
+#'     loo version -- or `NULL` when fewer than two models could be compared), `n_failed_fits` (how many combinations failed to fit) and
+#'     `n_features` (the number of candidate predictors, including
+#'     `iso_week_id` when `date_col` is supplied).}
+#'   \item{call}{The matched call.}
 #' }
 #'
 #' @examples
@@ -356,33 +484,37 @@ bayes_evaluate_combination <- function(preds,
 #'   x2 = x2
 #' )
 #' res <- fs_bayes(
-#'   d, "y", c("x1", "x2"),
+#'   d, target = "y", predictors = c("x1", "x2"),
 #'   brm_args = list(chains = 1, iter = 500, refresh = 0),
-#'   show_progress = FALSE, verbose = FALSE
+#'   rule = "1se", verbose = FALSE
 #' )
-#' res$SelectedFormula
+#' res$selected
+#' res$details$loo_comparison
 #' }
 #' @export
 fs_bayes <- function(data,
-                     response_col,
-                     predictor_cols,
+                     target,
+                     predictors,
                      date_col = NULL,
                      brm_family = stats::gaussian(),
                      prior = NULL,
                      brm_args = list(),
-                     parallel_combinations = FALSE,
-                     n_cores = NULL,
+                     rule = c("1se", "best"),
                      max_comb_size = NULL,
                      sample_combinations = NULL,
+                     parallel_combinations = FALSE,
                      seed = NULL,
-                     show_progress = TRUE,
-                     verbose = TRUE) {
+                     verbose = FALSE,
+                     n_cores = 1L) {
+  cl_call <- match.call()
+
   # ---- Input validation ----
+  rule <- match.arg(rule)
   assert_data_frame(data, "data")
-  assert_string(response_col, "response_col")
-  if (!is.character(predictor_cols) || length(predictor_cols) < 1L ||
-      anyNA(predictor_cols)) {
-    stop("'predictor_cols' must be a character vector with at least one column name.")
+  assert_string(target, "target")
+  if (!is.character(predictors) || length(predictors) < 1L ||
+      anyNA(predictors)) {
+    stop("'predictors' must be a character vector with at least one column name.")
   }
   if (!is.null(date_col)) {
     assert_string(date_col, "date_col")
@@ -400,8 +532,8 @@ fs_bayes <- function(data,
   if (!is.null(seed)) {
     assert_number(seed, "seed")
   }
-  assert_flag(show_progress, "show_progress")
   assert_flag(verbose, "verbose")
+  n_cores <- resolve_cores(n_cores)
 
   fs_require(c("brms", "loo"), "Bayesian feature selection")
 
@@ -410,15 +542,17 @@ fs_bayes <- function(data,
 
   # Validate (with family-aware checks)
   bayes_validate_data(
-    data           = data,
-    response_col   = response_col,
-    predictor_cols = predictor_cols,
-    date_col       = date_col,
-    brm_family     = brm_family
+    data       = data,
+    target     = target,
+    predictors = predictors,
+    date_col   = date_col,
+    brm_family = brm_family
   )
 
+  task <- bayes_task_from_family(brm_family)
+
   # Keep only required columns initially, drop NAs
-  req_cols <- unique(c(response_col, predictor_cols, date_col))
+  req_cols <- unique(c(target, predictors, date_col))
   data <- stats::na.omit(data[, req_cols, with = FALSE])
   if (nrow(data) == 0L) {
     stop("No complete cases in the data after removing missing values.")
@@ -426,9 +560,9 @@ fs_bayes <- function(data,
 
   # Add ISO week feature if requested
   if (!is.null(date_col)) {
-    res <- bayes_add_week_feature(data, date_col, predictor_cols)
-    data <- res$data
-    predictor_cols <- res$predictor_cols
+    week <- bayes_add_week_feature(data, date_col, predictors)
+    data <- week$data
+    predictors <- week$predictors
     # Drop rows where iso_week_id could not be formed (should be rare)
     data <- data[!is.na(data[["iso_week_id"]])]
     if (nrow(data) == 0L) {
@@ -436,9 +570,11 @@ fs_bayes <- function(data,
     }
   }
 
+  n_candidates <- length(predictors)
+
   # Build combinations (optionally sampled; seeding is local and opt-in)
   combinations <- bayes_generate_predictor_combinations(
-    predictor_cols      = predictor_cols,
+    predictors          = predictors,
     max_comb_size       = max_comb_size,
     sample_combinations = sample_combinations,
     seed                = seed
@@ -449,7 +585,7 @@ fs_bayes <- function(data,
   }
 
   if (length(combinations) == 0L) {
-    stop("No predictor combinations generated. Check predictor_cols/max_comb_size/sample_combinations.")
+    stop("No predictor combinations generated. Check predictors/max_comb_size/sample_combinations.")
   }
 
   # ---- Resolve outer parallelism (opt-in, capped, POSIX only) ----
@@ -460,7 +596,7 @@ fs_bayes <- function(data,
   }
   n_cores_outer <- 1L
   if (parallel_combinations) {
-    n_cores_outer <- resolve_cores(n_cores)
+    n_cores_outer <- n_cores
     if (n_cores_outer < 2L) {
       message("parallel_combinations = TRUE but 'n_cores' resolves to 1; ",
               "evaluating combinations sequentially.")
@@ -497,13 +633,13 @@ fs_bayes <- function(data,
   # Evaluation function for one combination
   eval_func <- function(preds) {
     bayes_evaluate_combination(
-      preds        = preds,
-      data         = data,
-      response_col = response_col,
-      brm_family   = brm_family,
-      prior        = prior,
-      brm_args     = safe_brm_args,
-      verbose      = verbose
+      preds      = preds,
+      data       = data,
+      target     = target,
+      brm_family = brm_family,
+      prior      = prior,
+      brm_args   = safe_brm_args,
+      verbose    = verbose
     )
   }
 
@@ -514,7 +650,7 @@ fs_bayes <- function(data,
   if (parallel_combinations) {
     results_list <- parallel::mclapply(combinations, eval_func,
                                        mc.cores = n_cores_outer)
-  } else if (show_progress && requireNamespace("pbapply", quietly = TRUE)) {
+  } else if (verbose && requireNamespace("pbapply", quietly = TRUE)) {
     old_pbo <- pbapply::pboptions(type = "txt")
     on.exit(pbapply::pboptions(old_pbo), add = TRUE)
     results_list <- pbapply::pblapply(combinations, eval_func)
@@ -540,37 +676,43 @@ fs_bayes <- function(data,
     function(x) !is.list(x) || is.null(x$model),
     logical(1L)
   )
-  if (any(failed)) {
+  n_failed_fits <- sum(failed)
+  if (n_failed_fits > 0L) {
     warning(sprintf(
       "%d of %d model fits failed and were excluded from selection.",
-      sum(failed), length(results_list)
+      n_failed_fits, length(results_list)
     ))
   }
 
-  valid_results <- Filter(
-    f = function(x) is.list(x) && !is.null(x$model) && is.finite(x$loo_val),
-    x = results_list
+  usable <- vapply(
+    results_list,
+    function(x) is.list(x) && !is.null(x$model) && is.finite(x$loo_val),
+    logical(1L)
   )
+  usable_idx <- which(usable)
 
-  if (length(valid_results) == 0L) {
+  loo_comparison <- NULL
+  if (length(usable_idx) == 0L) {
     # If no finite LOO, fall back to any fitted model
-    fallback <- Filter(
-      f = function(x) is.list(x) && !is.null(x$model),
-      x = results_list
-    )
-    if (length(fallback) == 0L) {
+    fitted_idx <- which(vapply(
+      results_list,
+      function(x) is.list(x) && !is.null(x$model),
+      logical(1L)
+    ))
+    if (length(fitted_idx) == 0L) {
       stop("No valid models were fitted. Please check your data and model specifications.")
     }
     warning("No finite LOO selection criterion was available; ",
             "returning the first successfully fitted model, which is an arbitrary choice.")
-    best <- fallback[[1L]]
+    best <- results_list[[fitted_idx[1L]]]
   } else {
-    ord <- order(vapply(valid_results, function(x) x$loo_val, numeric(1L)),
-                 decreasing = TRUE)
-    best <- valid_results[[ord[1L]]]
+    loo_comparison <- bayes_loo_comparison(results_list, usable_idx)
+    chosen <- bayes_pick_model(results_list, usable_idx, loo_comparison, rule)
+    best <- results_list[[chosen]]
     if (verbose) {
-      message("Best Model Formula: ", best$formula_str)
-      message("Best elpd_loo: ", best$loo_val)
+      message("Selected model formula (rule = '", rule, "'): ",
+              best$formula_str)
+      message("elpd_loo of the selected model: ", best$loo_val)
     }
   }
 
@@ -595,13 +737,22 @@ fs_bayes <- function(data,
     message("MAE: ", signif(mae, 6), " | RMSE: ", signif(rmse, 6))
   }
 
-  list(
-    Model              = best$model,
-    Data               = data_with_metrics,
-    MAE                = mae,
-    RMSE               = rmse,
-    SelectedPredictors = best$preds,
-    SelectedFormula    = best$formula_str,
-    BestELPD           = best$loo_val
+  new_fs_result(
+    selected = best$preds,
+    scores   = NULL,
+    method   = "bayes",
+    task     = task,
+    model    = best$model,
+    details  = list(
+      data           = data_with_metrics,
+      mae            = mae,
+      rmse           = rmse,
+      formula        = best$formula_str,
+      best_elpd      = best$loo_val,
+      loo_comparison = loo_comparison,
+      n_failed_fits  = n_failed_fits,
+      n_features     = n_candidates
+    ),
+    call = cl_call
   )
 }

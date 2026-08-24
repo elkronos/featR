@@ -5,87 +5,116 @@
 \title{Lasso Feature Selection with Cross-Validation}
 \usage{
 fs_lasso(
-  x,
-  y,
+  data,
+  target,
   alpha = 1,
   nfolds = 5,
   standardize = TRUE,
-  parallel = FALSE,
-  verbose = FALSE,
-  seed = NULL,
-  return_model = FALSE,
   custom_folds = NULL,
+  impute = c("none", "mean"),
+  return_model = FALSE,
+  seed = NULL,
+  verbose = FALSE,
+  parallel = FALSE,
   n_cores = 2L
 )
 }
 \arguments{
-\item{x}{A data frame or matrix of predictor variables. Factors and
-characters in a data frame are expanded via \code{model.matrix()}; rows with
-missing values are preserved and mean-imputed.}
+\item{data}{A data.frame or data.table holding the target and the candidate
+predictors. A numeric matrix with column names is also accepted;
+non-numeric matrices are not (supply a data.frame so factors and
+characters can be expanded by \code{model.matrix()}).}
 
-\item{y}{A numeric vector of response values (no NA/NaN/Inf).}
+\item{target}{Single string naming the outcome column in \code{data}. It must be
+numeric and free of NA/NaN/Inf.}
 
 \item{alpha}{Numeric in (0, 1]; default 1 (lasso). Use values in (0, 1)
 for elastic-net.}
 
 \item{nfolds}{Integer > 1; default 5.}
 
-\item{standardize}{Logical; default TRUE.}
+\item{standardize}{Logical; default TRUE. Passed to \code{glmnet::cv.glmnet()}
+and also controls the scale \code{scores} is ranked on (see Details).}
 
-\item{parallel}{Logical; default FALSE. When TRUE, cross-validation runs
-on \code{n_cores} workers (requires the 'doParallel' and 'foreach' packages).}
+\item{custom_folds}{Optional integer vector of fold IDs (one per row of
+\code{data}, covering 1..\code{nfolds} with no empty folds); default NULL.}
 
-\item{verbose}{Logical; default FALSE.}
+\item{impute}{How to handle missing predictor values: \code{"none"} (default)
+errors and names the offending columns, \code{"mean"} imputes column means
+computed on the full data and warns about the leakage.}
+
+\item{return_model}{Logical; keep the fitted cv.glmnet object in the result
+(and pass \code{keep = TRUE} to \code{cv.glmnet()}); default FALSE.}
 
 \item{seed}{Optional whole number for reproducibility, applied locally and
 restored on exit; default NULL (never seeds by default).}
 
-\item{return_model}{Logical; include the fitted cv.glmnet object in the
-output (and pass \code{keep = TRUE} to \code{cv.glmnet()}); default FALSE.}
+\item{verbose}{Logical; default FALSE.}
 
-\item{custom_folds}{Optional integer vector of fold IDs (same length as
-\code{y}, covering 1..\code{nfolds} with no empty folds); default NULL.}
+\item{parallel}{Logical; default FALSE. When TRUE, cross-validation runs
+on \code{n_cores} workers (requires the 'doParallel' and 'foreach' packages).}
 
 \item{n_cores}{Integer >= 1; number of workers used only when
 \code{parallel = TRUE}. Default 2. Values above the detected core count are
 capped.}
 }
 \value{
-A list with:
-\item{importance}{data.frame of variable importance at \code{lambda.min} (see Details on scale-dependence).}
-\item{lambda_min}{Value of lambda minimizing CV error.}
-\item{lambda_1se}{Value of lambda within 1 SE of the minimum.}
-\item{model}{(Optional) The fitted cv.glmnet object if \code{return_model = TRUE}.}
+An \code{fs_result} object with:
+\item{selected}{Design-matrix columns whose coefficient at \code{lambda.min} is
+non-zero, ordered by decreasing \code{scores} magnitude.}
+\item{scores}{data.frame with columns Variable, Coefficient and
+AbsCoefficient, ordered by decreasing AbsCoefficient, on the
+standardized scale when \code{standardize = TRUE} (see Details).}
+\item{method}{\code{"lasso"}.}
+\item{task}{\code{"regression"}.}
+\item{model}{The fitted cv.glmnet object when \code{return_model = TRUE}, else
+NULL.}
+\item{details}{List of \code{lambda_min} (lambda minimizing CV error),
+\code{lambda_1se} (largest lambda within 1 SE of the minimum),
+\code{coefficients} (the same table as \code{scores} but always on the raw
+coefficient scale) and \code{n_features} (number of design-matrix columns
+considered).}
+\item{call}{The matched call.}
 }
 \description{
-Fits a lasso (or elastic-net) model with \code{glmnet::cv.glmnet()} and returns
-variable importance and, optionally, the fitted model. Currently designed
-for numeric regression (gaussian family).
+Fits a lasso (or elastic-net) model with \code{glmnet::cv.glmnet()} and reports
+which predictors survive at \code{lambda.min}. Numeric outcomes only (gaussian
+family).
 }
 \details{
-Importance is the absolute value of each coefficient at \code{lambda.min}, on
-the ORIGINAL predictor scale (glmnet standardizes internally for fitting
-when \code{standardize = TRUE}, but reports coefficients back on the input
-scale). Rankings therefore depend on the units of the predictors; rescale
-the predictors yourself if you need scale-free comparisons.
+The design matrix is built internally from every column of \code{data} except
+\code{target}, via \code{stats::model.frame(na.action = stats::na.pass)} followed by
+\code{stats::model.matrix()}: factors and characters are expanded to dummies and
+rows carrying NAs are preserved rather than silently dropped.
 
-Missing predictor values are imputed with column means computed on the
-full data before cross-validation (a warning is raised); columns that are
-entirely NA are an error.
+\code{scores} ranks features on the STANDARDIZED coefficient scale when
+\code{standardize = TRUE}: each coefficient is multiplied by the standard
+deviation of its design-matrix column, which makes the ranking independent
+of the units the predictors happen to be measured in. glmnet standardizes
+internally for fitting but reports coefficients back on the input scale, so
+those raw coefficients are kept in \code{details$coefficients}. With
+\code{standardize = FALSE}, \code{scores} is the raw table and the two are identical.
+
+Missing predictor values are an error under the default
+\code{impute = "none"}, because imputing before cross-validation lets the folds
+see each other. \code{impute = "mean"} reproduces the older behavior (column
+means computed on the full data) and warns. Columns that are entirely NA
+are an error either way.
 }
 \examples{
 \donttest{
 if (requireNamespace("glmnet", quietly = TRUE) &&
     requireNamespace("Matrix", quietly = TRUE)) {
   n <- 100
-  X <- data.frame(
+  df <- data.frame(
     x1 = rnorm(n),
     x2 = rnorm(n),
     cat = sample(letters[1:3], n, TRUE)
   )
-  y <- 2 * X$x1 - 3 * X$x2 + rnorm(n)
-  result <- fs_lasso(x = X, y = y, seed = 123)
-  head(result$importance)
+  df$y <- 2 * df$x1 - 3 * df$x2 + rnorm(n)
+  res <- fs_lasso(df, "y", seed = 123)
+  selected(res)
+  head(res$scores)
 }
 }
 }

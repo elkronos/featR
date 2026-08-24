@@ -16,41 +16,49 @@
 #'
 #' @param data A data.frame or data.table with features and target. Character
 #'   columns are coerced to factor. The input object is never modified.
-#' @param target_col Character scalar: name of the target column.
+#' @param target Character scalar: name of the target column.
 #' @param sig_level Numeric threshold for significance, strictly between 0
 #'   and 1 (default 0.05).
 #' @param continuity_correction NULL/TRUE/FALSE: apply Yates correction for 2x2.
 #'   If NULL (default), auto-apply when table is 2x2.
-#' @param p_adjust_method Character: one of \code{stats::p.adjust.methods}
+#' @param p_adjust_method Character: one of `stats::p.adjust.methods`
 #'   (default "bonferroni"). Set to "none" to disable multiple-testing
 #'   correction. Matching is case-insensitive.
 #' @param simulation_B Whole number >= 100: replicates for simulation-based
 #'   p-values when expected counts are low (default 2000).
-#' @param parallel Logical; if TRUE, run features in parallel using the
-#'   suggested furrr and future packages. Default FALSE.
-#' @param temp_multisession Logical; if TRUE and \code{parallel = TRUE},
-#'   temporarily set a \code{future::multisession} plan (capped at 2 workers)
-#'   and restore the previous plan on exit. If FALSE, whatever plan the user
-#'   has set is used.
 #' @param seed Optional integer. Seeds the RNG locally (the previous RNG state
 #'   is restored on exit), which makes simulation-based p-values reproducible
 #'   in the sequential path. The parallel path draws from furrr's own
-#'   L'Ecuyer-CMRG parallel streams (\code{furrr_options(seed = TRUE)}), so
-#'   for the same \code{seed} parallel results are internally reproducible but
-#'   differ from sequential results. Default NULL (never seeds).
-#' @param verbose Logical; if TRUE, prints informative messages.
+#'   L'Ecuyer-CMRG parallel streams (`furrr_options(seed = TRUE)`), so for the
+#'   same `seed` parallel results are internally reproducible but differ from
+#'   sequential results. Default NULL (never seeds).
+#' @param verbose Logical; if TRUE, prints informative messages. Default FALSE.
+#' @param parallel Logical; if TRUE, run features in parallel using the
+#'   suggested furrr and future packages. Default FALSE (sequential).
+#' @param n_cores Whole number >= 1. Number of workers used when
+#'   `parallel = TRUE`; requests are capped at the detected core count. A
+#'   `future::multisession` plan is set for the duration of the call and the
+#'   previous plan is restored on exit. Default 2.
 #'
-#' @return A list with:
+#' @return An object of class `fs_result` with:
 #' \describe{
-#'   \item{results}{data.frame with one row per feature: feature; n (for
-#'         tested features, the number of complete feature-target pairs; for
-#'         skipped features, the feature's non-NA row count); df (NA for
-#'         simulation-based tests, where the asymptotic degrees of freedom do
-#'         not apply); p_value; adj_p_value; significant; method
-#'         ("asymptotic" or "simulation"); correction_applied (TRUE/FALSE);
-#'         min_expected (minimum expected cell count).}
-#'   \item{significant_features}{Character vector of features with
+#'   \item{selected}{Character vector of features with
 #'         adj_p_value < sig_level.}
+#'   \item{scores}{Named numeric vector of adjusted p-values, one per tested
+#'         feature (smaller is stronger evidence of association).}
+#'   \item{method}{"chi".}
+#'   \item{task}{"classification".}
+#'   \item{model}{NULL; the chi-square filter fits no model.}
+#'   \item{details}{A list with `results` (the full results data.frame: one
+#'         row per feature with feature; n (for tested features, the number of
+#'         complete feature-target pairs; for skipped features, the feature's
+#'         non-NA row count); df (NA for simulation-based tests, where the
+#'         asymptotic degrees of freedom do not apply); p_value; adj_p_value;
+#'         significant; method ("asymptotic" or "simulation");
+#'         correction_applied (TRUE/FALSE); min_expected (minimum expected cell
+#'         count)), plus `sig_level`, `p_adjust_method`, and `n_features` (the
+#'         number of categorical features tested).}
+#'   \item{call}{The matched call.}
 #' }
 #'
 #' @examples
@@ -60,21 +68,22 @@
 #'   target = factor(rep(c("Yes", "No"), each = 50))
 #' )
 #' out <- fs_chi(d, "target")
-#' out$results
-#' out$significant_features
+#' out$selected
+#' out$details$results
 #' @export
 fs_chi <- function(
     data,
-    target_col,
+    target,
     sig_level = 0.05,
     continuity_correction = NULL,
     p_adjust_method = "bonferroni",
     simulation_B = 2000,
-    parallel = FALSE,
-    temp_multisession = FALSE,
     seed = NULL,
-    verbose = FALSE
+    verbose = FALSE,
+    parallel = FALSE,
+    n_cores = 2L
 ) {
+  cl <- match.call()
 
   # ---- 0) Validate scalar options ----
   assert_number(sig_level, "sig_level")
@@ -86,19 +95,19 @@ fs_chi <- function(
   }
   assert_string(p_adjust_method, "p_adjust_method")
   simulation_B <- assert_count(simulation_B, "simulation_B", lower = 100L)
-  assert_flag(parallel, "parallel")
-  assert_flag(temp_multisession, "temp_multisession")
   assert_flag(verbose, "verbose")
+  assert_flag(parallel, "parallel")
+  assert_count(n_cores, "n_cores")
 
   # ---- 1) Validate & prepare ----
-  dt <- .fs_validate_and_prepare_data(data, target_col, verbose = verbose)
+  dt <- .fs_validate_and_prepare_data(data, target, verbose = verbose)
 
   # Optional local seeding (sequential simulation-based p-values reproducible);
   # the previous RNG state is restored when fs_chi() exits.
   local_seed(seed)
 
   # Identify categorical features (factors) to test
-  feature_cols <- .fs_get_factor_features(dt, target_col)
+  feature_cols <- .fs_get_factor_features(dt, target)
   if (length(feature_cols) == 0L) {
     if (verbose) message("No categorical (factor) features found for testing.")
     empty <- data.frame(
@@ -108,7 +117,20 @@ fs_chi <- function(
       correction_applied = logical(0), min_expected = numeric(0),
       stringsAsFactors = FALSE
     )
-    return(list(results = empty, significant_features = character(0)))
+    return(new_fs_result(
+      selected = character(0),
+      scores   = stats::setNames(numeric(0), character(0)),
+      method   = "chi",
+      task     = "classification",
+      model    = NULL,
+      details  = list(
+        results         = empty,
+        sig_level       = sig_level,
+        p_adjust_method = p_adjust_method,
+        n_features      = 0L
+      ),
+      call = cl
+    ))
   }
 
   # ---- 2) Define worker for one feature ----
@@ -116,7 +138,7 @@ fs_chi <- function(
     .fs_test_feature(
       dt = dt,
       feature = feat,
-      target_col = target_col,
+      target = target,
       continuity_correction = continuity_correction,
       simulation_B = simulation_B,
       verbose = verbose
@@ -126,12 +148,15 @@ fs_chi <- function(
   # ---- 3) Parallel backend (suggested packages, opt-in only) ----
   if (parallel) {
     fs_require(c("furrr", "future"), "parallel chi-square testing")
-    if (temp_multisession) {
-      # plan() invisibly returns the previous plan when setting a new one;
-      # restore it no matter how we exit. Workers are capped at 2.
-      old_plan <- future::plan(future::multisession, workers = 2L)
-      on.exit(try(future::plan(old_plan), silent = TRUE), add = TRUE)
+    workers <- resolve_cores(n_cores)
+    if (verbose) {
+      message(sprintf("Testing %d feature(s) on %d worker(s).",
+                      length(feature_cols), workers))
     }
+    # plan() invisibly returns the previous plan when setting a new one;
+    # restore it no matter how we exit.
+    old_plan <- future::plan(future::multisession, workers = workers)
+    on.exit(try(future::plan(old_plan), silent = TRUE), add = TRUE)
   }
 
   # ---- 4) Execute tests ----
@@ -155,9 +180,20 @@ fs_chi <- function(
   ord <- order(res$adj_p_value, res$p_value, na.last = TRUE)
   res <- res[ord, , drop = FALSE]
 
-  list(
-    results = res,
-    significant_features = res$feature[res$significant]
+  new_fs_result(
+    selected = res$feature[res$significant],
+    scores   = stats::setNames(as.numeric(res$adj_p_value),
+                               as.character(res$feature)),
+    method   = "chi",
+    task     = "classification",
+    model    = NULL,
+    details  = list(
+      results         = res,
+      sig_level       = sig_level,
+      p_adjust_method = p_adjust_method,
+      n_features      = length(feature_cols)
+    ),
+    call = cl
   )
 }
 
@@ -171,9 +207,9 @@ fs_chi <- function(
 #' Coerces character columns to factor and ensures the target is a factor with
 #' at least 2 non-NA levels. Always operates on a copy of `data`.
 #' @noRd
-.fs_validate_and_prepare_data <- function(data, target_col, verbose = FALSE) {
+.fs_validate_and_prepare_data <- function(data, target, verbose = FALSE) {
   assert_data_frame(data, "data")
-  assert_target(data, target_col, "target_col")
+  assert_target(data, target, "target")
 
   dt <- as_dt(data)
 
@@ -184,13 +220,13 @@ fs_chi <- function(
   }
 
   # Ensure target is factor
-  if (!is.factor(dt[[target_col]])) {
-    if (verbose) message(sprintf("Coercing target '%s' to factor.", target_col))
-    data.table::set(dt, j = target_col, value = as.factor(dt[[target_col]]))
+  if (!is.factor(dt[[target]])) {
+    if (verbose) message(sprintf("Coercing target '%s' to factor.", target))
+    data.table::set(dt, j = target, value = as.factor(dt[[target]]))
   }
 
   # Ensure target has >= 2 levels after removing NAs
-  tgt <- droplevels(dt[[target_col]][!is.na(dt[[target_col]])])
+  tgt <- droplevels(dt[[target]][!is.na(dt[[target]])])
   if (nlevels(tgt) < 2L) {
     stop("Target must have at least 2 non-NA levels for chi-square testing.")
   }
@@ -200,19 +236,19 @@ fs_chi <- function(
 
 #' Names of factor features excluding the target
 #' @noRd
-.fs_get_factor_features <- function(dt, target_col) {
-  candidates <- setdiff(names(dt), target_col)
+.fs_get_factor_features <- function(dt, target) {
+  candidates <- setdiff(names(dt), target)
   candidates[vapply(candidates, function(nm) is.factor(dt[[nm]]), logical(1L))]
 }
 
 #' Build a contingency table safely, dropping NAs and empty levels
 #' @noRd
-.fs_build_contingency <- function(dt, feature, target_col) {
-  valid <- !is.na(dt[[feature]]) & !is.na(dt[[target_col]])
+.fs_build_contingency <- function(dt, feature, target) {
+  valid <- !is.na(dt[[feature]]) & !is.na(dt[[target]])
   if (!any(valid)) return(NULL)
 
   x <- droplevels(dt[[feature]][valid])
-  y <- droplevels(dt[[target_col]][valid])
+  y <- droplevels(dt[[target]][valid])
 
   if (nlevels(x) < 2L || nlevels(y) < 2L) return(NULL)
 
@@ -264,9 +300,9 @@ fs_chi <- function(
 #' Skipped features (no non-NA pairs, or fewer than 2 levels after dropping
 #' empty levels) report the feature's non-NA row count as n.
 #' @noRd
-.fs_test_feature <- function(dt, feature, target_col, continuity_correction,
+.fs_test_feature <- function(dt, feature, target, continuity_correction,
                              simulation_B, verbose = FALSE) {
-  tab <- .fs_build_contingency(dt, feature, target_col)
+  tab <- .fs_build_contingency(dt, feature, target)
   if (is.null(tab)) {
     if (verbose) message(sprintf("Skipping '%s': not enough non-NA data or < 2 levels.", feature))
     return(list(

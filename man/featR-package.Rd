@@ -15,8 +15,8 @@ what to install.
 \seealso{
 Useful links:
 \itemize{
-  \item \url{https://github.com/elkronos/feature_selection}
-  \item Report bugs at \url{https://github.com/elkronos/feature_selection/issues}
+  \item \url{https://github.com/elkronos/featR}
+  \item Report bugs at \url{https://github.com/elkronos/featR/issues}
 }
 
 }

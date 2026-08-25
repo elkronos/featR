@@ -42,19 +42,31 @@ jobs:
             clean = FALSE,
             install_path = file.path(normalizePath(Sys.getenv("RUNNER_TEMP"), winslash = "/"), "package")
           )
+          # Write the artifact first, so a failure while formatting the
+          # human-readable summary below cannot cost us the report.
+          covr::to_cobertura(cov, filename = "cobertura.xml")
+
           # print.coverage lists overall and per-file percentages.
           print(cov)
           cat(sprintf("\nOverall coverage: %.2f%%\n", covr::percent_coverage(cov)))
+
           # Lines never executed, which is the actionable part: these are the
           # paths that generated defects in this package before.
-          zero <- covr::zero_coverage(cov)
+          # NOTE: use tally_coverage() rather than zero_coverage(). The latter
+          # tries to populate the RStudio marker pane and so loads rstudioapi,
+          # which does not exist on a CI runner.
+          tally <- covr::tally_coverage(cov)
+          zero <- tally[tally$value == 0, c("filename", "line"), drop = FALSE]
           if (nrow(zero) == 0L) {
             cat("\nNo uncovered lines.\n")
           } else {
             cat(sprintf("\n---- %d uncovered line(s) ----\n", nrow(zero)))
-            print(utils::head(zero[, c("filename", "first_line")], 100L))
+            by_file <- table(zero$filename)
+            cat("\nUncovered lines per file:\n")
+            print(sort(by_file, decreasing = TRUE))
+            cat("\nFirst 100 uncovered lines:\n")
+            print(utils::head(zero, 100L), row.names = FALSE)
           }
-          covr::to_cobertura(cov, filename = "cobertura.xml")
         shell: Rscript {0}
 
       - uses: actions/upload-artifact@v4

@@ -149,9 +149,12 @@ they are optimistic. And anything read off the returned \code{brmsfit}
 was chosen by looking at the same data it is reported on.
 }
 \examples{
-# Each candidate model compiles and samples its own Stan program, so the
-# call is guarded on brms being installed and kept to two single-predictor
-# fits via max_comb_size = 1.
+# Fitting needs more than the brms package: brms compiles and samples a
+# Stan program for each candidate model, which requires a working C++
+# toolchain. The call is therefore guarded on brms being installed, limited
+# to two single-predictor fits via max_comb_size = 1, and wrapped in try()
+# so that a machine without a usable Stan toolchain skips the example
+# instead of failing it.
 \donttest{
 if (requireNamespace("brms", quietly = TRUE)) {
   x1 <- seq(-2, 2, length.out = 40)
@@ -161,14 +164,19 @@ if (requireNamespace("brms", quietly = TRUE)) {
     x1 = x1,
     x2 = x2
   )
-  res <- fs_bayes(
-    d, target = "y", predictors = c("x1", "x2"),
-    max_comb_size = 1,
-    brm_args = list(chains = 1, iter = 500, refresh = 0),
-    rule = "1se", verbose = FALSE
+  res <- try(
+    fs_bayes(
+      d, target = "y", predictors = c("x1", "x2"),
+      max_comb_size = 1,
+      brm_args = list(chains = 1, iter = 500, refresh = 0),
+      rule = "1se", verbose = FALSE
+    ),
+    silent = TRUE
   )
-  print(res$selected)
-  print(res$details$loo_comparison)
+  if (!inherits(res, "try-error")) {
+    print(res$selected)
+    print(res$details$loo_comparison)
+  }
 }
 }
 }

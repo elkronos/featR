@@ -656,24 +656,27 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #' }
 #'
 #' @examples
-#' # Each candidate model compiles a Stan program, so this example is not run
-#' # automatically (compilation alone takes far longer than a typical example
-#' # budget). The same call is exercised by the package tests.
-#' \dontrun{
-#' x1 <- seq(-2, 2, length.out = 40)
-#' x2 <- rep(c(-1, 1), 20)
-#' d <- data.frame(
-#'   y  = 1 + 2 * x1 + sin(seq_len(40)),
-#'   x1 = x1,
-#'   x2 = x2
-#' )
-#' res <- fs_bayes(
-#'   d, target = "y", predictors = c("x1", "x2"),
-#'   brm_args = list(chains = 1, iter = 500, refresh = 0),
-#'   rule = "1se", verbose = FALSE
-#' )
-#' res$selected
-#' res$details$loo_comparison
+#' # Each candidate model compiles and samples its own Stan program, so the
+#' # call is guarded on brms being installed and kept to two single-predictor
+#' # fits via max_comb_size = 1.
+#' \donttest{
+#' if (requireNamespace("brms", quietly = TRUE)) {
+#'   x1 <- seq(-2, 2, length.out = 40)
+#'   x2 <- rep(c(-1, 1), 20)
+#'   d <- data.frame(
+#'     y  = 1 + 2 * x1 + sin(seq_len(40)),
+#'     x1 = x1,
+#'     x2 = x2
+#'   )
+#'   res <- fs_bayes(
+#'     d, target = "y", predictors = c("x1", "x2"),
+#'     max_comb_size = 1,
+#'     brm_args = list(chains = 1, iter = 500, refresh = 0),
+#'     rule = "1se", verbose = FALSE
+#'   )
+#'   print(res$selected)
+#'   print(res$details$loo_comparison)
+#' }
 #' }
 #' @export
 fs_bayes <- function(data,

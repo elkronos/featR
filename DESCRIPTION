@@ -7,17 +7,24 @@ Authors@R:
 Description: Filter, wrapper, and embedded feature-selection methods behind a
     consistent set of functions that share one calling convention and one
     return type: correlation and chi-squared filters, information gain, LASSO
-    and elastic net, Bayesian model comparison, 'Boruta', recursive feature
+    and elastic net, Bayesian model comparison, Boruta, recursive feature
     elimination, random forest importance, multivariate adaptive regression
     splines, support vector machine recursive feature elimination, stepwise
     selection, and principal component / singular value decomposition
-    helpers. Heavy modeling engines are optional and only required by the
-    functions that use them.
+    helpers. The implemented methods follow
+    Tibshirani (1996) <doi:10.1111/j.2517-6161.1996.tb02080.x>,
+    Zou and Hastie (2005) <doi:10.1111/j.1467-9868.2005.00503.x>,
+    Friedman (1991) <doi:10.1214/aos/1176347963>,
+    Breiman (2001) <doi:10.1023/A:1010933404324>,
+    Guyon, Weston, Barnhill and Vapnik (2002) <doi:10.1023/A:1012487302797>,
+    Kursa and Rudnicki (2010) <doi:10.18637/jss.v036.i11>, and
+    Vehtari, Gelman and Gabry (2017) <doi:10.1007/s11222-016-9696-4>.
+    Heavy modeling engines are optional and only required by the functions
+    that use them.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Language: en-US
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 8.1.0
 Config/roxygen2/version: 8.1.0
 Depends:
     R (>= 4.1.0)

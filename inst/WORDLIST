@@ -3,8 +3,14 @@ AbsCoefficient
 Barnhill
 Boruta
 Boruta's
+Breiman
 CMRG
+Friedman
+Gabry
+Gelman
 Guyon
+Hastie
+Kursa
 L'Ecuyer
 MASS
 MLmetrics
@@ -18,7 +24,12 @@ Quinlan's
 RFE
 RSpectra
 Rsquared
+Rudnicki
+Tibshirani
 Vapnik
+Vehtari
+Weston
+Zou
 auc
 backticked
 bayes

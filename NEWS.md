@@ -1,17 +1,22 @@
 # featR 0.1.0
 
 First release. Unifies the `feature_selection` script collection into a package
-with 16 exported functions sharing one calling convention and one return type.
+with 16 exported `fs_*()` functions (plus the `selected()` accessor) sharing one
+calling convention and one return type.
 
 ## Calling convention
 
 All selection functions take the form:
 
 ```r
-fs_<method>(data, target, ..., seed = NULL, verbose = FALSE, n_cores = 1L)
+fs_<method>(data, target, <method options>, ...)
 ```
 
-`data` is always first and `target` (a single column-name string) always second.
+`data` is always first and `target` (a single column-name string) always second,
+for the functions that have an outcome. Housekeeping arguments come last:
+every function takes `verbose`, functions that use randomness take
+`seed = NULL`, and functions that can run in parallel take `n_cores` and/or
+`parallel`.
 This replaces the previous mix of `response_col`, `target_var`, `target_col`,
 `responseName`, `response_var`, `dependent_var`, and `x`/`y` argument pairs.
 Other renames: `p` -> `train_ratio`, `predictor_cols` -> `predictors`,

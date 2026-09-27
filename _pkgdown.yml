@@ -13,8 +13,37 @@ home:
 
 navbar:
   structure:
-    left: [intro, reference, articles, news]
+    left: [intro, reference, guides, honesty, news]
     right: [search, github]
+  components:
+    # Every entry in these menus is a clickable page; there are no
+    # non-clickable section headings in the navbar.
+    guides:
+      text: Guides
+      menu:
+        - text: The fs_result object
+          href: articles/fs-result.html
+        - text: Choosing a method
+          href: articles/choosing-a-method.html
+        - text: Filter methods
+          href: articles/filters.html
+        - text: Regularization and embedded importance
+          href: articles/regularization.html
+        - text: Wrapper methods
+          href: articles/wrappers.html
+        - text: Dimensionality reduction
+          href: articles/dimensionality-reduction.html
+        - text: All articles
+          href: articles/index.html
+    honesty:
+      text: Doing it honestly
+      menu:
+        - text: Overview
+          href: articles/doing-it-honestly.html
+        - text: Validation and leakage
+          href: articles/validation-and-leakage.html
+        - text: Reproducibility, randomness, and parallelism
+          href: articles/reproducibility.html
 
 articles:
   - title: Start here
@@ -24,15 +53,16 @@ articles:
       - articles/fs-result
       - articles/choosing-a-method
   - title: Method guides
-    navbar: Method guides
+    navbar: ~
     contents:
       - articles/filters
       - articles/regularization
       - articles/wrappers
       - articles/dimensionality-reduction
   - title: Doing it honestly
-    navbar: Doing it honestly
+    navbar: ~
     contents:
+      - articles/doing-it-honestly
       - articles/validation-and-leakage
       - articles/reproducibility
 

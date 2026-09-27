@@ -269,12 +269,7 @@ elastic_lambda_grid <- function(x, y, alpha_seq, task, nlambda = 50L) {
 elastic_train_models <- function(x, y, tuneGrid, trControl, metric,
                                  preProcess = NULL, n_cores = 1L) {
   if (n_cores > 1L) {
-    cl <- parallel::makeCluster(n_cores)
-    on.exit({
-      parallel::stopCluster(cl)
-      foreach::registerDoSEQ()
-    }, add = TRUE)
-    doParallel::registerDoParallel(cl)
+    local_parallel_cluster(n_cores)
   }
 
   caret::train(

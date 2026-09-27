@@ -130,6 +130,22 @@ fs_result_lower_is_better <- function(x) {
   FALSE
 }
 
+#' Are this method's scores signed, with magnitude carrying the strength?
+#'
+#' Only `fs_lasso()` reports signed scores (standardized coefficients, whose
+#' sign is the direction of the effect), so only there is the ranking by
+#' absolute value. Everywhere else a negative score is genuinely weaker than
+#' a positive one: permutation importance and Boruta importance go negative
+#' when a feature does worse than its permuted copy, and ranking those by
+#' `abs()` would list a worse-than-noise feature above a useful one.
+#'
+#' @param x An `fs_result` object.
+#' @return `TRUE` when scores should be ranked by magnitude.
+#' @noRd
+fs_result_signed_scores <- function(x) {
+  identical(x$method, "lasso")
+}
+
 #' Scores as a named numeric vector, when possible
 #' @noRd
 fs_result_score_vector <- function(x) {
@@ -251,14 +267,18 @@ print.fs_result <- function(x, n = 10L, ...) {
 #'
 #' @details
 #' Everything `print()` shows, then the recorded call, then -- for methods
-#' that produce per-feature scores -- a table of every scored feature ranked
-#' by decreasing absolute score, with columns `feature`, `score` (four
+#' that produce per-feature scores -- a table of every scored feature, ranked
+#' strongest first, with columns `feature`, `score` (four
 #' significant digits) and `selected` (`*` marks the features that were kept).
 #' The table is truncated to `n` rows with a "... (m more)" tail.
 #'
 #' The ranking direction follows the method. For most methods a larger score
-#' means a stronger feature, and rows are ordered by decreasing absolute score
-#' so that signed scores such as regression coefficients sort sensibly. For
+#' means a stronger feature, and rows are ordered by decreasing score, so a
+#' negative importance (a feature that did worse than its permuted copy)
+#' ranks below every positive one. The exception is \code{\link{fs_lasso}},
+#' whose scores are signed standardized coefficients: those are ordered by
+#' decreasing absolute value, since the sign is the direction of the effect,
+#' not its strength. For
 #' methods that score by p-value, where smaller is better, rows are ordered
 #' ascending instead, so the most significant feature is listed first. The
 #' same ascending order is used for the threshold filters
@@ -290,8 +310,10 @@ summary.fs_result <- function(object, n = 20L, ...) {
   if (!is.null(sv) && length(sv) > 0L) {
     ord <- if (fs_result_lower_is_better(object)) {
       order(sv, decreasing = FALSE, na.last = TRUE)
-    } else {
+    } else if (fs_result_signed_scores(object)) {
       order(abs(sv), decreasing = TRUE, na.last = TRUE)
+    } else {
+      order(sv, decreasing = TRUE, na.last = TRUE)
     }
     sv <- sv[ord]
     shown <- utils::head(sv, n)

@@ -266,7 +266,9 @@ boruta_prune_correlated <- function(predictors,
 #' Redundant-but-informative features are therefore all confirmed. That makes
 #' it a good fit for understanding a dataset, and a poor fit when you need a
 #' compact model. It also costs many forest fits, and the outcome varies from
-#' run to run unless `seed` is supplied.
+#' run to run unless `seed` is supplied. The forests are grown on a single
+#' thread (`num.threads = 1` is passed to Boruta's importance source), in line
+#' with featR's sequential default.
 #'
 #' The `cutoff_cor` pruning and the `cutoff_features` cap are featR additions,
 #' applied to Boruta's output in that order; both rank features by median
@@ -298,9 +300,10 @@ boruta_prune_correlated <- function(predictors,
 #' @param resolve_tentative Logical; if TRUE, apply `Boruta::TentativeRoughFix()`
 #'   and return only confirmed attributes. If FALSE, tentative attributes are
 #'   included in the selected set. Default TRUE.
-#' @param seed Optional integer for reproducibility. Applied locally: the
-#'   previous RNG state is restored when the function exits. Default NULL
-#'   (the RNG is never seeded unless requested).
+#' @param seed Optional single whole number (within the range of an R integer)
+#'   for reproducibility; fractional or out-of-range values are an error.
+#'   Applied locally: the previous RNG state is restored when the function
+#'   exits. Default NULL (the RNG is never seeded unless requested).
 #' @param verbose Logical; if TRUE, report progress and name any features
 #'   dropped by correlation pruning. This maps to Boruta's `doTrace = 1`
 #'   (decisions are reported as they are made); FALSE maps to `doTrace = 0`.
@@ -395,12 +398,17 @@ fs_boruta <- function(data,
     stop("Predictors contain missing values; please impute or remove them before calling `fs_boruta()`.")
   }
 
-  # Run Boruta (no `seed` argument supported by Boruta itself)
+  # Run Boruta (no `seed` argument supported by Boruta itself). Boruta
+  # forwards `...` to its importance source, and both default sources accept
+  # `num.threads` (getImpFruZ maps it to fru's `threads`, getImpRfZ passes it
+  # to ranger). Left unset, fru (threads = 0) and ranger (num.threads = NULL)
+  # use every available core, contradicting featR's sequential default.
   boruta_obj <- Boruta::Boruta(
     x = predictors,
     y = y,
     doTrace = if (isTRUE(verbose)) 1L else 0L,
-    maxRuns = maxRuns
+    maxRuns = maxRuns,
+    num.threads = 1L
   )
 
   # Optionally resolve tentative features to confirmed/rejected

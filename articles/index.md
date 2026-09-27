@@ -22,6 +22,8 @@
 
 ### Doing it honestly
 
+- [Doing it
+  honestly](https://elkronos.github.io/featR/articles/doing-it-honestly.md):
 - [Validation and
   leakage](https://elkronos.github.io/featR/articles/validation-and-leakage.md):
 - [Reproducibility, randomness, and

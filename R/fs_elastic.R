@@ -66,6 +66,8 @@ elastic_extract_variables <- function(data, formula) {
   if (length(intercept_col) > 0L) {
     mm <- mm[, -intercept_col, drop = FALSE]
   }
+  # Report the caller's column names, not model.matrix()'s backticked labels.
+  colnames(mm) <- unbacktick_names(colnames(mm))
 
   list(y = y, x = mm)
 }
@@ -378,8 +380,11 @@ elastic_scores <- function(coefs) {
 #' @details
 #' Use this when the question is "which predictors survive a jointly tuned
 #' L1/L2 penalty?". Both alpha and lambda are chosen by resampling, and every
-#' predictor with a non-zero coefficient at the winning pair is reported. When
-#' the winning alpha is below 1 the ridge component spreads weight across
+#' predictor with a non-zero coefficient at the winning pair is reported.
+#' `alpha = 0` is pure ridge, which never sets a coefficient to exactly zero,
+#' so it cannot select: the default `alpha_seq` therefore starts at 0.1, and if
+#' you include 0 yourself and it wins, every predictor is "selected" and a
+#' warning says so. When the winning alpha is below 1 the ridge component spreads weight across
 #' correlated predictors, so a group of collinear columns tends to survive
 #' together instead of being reduced to a single representative.
 #'
@@ -388,7 +393,10 @@ elastic_scores <- function(coefs) {
 #' backticked. Predictors then go through `stats::model.matrix()` and the
 #' intercept column is removed, so a k-level factor or character column
 #' contributes k - 1 dummy columns and `selected`, `scores` and `details$coef`
-#' name design-matrix columns rather than the original columns.
+#' name design-matrix columns rather than the original columns. Non-syntactic
+#' names are reported as the caller wrote them, without the backticks
+#' `model.matrix()` adds. `glmnet` needs at least two design-matrix columns,
+#' so a single numeric predictor is an error.
 #'
 #' Rows with a missing response, or a missing value in any predictor, are
 #' dropped before fitting (an error if that leaves nothing), and a constant
@@ -427,7 +435,8 @@ elastic_scores <- function(coefs) {
 #'   candidate predictors.
 #' @param target Single string naming the outcome column in `data`.
 #' @param alpha_seq Numeric vector of alpha values to tune over, each in
-#'   `[0, 1]`. Default `seq(0, 1, by = 0.1)`.
+#'   `[0, 1]`. Default `seq(0.1, 1, by = 0.1)`; 0 (ridge) is left out
+#'   because it cannot zero a coefficient (see Details).
 #' @param lambda_seq Numeric vector of non-negative lambda values to tune
 #'   over, or `NULL` (default) to use glmnet's own path per alpha.
 #' @param trControl Optional `caret::trainControl()` object. If `NULL`
@@ -488,7 +497,7 @@ elastic_scores <- function(coefs) {
 #' @export
 fs_elastic <- function(data,
                        target,
-                       alpha_seq  = seq(0, 1, by = 0.1),
+                       alpha_seq  = seq(0.1, 1, by = 0.1),
                        lambda_seq = NULL,
                        trControl  = NULL,
                        metric     = NULL,
@@ -546,6 +555,10 @@ fs_elastic <- function(data,
   vars <- elastic_extract_variables(data, form)
   y <- vars$y
   x <- vars$x
+  if (ncol(x) < 2L) {
+    stop("fs_elastic() needs at least two design-matrix columns (glmnet ",
+         "cannot fit a single-column x).", call. = FALSE)
+  }
 
   elastic_message("Inferring task type (regression vs classification)...", verbose)
   task_info <- elastic_infer_task(y)
@@ -615,6 +628,11 @@ fs_elastic <- function(data,
 
   elastic_message("Selecting best model...", verbose)
   best <- elastic_select_best(fit, metric = metric)
+  if (isTRUE(best$alpha == 0)) {
+    warning("The winning alpha is 0 (pure ridge), which never zeroes a ",
+            "coefficient, so every column is reported as selected. Drop 0 ",
+            "from 'alpha_seq' to make the result a selection.", call. = FALSE)
+  }
 
   elastic_message("Extracting coefficients at best lambda...", verbose)
   coefficients <- stats::coef(best$model, s = best$lambda)

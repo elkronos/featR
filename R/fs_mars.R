@@ -287,6 +287,16 @@ mars_train_model <- function(train, target, ctrl, hyperParameters,
     preProcess = c("center", "scale")
   )
   if (identical(search, "random")) {
+    # caret builds the random grid by calling earth::earth() BEFORE its fit
+    # code runs require(earth), and for a factor outcome earth looks up
+    # contr.earth.response on the search path, so a first call in a fresh
+    # session fails with "object 'contr.earth.response' ... not found".
+    # caret's earth fit code attaches earth a moment later anyway; attaching
+    # it here, scoped to this call, only moves that forward so the grid can
+    # be built. withr detaches it again on exit if it was not attached before.
+    if (is.factor(train[[target]]) && !"package:earth" %in% search()) {
+      suppressPackageStartupMessages(withr::local_package("earth"))
+    }
     train_args$tuneLength <- tune_length
   } else {
     train_args$tuneGrid <- hyperParameters
@@ -352,7 +362,9 @@ mars_predictor_scores <- function(importance, predictors) {
       length(predictors) == 0L) {
     return(scores)
   }
-  imp_names <- names(importance)
+  # caret's formula interface backticks non-syntactic names ("`my var`",
+  # "`my grp`b"); strip those quotes so they can match the raw column names.
+  imp_names <- unbacktick_names(names(importance))
   for (i in seq_along(importance)) {
     nm <- imp_names[i]
     val <- importance[[i]]
@@ -504,7 +516,9 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' predictor by name (the longest candidate name it starts with) and a
 #' predictor keeps the largest importance of its encoded columns; that
 #' name-based attribution is ambiguous if one predictor's name happens to be a
-#' prefix of another predictor's encoded column name.
+#' prefix of another predictor's encoded column name. The backticks caret adds
+#' around non-syntactic names are stripped first, so such columns are
+#' attributed like any other.
 #'
 #' For classification, class imbalance is handled by `sampling = "up"` inside
 #' `caret::trainControl()`, i.e. upsampling happens within each resample; the

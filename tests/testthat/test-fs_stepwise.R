@@ -271,3 +271,23 @@ test_that("fs_stepwise validates data, target, direction and verbose", {
   expect_error(fs_stepwise(data.frame(y = c(1, 2, 3)), "y"),
                "at least one predictor besides the target")
 })
+
+test_that("non-syntactic predictor names are reported without backticks", {
+  skip_if_not_installed("MASS")
+  d <- step_toy()
+  names(d)[names(d) == "x1"] <- "my x1"
+  res <- fs_stepwise(d, "y")
+  expect_true("my x1" %in% selected(res))
+  expect_true(all(selected(res) %in% names(d)))
+  expect_true("my x1" %in% names(res$scores))
+  expect_identical(res$details$selected_terms, selected(res))
+})
+
+test_that("a user-supplied scope replaces the default instead of colliding", {
+  skip_if_not_installed("MASS")
+  d <- step_toy()
+  # lower = ~ noise1 forces noise1 to stay in the model
+  res <- fs_stepwise(d, "y", direction = "both",
+                     scope = list(lower = ~ noise1, upper = ~ x1 + x2 + noise1 + noise2))
+  expect_true(all(c("x1", "x2", "noise1") %in% selected(res)))
+})

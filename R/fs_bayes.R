@@ -239,8 +239,11 @@ bayes_generate_predictor_combinations <- function(predictors,
 #' Applies featR's defaults (iter = 2000, adapt_delta = 0.99,
 #' max_treedepth = 15, refresh = 0) and then lets `brm_args` override any of
 #' them; `warmup` is left to brms' own default of iter / 2. Fitting warnings
-#' are logged (when `verbose`) but never abort the fit; a fit that errors
-#' returns NULL so that the remaining combinations still run.
+#' (divergent transitions, R-hat, low ESS, ...) never abort the fit: they are
+#' muffled so that a search over many models does not bury the console, but
+#' they are recorded and returned so that `fs_bayes()` can report them, and
+#' logged immediately when `verbose`. A fit that errors returns a NULL model so
+#' that the remaining combinations still run.
 #'
 #' @param data A data.frame or data.table containing the data.
 #' @param formula_str Character. The model formula as a string.
@@ -248,7 +251,8 @@ bayes_generate_predictor_combinations <- function(predictors,
 #' @param prior A brms prior specification, or NULL.
 #' @param brm_args List. Additional arguments for brms::brm().
 #' @param verbose Logical. Print progress and warnings.
-#' @return A fitted brms model object, or NULL if fitting fails.
+#' @return A list with `model` (the fitted brms model, or NULL if fitting
+#'   failed) and `warnings` (character vector of the muffled warning messages).
 #' @noRd
 bayes_fit_model <- function(data,
                             formula_str,
@@ -277,11 +281,15 @@ bayes_fit_model <- function(data,
     model_args$control <- NULL
   }
 
+  fit_warnings <- character(0)
   model <- tryCatch({
-    # Capture and log warnings, but do not fail the fit because of them
+    # Record and (optionally) log warnings, but do not fail the fit because
+    # of them. They used to be discarded outright, so a selected model with
+    # divergences or unconverged chains was returned without any signal.
     withCallingHandlers(
       do.call(brms::brm, model_args),
       warning = function(w) {
+        fit_warnings <<- c(fit_warnings, conditionMessage(w))
         if (verbose) {
           message("Warning [", formula_str, "]: ", conditionMessage(w))
         }
@@ -299,7 +307,7 @@ bayes_fit_model <- function(data,
     message("Successfully fitted: ", formula_str)
   }
 
-  model
+  list(model = model, warnings = fit_warnings)
 }
 
 #' Is this a two-dimensional draws summary with an Estimate column?
@@ -377,7 +385,13 @@ bayes_add_metrics_to_data <- function(data, model, verbose = FALSE) {
 #' @param prior A brms prior specification, or NULL.
 #' @param brm_args List. Additional arguments for brms::brm().
 #' @param verbose Logical.
-#' @return A list with elements preds, model, loo, loo_val, formula_str.
+#' loo's own Pareto-k warnings are muffled (they would name every model
+#' "model") and summarized instead as `n_bad_k`, the number of observations
+#' with a Pareto k above 0.7, for which the PSIS estimate of that
+#' observation's contribution to elpd_loo is unreliable.
+#'
+#' @return A list with elements preds, model, loo, loo_val, formula_str,
+#'   fit_warnings (character) and n_bad_k (integer, `NA` without a loo).
 #' @noRd
 bayes_evaluate_combination <- function(preds,
                                        data,
@@ -390,7 +404,7 @@ bayes_evaluate_combination <- function(preds,
     backtick(target), " ~ ",
     paste(backtick(preds), collapse = " + ")
   )
-  model <- bayes_fit_model(
+  fit <- bayes_fit_model(
     data        = data,
     formula_str = formula_str,
     brm_family  = brm_family,
@@ -398,9 +412,11 @@ bayes_evaluate_combination <- function(preds,
     brm_args    = brm_args,
     verbose     = verbose
   )
+  model <- fit$model
 
   loo_obj <- NULL
   loo_val <- NA_real_
+  n_bad_k <- NA_integer_
 
   if (!is.null(model)) {
     if (!is.null(brm_args$algorithm) && identical(brm_args$algorithm, "fixed_param")) {
@@ -409,7 +425,15 @@ bayes_evaluate_combination <- function(preds,
       }
     } else {
       loo_obj <- tryCatch(
-        loo::loo(model),
+        withCallingHandlers(
+          loo::loo(model),
+          warning = function(w) {
+            if (verbose) {
+              message("LOO warning [", formula_str, "]: ", conditionMessage(w))
+            }
+            invokeRestart("muffleWarning")
+          }
+        ),
         error = function(e) {
           if (verbose) {
             message("LOO failed [", formula_str, "]: ", conditionMessage(e))
@@ -422,17 +446,75 @@ bayes_evaluate_combination <- function(preds,
           loo_obj$estimates["elpd_loo", "Estimate"],
           error = function(e) NA_real_
         )
+        k <- loo_obj$diagnostics$pareto_k
+        if (is.numeric(k)) {
+          n_bad_k <- sum(k > 0.7, na.rm = TRUE)
+        }
       }
     }
   }
 
   list(
-    preds       = preds,
-    model       = model,
-    loo         = loo_obj,
-    loo_val     = loo_val,
-    formula_str = formula_str
+    preds        = preds,
+    model        = model,
+    loo          = loo_obj,
+    loo_val      = loo_val,
+    formula_str  = formula_str,
+    fit_warnings = fit$warnings,
+    n_bad_k      = n_bad_k
   )
+}
+
+#' Summarize sampler and PSIS diagnostics as at most two warnings
+#'
+#' Per-fit warnings are muffled during the search, so without this summary a
+#' selected model with divergent transitions, unconverged chains or
+#' unreliable PSIS-LOO estimates would be returned silently.
+#'
+#' @param results List of `bayes_evaluate_combination()` results (non-list
+#'   entries, from crashed workers, are ignored).
+#' @param chosen Position in `results` of the selected model, or NA.
+#' @return Invisibly, a list with the counts; called for its warnings.
+#' @noRd
+bayes_warn_diagnostics <- function(results, chosen = NA_integer_) {
+  ok <- vapply(results, function(x) is.list(x) && !is.null(x$model),
+               logical(1L))
+  has_fit_warn <- vapply(results, function(x) {
+    is.list(x) && !is.null(x$model) && length(x$fit_warnings) > 0L
+  }, logical(1L))
+  has_bad_k <- vapply(results, function(x) {
+    is.list(x) && !is.null(x$model) && isTRUE(x$n_bad_k > 0L)
+  }, logical(1L))
+  chosen_ok <- length(chosen) == 1L && !is.na(chosen)
+
+  if (any(has_fit_warn)) {
+    first <- if (chosen_ok && has_fit_warn[chosen]) chosen else which(has_fit_warn)[1L]
+    warning(sprintf(
+      paste0(
+        "brms/Stan reported sampling warnings for %d of %d fitted model(s)%s ",
+        "(for example divergent transitions, R-hat or effective sample size); ",
+        "those fits may be unreliable. First warning for %s: %s ",
+        "Re-run with verbose = TRUE to see every warning, or adjust 'brm_args'."
+      ),
+      sum(has_fit_warn), sum(ok),
+      if (chosen_ok && has_fit_warn[chosen]) ", INCLUDING the selected model" else "",
+      results[[first]]$formula_str,
+      trimws(results[[first]]$fit_warnings[1L])
+    ), call. = FALSE)
+  }
+  if (any(has_bad_k)) {
+    warning(sprintf(
+      paste0(
+        "%d of %d fitted model(s)%s have observations with Pareto k > 0.7, so ",
+        "their PSIS-LOO elpd estimates -- and the comparison built on them -- ",
+        "may be unreliable. Consider moment matching or exact refits for ",
+        "those observations (see loo::loo_moment_match())."
+      ),
+      sum(has_bad_k), sum(ok),
+      if (chosen_ok && has_bad_k[chosen]) ", INCLUDING the selected model" else ""
+    ), call. = FALSE)
+  }
+  invisible(list(n_fit_warn = sum(has_fit_warn), n_bad_k = sum(has_bad_k)))
 }
 
 #' Build the loo_compare() table across successful fits
@@ -571,6 +653,14 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #' finite `elpd_loo` at all, the first successfully fitted model is returned
 #' with a warning; that is an arbitrary fallback, not a selection.
 #'
+#' Per-model sampler warnings (divergent transitions, R-hat, effective sample
+#' size) and loo's Pareto-k warnings are muffled while the models are fitted,
+#' so a search over many subsets does not flood the console, but they are not
+#' discarded: after the search one warning summarizes how many fits raised
+#' sampler warnings and another how many have observations with Pareto
+#' k > 0.7 (unreliable PSIS-LOO estimates), each stating whether the selected
+#' model is among them. `verbose = TRUE` shows every individual warning.
+#'
 #' Two caveats are worth stating plainly. `details$mae` and `details$rmse` are
 #' in-sample errors computed on the same rows used to fit and to select, so
 #' they are optimistic. And anything read off the returned `brmsfit`
@@ -617,7 +707,9 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'   evaluation when `n_cores` resolves to 1. Because each model is then held
 #'   to a single MCMC chain, cross-chain convergence diagnostics such as R-hat
 #'   become unavailable; a warning says so. Default FALSE.
-#' @param seed Optional integer. When supplied, seeds the random sampling of
+#' @param seed Optional whole number (within the R integer range; fractional
+#'   values are an error rather than being truncated). When supplied, seeds
+#'   the random sampling of
 #'   combinations (see `sample_combinations`) locally; the previous RNG state
 #'   is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
 #'   asked. Note this does not seed the samplers; pass `seed` inside
@@ -725,7 +817,9 @@ fs_bayes <- function(data,
     sample_combinations <- assert_count(sample_combinations, "sample_combinations")
   }
   if (!is.null(seed)) {
-    assert_number(seed, "seed")
+    # Validate here, not only where local_seed() runs (the sampling path),
+    # so a fractional seed is rejected even when no sampling happens.
+    assert_count(seed, "seed", lower = -.Machine$integer.max)
   }
   assert_flag(verbose, "verbose")
   n_cores <- resolve_cores(n_cores)
@@ -905,7 +999,8 @@ fs_bayes <- function(data,
     }
     warning("No finite LOO selection criterion was available; ",
             "returning the first successfully fitted model, which is an arbitrary choice.")
-    best <- results_list[[fitted_idx[1L]]]
+    chosen <- fitted_idx[1L]
+    best <- results_list[[chosen]]
   } else {
     loo_comparison <- bayes_loo_comparison(results_list, usable_idx)
     chosen <- bayes_pick_model(results_list, usable_idx, loo_comparison, rule)
@@ -916,6 +1011,8 @@ fs_bayes <- function(data,
       message("elpd_loo of the selected model: ", best$loo_val)
     }
   }
+
+  bayes_warn_diagnostics(results_list, chosen)
 
   # Append metrics and compute summary errors (in-sample, post-selection).
   # A brmsfit can exist without posterior draws when sampling itself failed

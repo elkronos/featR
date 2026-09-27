@@ -171,7 +171,13 @@ svm_dummy_encoder <- function(data, target, full_rank = TRUE) {
 #' @return Numeric data frame of encoded predictors.
 #' @noRd
 svm_encode <- function(dv, data) {
-  as.data.frame(stats::predict(dv, newdata = data))
+  out <- as.data.frame(stats::predict(dv, newdata = data))
+  # svm_dummy_encoder() backticks non-syntactic names so the formula parses,
+  # and dummyVars() copies those backticks into its column names ("`a b`",
+  # "`f g`v"). Strip them so encoded names match the user's column names.
+  # A literal backtick cannot occur in a name that survived the formula.
+  names(out) <- gsub("`", "", names(out), fixed = TRUE)
+  out
 }
 
 ###############################################################################
@@ -185,17 +191,24 @@ svm_encode <- function(dv, data) {
 #' deviation are centered but not rescaled, so they collapse to zeros instead
 #' of producing NaNs.
 #'
+#' When `ref` is supplied, the centers and standard deviations are estimated
+#' on `ref` and applied to `x`; this is how a cross-validation fold's held-out
+#' rows are standardized with statistics from that fold's training rows only.
+#'
 #' @param x Numeric matrix or data frame of encoded predictors.
+#' @param ref Optional matrix (same columns as `x`) supplying the centering
+#'   and scaling statistics. Defaults to `x` itself.
 #' @return A numeric matrix with the same dimnames as `x`.
 #' @noRd
-svm_center_scale <- function(x) {
+svm_center_scale <- function(x, ref = x) {
   x <- as.matrix(x)
-  if (!is.numeric(x)) {
+  ref <- as.matrix(ref)
+  if (!is.numeric(x) || !is.numeric(ref)) {
     stop("SVM-RFE requires a numeric (dummy-encoded) predictor matrix.",
          call. = FALSE)
   }
-  centers <- colMeans(x)
-  sds <- apply(x, 2L, stats::sd)
+  centers <- colMeans(ref)
+  sds <- apply(ref, 2L, stats::sd)
   sds[!is.finite(sds) | sds == 0] <- 1
   out <- scale(x, center = centers, scale = sds)
   attr(out, "scaled:center") <- NULL
@@ -231,11 +244,14 @@ svm_rfe_ksvm <- function(x, y, task, C = 1) {
 #'
 #' For a linear kernel the primal weight vector is
 #' `w = t(X_sv) %*% (alpha * y)`, i.e. `crossprod(xmatrix(fit)[[i]],
-#' coef(fit)[[i]])`. kernlab stores support vectors and coefficients as lists:
-#' one block for a binary problem or a regression, one block per class (with
-#' one column per pairwise problem) for multi-class one-against-one fits. The
-#' ranking criterion is `w^2` summed over every column of every block, which
-#' reduces exactly to `w^2` in the binary/regression case.
+#' coef(fit)[[i]])`. kernlab stores support vectors and coefficients as lists
+#' with one block per binary machine: a single block for a binary problem (a
+#' bare matrix/vector for a regression), and one block per one-against-one
+#' pairwise problem for a multi-class fit. For each block,
+#' `x %*% w - b(fit)[i]` reproduces kernlab's decision values exactly. The
+#' ranking criterion is `w^2` summed over every block (the usual multi-class
+#' extension of Guyon et al.), which reduces exactly to `w^2` in the
+#' binary/regression case.
 #'
 #' @param fit A `kernlab::ksvm` fit built with a linear kernel.
 #' @param features Character vector naming the columns of the matrix that was
@@ -349,128 +365,29 @@ svm_rfe_size_ladder <- function(p, max_sizes = 6L) {
   as.integer(sizes)
 }
 
-#' Cross-validated score of one candidate feature subset
+#' Recursive elimination on an already standardized matrix
 #'
-#' Uses the same linear SVM as the elimination loop, on folds that are shared
-#' by every candidate size so the comparison is paired.
+#' Fits a linear SVM on the surviving features, ranks them by `w^2`, drops the
+#' lowest-ranked feature (the lowest 10 percent while more than 50 remain) and
+#' refits on the reduced set until one feature is left.
 #'
-#' @param x Standardized predictor matrix restricted to the candidate subset.
+#' @param x Standardized numeric matrix with column names.
 #' @param y Outcome vector.
 #' @param task "classification" or "regression".
-#' @param folds List of integer vectors of held-out row indices.
-#' @return Mean accuracy (classification) or mean RMSE (regression); `NA_real_`
-#'   when no fold could be scored.
-#' @noRd
-svm_rfe_cv_score <- function(x, y, task, folds) {
-  n <- nrow(x)
-  vals <- vapply(folds, function(idx) {
-    idx <- as.integer(idx)
-    train_idx <- setdiff(seq_len(n), idx)
-    if (length(train_idx) < 2L || length(idx) < 1L) {
-      return(NA_real_)
-    }
-    y_train <- y[train_idx]
-    y_test <- y[idx]
-    if (task == "classification") {
-      y_train <- droplevels(as.factor(y_train))
-      if (nlevels(y_train) < 2L) {
-        return(NA_real_)
-      }
-    }
-    fit <- tryCatch(
-      svm_rfe_ksvm(x[train_idx, , drop = FALSE], y_train, task),
-      error = function(e) NULL
-    )
-    if (is.null(fit)) {
-      return(NA_real_)
-    }
-    pred <- tryCatch(
-      kernlab::predict(fit, x[idx, , drop = FALSE]),
-      error = function(e) NULL
-    )
-    if (is.null(pred)) {
-      return(NA_real_)
-    }
-    if (task == "classification") {
-      mean(as.character(pred) == as.character(y_test))
-    } else {
-      sqrt(mean((as.numeric(pred) - as.numeric(y_test))^2))
-    }
-  }, numeric(1L))
-
-  if (all(is.na(vals))) NA_real_ else mean(vals, na.rm = TRUE)
-}
-
-#' SVM-RFE ranking and subset-size selection
-#'
-#' Implements recursive feature elimination for a linear SVM (Guyon et al.,
-#' 2002): fit a linear SVM on the surviving features, rank them by the squared
-#' primal weight `w^2`, drop the lowest-ranked feature (the lowest 10% while
-#' more than 50 features remain, to keep wide problems tractable), and refit on
-#' the reduced set until a single feature is left. Reversing the elimination
-#' order gives the full ranking, so rank 1 is the feature eliminated last.
-#'
-#' When `n_features` is `NULL` the subset size is chosen by scoring a small
-#' ladder of candidate sizes with `nfolds`-fold cross-validation on the same
-#' linear SVM, keeping the size with the highest mean accuracy
-#' (classification) or the lowest mean RMSE (regression); ties go to the
-#' smaller size. The folds are drawn once and shared by every candidate size,
-#' so the comparison is paired, and drawing them consumes the RNG.
-#'
-#' Two honest caveats about that size search. The ranking it scores was
-#' derived from all the training rows, including each fold's held-out rows, so
-#' the cross-validated scores are optimistic and should not be read as
-#' estimates of out-of-sample performance -- they are only used to compare
-#' sizes against each other. Fully nested RFE would re-rank inside every fold,
-#' at a cost of one full elimination run per fold. The predictor matrix is
-#' also centred and scaled once up front rather than per fold; that transform
-#' is unsupervised, but it does see every row. The test-set metrics that
-#' `fs_svm()` reports are unaffected: they come from rows held out before any
-#' of this runs. If no candidate size could be scored at all (every fold failed), the full feature
-#' set is kept.
-#'
-#' @param x Data frame or matrix of encoded (numeric) predictors. It is
-#'   centered and scaled internally.
-#' @param y Factor (classification) or numeric (regression) outcome.
-#' @param task "classification" or "regression".
-#' @param nfolds Number of folds for the subset-size search, clamped to at
-#'   least 2 and at most `length(y)`.
-#' @param n_features Optional whole number; when supplied the top
-#'   `n_features` ranked features are kept (capped at the number available)
-#'   and no size search is run.
 #' @param verbose Logical; report each elimination step.
-#' @return A list with `selected` (the retained features, most important
-#'   first), `ranking` (every feature, most to least important), `scores` (the
-#'   `w^2` criterion from the first, full-feature fit, in the original column
-#'   order), `sizes` and `size_scores` (the candidate sizes and their CV
-#'   scores) and `size_metric` ("accuracy" or "RMSE"). The last three are
-#'   `NULL`, `NULL`, and `NA_character_` when `n_features` was supplied and no
-#'   size search ran.
+#' @return A list with `ranking` (most to least important) and `criterion`
+#'   (the `w^2` of the first, full-feature fit, in column order).
 #' @noRd
-svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
-                         verbose = FALSE) {
-  x <- svm_center_scale(x)
+svm_rfe_eliminate <- function(x, y, task, verbose = FALSE) {
   features <- colnames(x)
-  if (is.null(features) || length(features) == 0L) {
-    stop("No predictors available for SVM-RFE.", call. = FALSE)
-  }
-  p <- length(features)
-
-  if (!is.null(n_features)) {
-    n_features <- assert_count(n_features, "n_features")
-    n_features <- min(n_features, p)
-  }
-
   remaining <- features
   eliminated <- character(0)
   criterion <- NULL
 
   while (length(remaining) > 1L) {
-    # The CV scorer already guards this same call. Without a guard here, a
-    # degenerate matrix (svm_center_scale() collapses constant columns to
-    # zeros, so an all-constant encoding arrives as zeros) aborts the whole
-    # call with kernlab's "No Support Vectors found" after the split, the
-    # encoding and possibly a cluster are already set up.
+    # Without a guard here, a degenerate matrix (svm_center_scale() collapses
+    # constant columns to zeros, so an all-constant encoding arrives as zeros)
+    # aborts with kernlab's opaque "No Support Vectors found".
     fit <- tryCatch(
       svm_rfe_ksvm(x[, remaining, drop = FALSE], y, task),
       error = function(e) {
@@ -519,8 +436,139 @@ svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
   names(criterion) <- features
 
   # Least important eliminated first, so reversing gives rank 1 = best.
-  eliminated <- c(eliminated, remaining)
-  ranking <- rev(eliminated)
+  list(ranking = rev(c(eliminated, remaining)), criterion = criterion)
+}
+
+#' Score every candidate size on one cross-validation fold
+#'
+#' Everything that is learned from data is learned on the fold's training rows
+#' only: the centering/scaling statistics, the SVM-RFE ranking and the SVMs
+#' fitted on each candidate subset. The held-out rows are used solely for
+#' scoring. Re-ranking inside the fold is what keeps the size search free of
+#' the selection bias of scoring a ranking that has already seen the held-out
+#' rows (Ambroise and McLachlan, 2002).
+#'
+#' @param x Numeric matrix of encoded (unscaled) predictors.
+#' @param y Outcome vector.
+#' @param task "classification" or "regression".
+#' @param sizes Candidate subset sizes.
+#' @param idx Integer vector of held-out row indices.
+#' @return Numeric vector, one accuracy (classification) or RMSE (regression)
+#'   per entry of `sizes`; `NA` where the fold could not be scored.
+#' @noRd
+svm_rfe_fold_scores <- function(x, y, task, sizes, idx) {
+  out <- rep(NA_real_, length(sizes))
+  idx <- as.integer(idx)
+  train_idx <- setdiff(seq_len(nrow(x)), idx)
+  if (length(train_idx) < 2L || length(idx) < 1L) {
+    return(out)
+  }
+  y_train <- y[train_idx]
+  y_test <- y[idx]
+  if (task == "classification") {
+    y_train <- droplevels(as.factor(y_train))
+    if (nlevels(y_train) < 2L) {
+      return(out)
+    }
+  }
+  x_train <- svm_center_scale(x[train_idx, , drop = FALSE])
+  x_test <- svm_center_scale(x[idx, , drop = FALSE],
+                             ref = x[train_idx, , drop = FALSE])
+
+  ranking <- tryCatch(
+    svm_rfe_eliminate(x_train, y_train, task)$ranking,
+    error = function(e) NULL
+  )
+  if (is.null(ranking)) {
+    return(out)
+  }
+
+  for (j in seq_along(sizes)) {
+    keep <- utils::head(ranking, sizes[j])
+    fit <- tryCatch(
+      svm_rfe_ksvm(x_train[, keep, drop = FALSE], y_train, task),
+      error = function(e) NULL
+    )
+    if (is.null(fit)) {
+      next
+    }
+    pred <- tryCatch(
+      kernlab::predict(fit, x_test[, keep, drop = FALSE]),
+      error = function(e) NULL
+    )
+    if (is.null(pred)) {
+      next
+    }
+    out[j] <- if (task == "classification") {
+      mean(as.character(pred) == as.character(y_test))
+    } else {
+      sqrt(mean((as.numeric(pred) - as.numeric(y_test))^2))
+    }
+  }
+  out
+}
+
+#' SVM-RFE ranking and subset-size selection
+#'
+#' Implements recursive feature elimination for a linear SVM (Guyon et al.,
+#' 2002): fit a linear SVM on the surviving features, rank them by the squared
+#' primal weight `w^2`, drop the lowest-ranked feature (the lowest 10 percent
+#' while more than 50 features remain, to keep wide problems tractable), and
+#' refit on the reduced set until a single feature is left. Reversing the
+#' elimination order gives the full ranking, so rank 1 is the feature
+#' eliminated last.
+#'
+#' When `n_features` is `NULL` the subset size is chosen by a nested
+#' `nfolds`-fold cross-validation over a small ladder of candidate sizes.
+#' Inside every fold the predictors are standardized with that fold's training
+#' statistics, the whole elimination is re-run on the fold's training rows,
+#' and the top-`k` features of that fold-specific ranking are scored on the
+#' held-out rows for each candidate `k`. The size with the highest mean
+#' accuracy (classification) or lowest mean RMSE (regression) wins, ties going
+#' to the smaller size, and the final subset is the top of the ranking computed
+#' on all rows. The folds are drawn once and shared by every candidate size,
+#' so the comparison is paired, and drawing them consumes the RNG. Because the
+#' held-out rows never inform the ranking they score, the size scores are
+#' honest cross-validated estimates for the RFE procedure at each size. If no
+#' candidate size could be scored at all (every fold failed), the full feature
+#' set is kept.
+#'
+#' @param x Data frame or matrix of encoded (numeric) predictors. It is
+#'   centered and scaled internally.
+#' @param y Factor (classification) or numeric (regression) outcome.
+#' @param task "classification" or "regression".
+#' @param nfolds Number of folds for the subset-size search, clamped to at
+#'   least 2 and at most `length(y)`.
+#' @param n_features Optional whole number; when supplied the top
+#'   `n_features` ranked features are kept (capped at the number available)
+#'   and no size search is run.
+#' @param verbose Logical; report each elimination step.
+#' @return A list with `selected` (the retained features, most important
+#'   first), `ranking` (every feature, most to least important), `scores` (the
+#'   `w^2` criterion from the first, full-feature fit, in the original column
+#'   order), `sizes` and `size_scores` (the candidate sizes and their nested CV
+#'   scores) and `size_metric` ("accuracy" or "RMSE"). The last three are
+#'   `NULL`, `NULL`, and `NA_character_` when `n_features` was supplied and no
+#'   size search ran.
+#' @noRd
+svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
+                         verbose = FALSE) {
+  x_raw <- as.matrix(x)
+  x <- svm_center_scale(x_raw)
+  features <- colnames(x)
+  if (is.null(features) || length(features) == 0L) {
+    stop("No predictors available for SVM-RFE.", call. = FALSE)
+  }
+  p <- length(features)
+
+  if (!is.null(n_features)) {
+    n_features <- assert_count(n_features, "n_features")
+    n_features <- min(n_features, p)
+  }
+
+  full <- svm_rfe_eliminate(x, y, task, verbose = verbose)
+  ranking <- full$ranking
+  criterion <- full$criterion
 
   sizes <- NULL
   size_scores <- NULL
@@ -533,14 +581,15 @@ svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
     k_folds <- max(2L, min(as.integer(nfolds), length(y)))
     folds <- caret::createFolds(y, k = k_folds, list = TRUE,
                                 returnTrain = FALSE)
-    size_scores <- vapply(
-      sizes,
-      function(k) {
-        svm_rfe_cv_score(x[, utils::head(ranking, k), drop = FALSE], y, task,
-                         folds)
-      },
-      numeric(1L)
+    fold_scores <- vapply(
+      folds,
+      function(idx) svm_rfe_fold_scores(x_raw, y, task, sizes, idx),
+      numeric(length(sizes))
     )
+    fold_scores <- matrix(fold_scores, nrow = length(sizes))
+    size_scores <- apply(fold_scores, 1L, function(v) {
+      if (all(is.na(v))) NA_real_ else mean(v, na.rm = TRUE)
+    })
     names(size_scores) <- as.character(sizes)
     size_metric <- if (task == "classification") "accuracy" else "RMSE"
 
@@ -762,31 +811,6 @@ svm_performance <- function(predictions, actuals, task) {
   }
 }
 
-#' Start a parallel backend with an explicit worker count
-#'
-#' @param n_cores Integer >= 2 (already resolved via resolve_cores()).
-#' @return The cluster object.
-#' @noRd
-svm_setup_parallel <- function(n_cores) {
-  cl <- parallel::makeCluster(n_cores)
-  doParallel::registerDoParallel(cl)
-  cl
-}
-
-#' Stop a parallel backend started by svm_setup_parallel()
-#'
-#' @param cl Cluster object, or NULL for a no-op.
-#' @return Invisibly NULL.
-#' @noRd
-svm_stop_parallel <- function(cl) {
-  if (!is.null(cl)) {
-    parallel::stopCluster(cl)
-    foreach::registerDoSEQ()
-    doParallel::stopImplicitCluster()
-  }
-  invisible(NULL)
-}
-
 #' Train and evaluate an SVM, with optional SVM-RFE feature selection
 #'
 #' Trains an SVM classifier or regressor using \pkg{caret} (with the
@@ -811,7 +835,7 @@ svm_stop_parallel <- function(cl) {
 #'     features are ranked by the squared primal weight \code{w^2} (recovered
 #'     from the fit's support vectors and coefficients, summed over the
 #'     pairwise problems of a multi-class fit), the lowest-ranked feature is
-#'     dropped (the lowest 10\% while more than 50 features remain), and the
+#'     dropped (the lowest 10 percent while more than 50 features remain), and the
 #'     SVM is \emph{refitted} on the reduced set until one feature is left.
 #'     Reversing the elimination order gives the ranking, so rank 1 is the
 #'     feature eliminated last. SVM-RFE requires \code{kernel = "linear"},
@@ -824,19 +848,27 @@ svm_stop_parallel <- function(cl) {
 #'     exactly that many (the top of the ranking). Otherwise a short ladder of
 #'     candidate sizes -- the powers of two up to the number of features, plus
 #'     the full size, trimmed to at most six entries but always including 1
-#'     and the full size -- is scored by \code{nfolds}-fold cross-validation
-#'     with the same linear SVM, on folds shared by every candidate size. The
-#'     winner is the size with the highest mean accuracy (classification) or
-#'     the lowest mean RMSE (regression), ties going to the smaller size; if
-#'     no size could be scored, all features are kept.
+#'     and the full size -- is scored by nested \code{nfolds}-fold
+#'     cross-validation with the same linear SVM, on folds shared by every
+#'     candidate size. Inside each fold the standardization and the whole
+#'     elimination are re-run on that fold's training rows only, and the top
+#'     features of that fold's own ranking are scored on its held-out rows, so
+#'     the size search is free of the selection bias of scoring a ranking that
+#'     has already seen the held-out rows. The winner is the size with the
+#'     highest mean accuracy (classification) or the lowest mean RMSE
+#'     (regression), ties going to the smaller size, and the kept features are
+#'     the top of the ranking computed on the whole training split; if no size
+#'     could be scored, all features are kept.
 #'   \item \code{select_method = "rf_rfe"} keeps the older random-forest
 #'     screening (\code{caret::rfFuncs}) and works with every kernel. It runs
 #'     its own 10-fold cross-validation over subset sizes 1 to p, independent
 #'     of \code{nfolds}. If \code{rfe()} fails or selects nothing, a plain
-#'     random forest is fitted and its most important features are used
-#'     instead, with a warning -- and because the fallback keeps exactly
-#'     \code{n_features} of them, a failure with \code{n_features = NULL}
-#'     leaves a single feature.
+#'     random forest is fitted instead, with a warning, and every predictor
+#'     with a positive mean decrease in node impurity is kept -- or, if fewer
+#'     than \code{n_features} (1 when \code{n_features = NULL}) qualify, the
+#'     top \code{n_features} by that importance. With \code{n_features}
+#'     supplied the result is then truncated to \code{n_features}, so the
+#'     fallback keeps exactly that many (capped at the number available).
 #'   \item Selection always runs on the training split only, so the test set
 #'     never informs which features survive.
 #'   \item Class-imbalance handling (\code{class_imbalance = TRUE},
@@ -885,14 +917,16 @@ svm_stop_parallel <- function(cl) {
 #'   number of encoded predictors. For \code{"svm_rfe"} the top
 #'   \code{n_features} ranked features are kept and the cross-validated size
 #'   search is skipped; for \code{"rf_rfe"} it truncates the selection to its
-#'   first \code{n_features} entries and sets how many features the
-#'   random-forest fallback keeps. Ignored when
+#'   first \code{n_features} entries and is the minimum number of features
+#'   the random-forest fallback keeps (see Details). Ignored when
 #'   \code{feature_select = FALSE}. Default \code{NULL} (the size is chosen
 #'   automatically).
 #' @param class_imbalance Logical; if \code{TRUE} and the task is
 #'   classification, up-samples classes within CV resampling (default
 #'   \code{FALSE}).
-#' @param seed Optional seed, applied locally for the duration of the call
+#' @param seed Optional whole-number seed (within the R integer range;
+#'   fractional values are an error, not truncated), applied locally for the
+#'   duration of the call
 #'   and restored afterwards; also used to set reproducible RNG streams on
 #'   parallel workers when \code{n_cores > 1}. Default \code{NULL} (never
 #'   seeds by default).
@@ -1006,6 +1040,9 @@ fs_svm <- function(data,
   if (!is.null(n_features)) {
     n_features <- assert_count(n_features, "n_features")
   }
+  if (!is.null(seed)) {
+    assert_count(seed, "seed", lower = -.Machine$integer.max)
+  }
 
   # SVM-RFE ranks features by the primal weight vector, which only exists for
   # a linear kernel.
@@ -1094,14 +1131,10 @@ fs_svm <- function(data,
 
   # Optional parallel backend, created early so feature selection and
   # training can share it, and always cleaned up on exit.
-  cl <- NULL
+  # local_parallel_cluster() schedules teardown on this frame before it
+  # registers the backend, and restores the caller's previous backend.
   if (use_parallel) {
-    fs_require(c("doParallel", "foreach"), "parallel SVM training")
-    cl <- svm_setup_parallel(n_cores)
-    on.exit(svm_stop_parallel(cl), add = TRUE)
-    if (!is.null(seed)) {
-      parallel::clusterSetRNGStream(cl, iseed = as.integer(seed))
-    }
+    local_parallel_cluster(n_cores, seed = seed)
   }
 
   # Dummy-encode predictors (fitted on the training split only).

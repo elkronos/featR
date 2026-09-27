@@ -47,7 +47,10 @@ svd_coerce_matrix <- function(x) {
 #'
 #' When scaling (dividing by column standard deviations) is requested,
 #' zero-variance columns are rejected up front with an actionable error
-#' instead of surfacing later as a generic non-finite-values failure.
+#' instead of surfacing later as a generic non-finite-values failure. A column
+#' counts as zero-variance when its standard deviation is at most
+#' `1000 * .Machine$double.eps` times its largest absolute value, so the test
+#' does not depend on the column's units.
 #'
 #' @param mat Numeric matrix.
 #' @param scale_input TRUE (center and scale), "center", "scale", or FALSE.
@@ -79,7 +82,13 @@ svd_scale_matrix <- function(mat, scale_input = TRUE, verbose = FALSE) {
 
   if (do_scale) {
     sds <- apply(mat, 2L, stats::sd)
-    zero_var <- which(!is.finite(sds) | sds < .Machine$double.eps^0.5)
+    # The tolerance is relative to each column's magnitude: an absolute cut-off
+    # would reject legitimately small-scale columns (values around 1e-9 have
+    # standard deviations far below sqrt(eps)) while accepting constant
+    # columns whose round-off leaves a tiny non-zero sd.
+    max_abs <- apply(abs(mat), 2L, max)
+    zero_var <- which(!is.finite(sds) |
+                        sds <= 1000 * .Machine$double.eps * max_abs)
     if (length(zero_var) > 0L) {
       offenders <- colnames(mat)[zero_var]
       if (is.null(colnames(mat))) {
@@ -179,6 +188,8 @@ svd_truncate <- function(svd_result, n_singular_values) {
 #' \code{svd_method = "approx"} outright when \code{n_singular_values} equals
 #' \code{min(dim(x))} is not an error: it falls back to the exact solver with
 #' a message, because \code{RSpectra::svds()} cannot return the full set.
+#' If \code{RSpectra::svds()} converges on fewer than the requested number of
+#' singular values, the call warns and recomputes them with the exact solver.
 #'
 #' Centering and scaling, when requested, happen \emph{before} the
 #' decomposition, so the returned triplets factorize the transformed matrix
@@ -198,9 +209,11 @@ svd_truncate <- function(svd_result, n_singular_values) {
 #'   matrix alone), \code{"center"} (subtract column means only), or
 #'   \code{"scale"} (divide only). Any other value is an error. The two
 #'   dividing forms (\code{TRUE} and \code{"scale"}) require every column to
-#'   have non-zero variance, and offending columns are reported by name (or by
-#'   position when the matrix has no column names); \code{"center"} has no
-#'   such requirement. Note that \code{"scale"} inherits
+#'   have non-zero variance (a standard deviation above
+#'   \code{1000 * .Machine$double.eps}, about 2e-13, times the column's
+#'   largest absolute value, so the check is unit-free), and offending columns
+#'   are reported by name (or by position when the matrix has no column
+#'   names); \code{"center"} has no such requirement. Note that \code{"scale"} inherits
 #'   \code{base::scale()}'s semantics: with no centering it divides by the
 #'   root mean square, not by the standard deviation.
 #' @param svd_method \code{"auto"} (default), \code{"exact"}, or
@@ -347,6 +360,23 @@ fs_svd <- function(x,
   fs_require("RSpectra", "approximate SVD")
   if (verbose) message("Computing approximate SVD via RSpectra::svds()...")
   s <- do.call(RSpectra::svds, c(list(A = xs, k = k), approx_args))
+
+  # svds() only warns when fewer than k triplets converge and then returns
+  # just those (possibly none), which would break the length-k contract.
+  if (length(s$d) < k) {
+    warning(
+      sprintf(
+        paste0(
+          "RSpectra::svds() converged on only %d of %d singular values; ",
+          "falling back to exact SVD. Loosen 'tol' or raise 'maxitr' in ",
+          "approx_args$opts, or use svd_method = 'exact'."
+        ),
+        length(s$d), k
+      ),
+      call. = FALSE
+    )
+    return(svd_truncate(svd(xs), k))
+  }
 
   # Ensure descending order of singular values.
   ord <- order(s$d, decreasing = TRUE)

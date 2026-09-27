@@ -105,13 +105,29 @@ fs_result_n_considered <- function(x) {
 #'
 #' Most featR methods report an importance or an association strength, where
 #' larger is better. `fs_chi()` reports adjusted p-values, where smaller is
-#' better, so the ranked display has to invert for it.
+#' better, so the ranked display has to invert for it. The threshold filters
+#' (`fs_unsupervised()`, `fs_supervised()`) record which side of the threshold
+#' they kept in `details$direction` and `details$action`; when the kept side is
+#' the low one (`direction = "below"` with `action = "keep"`, or `"above"` with
+#' `"remove"`, e.g. keeping features with little missingness) smaller is
+#' better too, otherwise the kept features would be ranked last and truncated
+#' out of the table.
 #'
 #' @param x An `fs_result` object.
 #' @return `TRUE` when smaller scores are better.
 #' @noRd
 fs_result_lower_is_better <- function(x) {
-  identical(x$method, "chi")
+  if (identical(x$method, "chi")) {
+    return(TRUE)
+  }
+  direction <- x$details$direction
+  action <- x$details$action
+  if (is.character(direction) && length(direction) == 1L &&
+      is.character(action) && length(action) == 1L) {
+    return((direction == "below" && action == "keep") ||
+             (direction == "above" && action == "remove"))
+  }
+  FALSE
 }
 
 #' Scores as a named numeric vector, when possible
@@ -244,7 +260,12 @@ print.fs_result <- function(x, n = 10L, ...) {
 #' means a stronger feature, and rows are ordered by decreasing absolute score
 #' so that signed scores such as regression coefficients sort sensibly. For
 #' methods that score by p-value, where smaller is better, rows are ordered
-#' ascending instead, so the most significant feature is listed first.
+#' ascending instead, so the most significant feature is listed first. The
+#' same ascending order is used for the threshold filters
+#' (\code{\link{fs_unsupervised}}, \code{\link{fs_supervised}}) when they kept
+#' the low side of the threshold (\code{direction = "below"} with
+#' \code{action = "keep"}, or \code{"above"} with \code{"remove"}), so the
+#' kept features come first.
 #'
 #' @param object An `fs_result` object.
 #' @param n Maximum number of scored features to show (default 20).

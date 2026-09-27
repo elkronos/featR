@@ -282,3 +282,17 @@ test_that("correction_applied reports what chisq.test actually did", {
   row3 <- out3$details$results[out3$details$results$feature == "f", ]
   expect_false(row3$correction_applied)
 })
+
+test_that("duplicated column names are rejected, not silently mis-tested", {
+  # REGRESSION: columns were looked up by name, so a duplicated factor name
+  # tested its first copy twice and never the second, and a duplicated
+  # character name failed inside data.table with an unrelated message.
+  d_fac <- data.frame(a = factor(rep(c("x", "y"), 10)),
+                      a = factor(rep(c("p", "q"), each = 10)),
+                      t = factor(rep(c("p", "q"), each = 10)),
+                      check.names = FALSE)
+  expect_error(fs_chi(d_fac, "t"), "unique column names; duplicated: a")
+  d_chr <- d_fac
+  d_chr[] <- lapply(d_chr, as.character)
+  expect_error(fs_chi(d_chr, "t"), "unique column names; duplicated: a")
+})

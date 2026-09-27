@@ -22,14 +22,17 @@ pca_check_data <- function(data) {
   invisible(TRUE)
 }
 
-#' Names of character/factor columns (label candidates, excluded from PCA)
+#' Names of non-numeric columns (label candidates, excluded from PCA)
+#'
+#' Character and factor columns, but also logical, Date, and any other
+#' non-numeric columns: none of them can enter the decomposition, so they are
+#' carried as labels rather than silently dropped.
 #'
 #' @param data A data.frame or data.table.
 #' @return Character vector of column names.
 #' @noRd
 pca_label_cols <- function(data) {
-  names(data)[vapply(data, function(col) is.character(col) || is.factor(col),
-                     logical(1L))]
+  names(data)[!vapply(data, is.numeric, logical(1L))]
 }
 
 #' Compute PCA scores and loadings with automatic engine selection
@@ -84,10 +87,15 @@ pca_compute <- function(data,
          call. = FALSE)
   }
 
-  # Remove zero-variance numeric columns (avoids scaling errors).
+  # Remove zero-variance numeric columns (avoids scaling errors). The test is
+  # relative to each column's magnitude: a column that is constant up to
+  # floating-point round-off (e.g. 0.3 next to 0.1 + 0.2) has a tiny non-zero
+  # sd, and scaling it to unit variance would hand pure round-off noise a full
+  # share of the decomposition.
   sds <- vapply(Xdt, stats::sd, numeric(1L))
   sds[!is.finite(sds)] <- 0
-  keep_cols <- names(sds)[sds > 0]
+  max_abs <- vapply(Xdt, function(col) max(abs(col)), numeric(1L))
+  keep_cols <- names(sds)[sds > 1000 * .Machine$double.eps * max_abs]
   drop_cols <- setdiff(names(Xdt), keep_cols)
 
   if (length(keep_cols) == 0L) {
@@ -335,11 +343,16 @@ pca_plot <- function(pca_result, label_col) {
 #'
 #' Answers "how much of the spread in these numeric columns lives in a handful
 #' of directions, and which columns drive them?" Runs a PCA on the numeric
-#' columns of `data`. Character and factor columns are excluded from the
-#' feature set and kept as label candidates; an explicitly supplied `label_col`
-#' (numeric or not) is likewise excluded from the features and only used for
-#' labeling. Rows with missing values in the numeric columns and zero-variance
-#' columns are dropped before the decomposition.
+#' columns of `data`. Non-numeric columns (character, factor, logical, Date,
+#' ...) are excluded from the feature set and kept as label candidates; an
+#' explicitly supplied `label_col` (numeric or not) is likewise excluded from
+#' the features and only used for labeling. Rows with missing values in the numeric columns and zero-variance
+#' columns are dropped before the decomposition; a column counts as
+#' zero-variance when its standard deviation is at most
+#' `1000 * .Machine$double.eps` (about 2e-13) times its largest absolute
+#' value, so a column that is constant up to floating-point round-off is
+#' dropped too, while small-unit or large-offset columns (timestamps, say) are
+#' kept.
 #'
 #' @details
 #' The caveat is what PCA is. This is unsupervised dimensionality reduction,
@@ -416,7 +429,7 @@ pca_plot <- function(pca_result, label_col) {
 #'     of total variance carried by each retained PC (see Details, especially
 #'     for the large-data engine).
 #'   \item `pca_df`: data.table of the scores with the label columns (every
-#'     character/factor column, plus `label_col`) bound alongside, restricted
+#'     non-numeric column, plus `label_col`) bound alongside, restricted
 #'     to the rows that were kept.
 #'   \item `meta`: list with `numeric_cols` (the features actually
 #'     decomposed), `rows_kept` (logical vector over the rows of `data`),

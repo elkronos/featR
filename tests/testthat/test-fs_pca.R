@@ -218,6 +218,32 @@ test_that("zero-variance columns are dropped with a counted warning", {
   expect_false("const" %in% rownames(res$pc_loadings))
 })
 
+test_that("a column constant up to round-off is dropped, a small-scale one kept", {
+  d <- pca_toy()
+  # 0.3 and 0.1 + 0.2 differ by one ulp: sd ~ 5e-17 but the column is constant.
+  # Scaled to unit variance it used to take a full share of the PCA.
+  d$const <- rep(c(0.3, 0.1 + 0.2), 6)
+  expect_gt(stats::sd(d$const), 0)
+  # a genuinely varying column in tiny units must survive
+  d$tiny <- d$x4 * 1e-12 + c(0, 1e-12)
+  # and so must a large-offset column such as a timestamp in seconds
+  d$stamp <- 1.7e9 + d$x3
+
+  expect_warning(res <- fs_pca(d, num_pc = 2),
+                 "Removed 1 zero-variance column\\(s\\): const")
+  expect_identical(res$meta$numeric_cols, c("x1", "x2", "x3", "x4", "tiny", "stamp"))
+})
+
+test_that("non-numeric columns other than character/factor are kept as labels", {
+  d <- pca_toy()
+  d$flag <- rep(c(TRUE, FALSE), 6)
+  d$when <- as.Date("2020-01-01") + 0:11
+  res <- fs_pca(d, num_pc = 2)
+  expect_identical(res$meta$numeric_cols, c("x1", "x2", "x3", "x4"))
+  expect_identical(names(res$pca_df), c("PC1", "PC2", "flag", "when"))
+  expect_identical(res$pca_df$flag, d$flag)
+})
+
 test_that("fs_pca validates data, num_pc and label_col", {
   d <- pca_toy()
 

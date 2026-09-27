@@ -58,6 +58,38 @@ test_that("backtick wraps only non-syntactic names", {
   expect_identical(backtick(c("ok", "not ok")), c("ok", "`not ok`"))
 })
 
+test_that("backtick escapes backslashes and backticks so the symbol round-trips", {
+  # Unescaped, "a\\nb" parsed as a symbol containing a newline (a different
+  # column) and "a`b" did not parse at all.
+  nms <- c("a`b", "a\\nb", "x\\", "if", "1x", "a b", "ok")
+  for (nm in nms) {
+    f <- stats::as.formula(paste("y ~", backtick(nm)))
+    expect_identical(all.vars(f)[2L], nm)
+  }
+  d <- data.frame(y = c(1, 3, 2, 5), x = c(1, 2, 3, 4))
+  names(d)[2L] <- "a`b"
+  fit <- stats::lm(stats::as.formula(paste("y ~", backtick("a`b"))), data = d)
+  expect_length(stats::coef(fit), 2L)
+
+  expect_error(backtick(c("a", "")), "non-empty and not NA")
+})
+
+test_that("local_seed rejects fractional and out-of-range seeds", {
+  f <- function(s) {
+    local_seed(s)
+    stats::runif(1)
+  }
+  # previously 1.9 was silently truncated to 1, and 2^31 became NA with a
+  # coercion warning followed by set.seed()'s "not a valid integer" error
+  expect_error(f(1.9), "'seed' must be a whole number")
+  expect_error(f(2^31), "'seed' must be at most")
+  expect_error(f("a"), "single finite number")
+  # negative seeds and the integer extremes are valid
+  expect_identical(f(-5), f(-5))
+  expect_no_warning(f(.Machine$integer.max))
+  expect_no_warning(f(-.Machine$integer.max))
+})
+
 # The shared fs_result container from R/fs-result.R.
 
 test_that("new_fs_result rejects inputs that print() and summary() cannot show", {
@@ -127,6 +159,37 @@ test_that("summary() ranks p-value scores ascending and others descending", {
   imp_out <- utils::capture.output(summary(imp))
   imp_rows <- grep("^\\s*(small|big|mid)\\s", imp_out, value = TRUE)
   expect_match(imp_rows[1L], "big")
+})
+
+test_that("summary() ranks filters that kept the low side ascending", {
+  mk <- function(direction, action) {
+    featR:::new_fs_result(
+      selected = "lo", method = "unsupervised_missing_prop",
+      scores = c(hi = 0.9, lo = 0.01, mid = 0.5),
+      details = list(direction = direction, action = action)
+    )
+  }
+  expect_true(featR:::fs_result_lower_is_better(mk("below", "keep")))
+  expect_true(featR:::fs_result_lower_is_better(mk("above", "remove")))
+  expect_false(featR:::fs_result_lower_is_better(mk("above", "keep")))
+  expect_false(featR:::fs_result_lower_is_better(mk("below", "remove")))
+
+  # the kept feature must lead the table, not trail it (and so survive
+  # truncation to the first n rows)
+  out <- utils::capture.output(summary(mk("below", "keep"), n = 1))
+  rows <- grep("^\\s*(hi|lo|mid)\\s", out, value = TRUE)
+  expect_length(rows, 1L)
+  expect_match(rows[1L], "lo")
+
+  # end to end: keeping the least-missing columns
+  d <- data.frame(a = c(1, 2, 3, 4, 5), b = c(NA, NA, NA, 4, 5),
+                  c = c(1, NA, 3, 4, 5))
+  res <- fs_unsupervised(d, method = "missing_prop", threshold = 0.3,
+                         direction = "below", action = "keep")
+  out <- utils::capture.output(summary(res))
+  rows <- grep("^\\s*(a|b|c)\\s", out, value = TRUE)
+  expect_match(rows[1L], "^\\s*a\\s")
+  expect_match(rows[3L], "^\\s*b\\s")
 })
 
 # Shared filter machinery from R/utils-filter.R, behind the `output` argument

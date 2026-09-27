@@ -70,6 +70,13 @@ ig_bins <- function(x) {
 #' A vector with one unique non-NA value yields a single-level factor
 #' (NA positions stay NA).
 #'
+#' Infinite values cannot be binned by `cut(breaks = <count>)`, which needs a
+#' finite range. The bin count and equal-width breaks are therefore computed
+#' from the finite values alone, and the outermost breaks are widened to
+#' `-Inf` / `Inf`, so `-Inf` and `Inf` fall into the lowest and highest bins.
+#' A column with fewer than two distinct finite values is kept categorical
+#' instead (for example `c(1, 1, Inf)` has two levels).
+#'
 #' @param x Numeric vector.
 #' @param bins Optional integer; when `NULL`, `ig_bins()` decides.
 #' @return Ordered factor of bin membership.
@@ -79,11 +86,29 @@ ig_discretize <- function(x, bins = NULL) {
   if (length(ux) <= 1L) {
     return(factor(ifelse(is.na(x), NA, ux[1L]), ordered = TRUE))
   }
+  if (all(is.finite(ux))) {
+    if (is.null(bins)) {
+      bins <- ig_bins(x)
+    }
+    bins <- max(2L, as.integer(bins))
+    return(cut(x, breaks = bins, include.lowest = TRUE,
+               ordered_result = TRUE))
+  }
+
+  xf <- x[is.finite(x)]
+  if (length(unique(xf)) < 2L) {
+    return(factor(x, ordered = TRUE))
+  }
   if (is.null(bins)) {
-    bins <- ig_bins(x)
+    bins <- ig_bins(xf)
   }
   bins <- max(2L, as.integer(bins))
-  cut(x, breaks = bins, include.lowest = TRUE, ordered_result = TRUE)
+  # Same equal-width breaks cut() would build for the finite values ...
+  rx <- range(xf)
+  breaks <- seq.int(rx[1L], rx[2L], length.out = bins + 1L)
+  # ... with the outer edges opened up to hold -Inf and Inf.
+  breaks[c(1L, bins + 1L)] <- c(-Inf, Inf)
+  cut(x, breaks = breaks, include.lowest = TRUE, ordered_result = TRUE)
 }
 
 #' Is a column Date or POSIXt?
@@ -242,11 +267,16 @@ ig_score_one <- function(x, y_cat, numeric_bins = NULL) {
     return(c(0, 0))
   }
 
-  ig <- ig_entropy(y) - ig_cond_entropy(x, y)
+  h_y <- ig_entropy(y)
+  ig <- h_y - ig_cond_entropy(x, y)
 
-  # Robustness clamp against tiny negatives / non-finites
-  if (!is.finite(ig)) ig <- 0
-  if (ig < 0) ig <- 0
+  # H(Y) and H(Y | X) are computed separately, so an exactly independent
+  # predictor comes out as a rounding residue of either sign (2.2e-16 bits,
+  # say) rather than 0. A positive residue would pass the default `score > 0`
+  # selection rule, so anything within rounding error of zero IS zero.
+  if (!is.finite(ig) || ig <= 1024 * .Machine$double.eps * max(1, h_y)) {
+    ig <- 0
+  }
 
   c(as.numeric(ig), as.numeric(ig_entropy(x)))
 }
@@ -282,6 +312,14 @@ ig_gain_ratio <- function(info_gain, split_entropy) {
 #' @noRd
 ig_single <- function(df, target, numeric_bins = NULL, remove_na = TRUE) {
   assert_target(df, target)
+  # Predictors are looked up by name, so a duplicated name would score its
+  # first copy and silently never look at the second. Reject instead.
+  dupes <- unique(names(df)[duplicated(names(df))])
+  if (length(dupes) > 0L) {
+    stop("Each data.frame must have unique column names; duplicated: ",
+         paste(utils::head(dupes, 5L), collapse = ", "),
+         if (length(dupes) > 5L) ", ..." else "", ".", call. = FALSE)
+  }
 
   # Expand date-like predictors, but never touch the target column.
   # Work on a plain data.frame afterwards: only column extraction and base
@@ -459,6 +497,7 @@ ig_collisions <- function(tab, score_col) {
 #'
 #' @param data A data.frame (a data.table is accepted and is copied, never
 #'   modified in place), or a list of data.frames each containing `target`.
+#'   Column names must be unique within each data.frame.
 #' @param target Character. Name of the target column.
 #' @param numeric_bins Optional whole number >= 1 (values below 2 are clamped
 #'   to 2) overriding the automatic bin count for numeric predictors and for a
@@ -470,7 +509,9 @@ ig_collisions <- function(tab, score_col) {
 #'   the `top_n` highest-scoring features (fewer if fewer were scored). This
 #'   is a rank cut, not a score floor: a zero-scoring feature is selected if
 #'   the ranking reaches it. When `NULL` (default), `selected` instead holds
-#'   every feature whose score is strictly greater than 0.
+#'   every feature whose score is strictly greater than 0. A gain within
+#'   floating-point rounding of zero (as an exactly independent predictor
+#'   produces) is reported as exactly 0, so it is not selected.
 #' @param remove_na Logical. If `TRUE` (default), rows with NA in the target
 #'   are removed up front. See Details for its narrow practical effect.
 #' @param verbose Logical. If `TRUE`, report how many features were scored,

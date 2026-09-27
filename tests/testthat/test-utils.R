@@ -394,3 +394,27 @@ test_that("local_parallel_cluster falls back to sequential when nothing was regi
   expect_error(f(), "boom")
   expect_equal(foreach::getDoParName(), "doSEQ")
 })
+
+test_that("summary() ranks negative importance below positive importance", {
+  res <- new_fs_result(
+    selected = "good",
+    scores = c(good = 1.0, worse_than_noise = -1.3, weak = 0.2),
+    method = "randomforest"
+  )
+  out <- capture.output(summary(res))
+  pos <- vapply(c("good", "weak", "worse_than_noise"),
+                function(f) grep(paste0("^ *", f, " "), out)[1L], integer(1L))
+  expect_true(all(diff(pos) > 0))
+})
+
+test_that("summary() ranks lasso's signed coefficients by magnitude", {
+  res <- new_fs_result(
+    selected = c("neg", "pos"),
+    scores = c(pos = 0.5, neg = -2, zero = 0),
+    method = "lasso"
+  )
+  out <- capture.output(summary(res))
+  pos <- vapply(c("neg", "pos", "zero"),
+                function(f) grep(paste0("^ *", f, " "), out)[1L], integer(1L))
+  expect_true(all(diff(pos) > 0))
+})

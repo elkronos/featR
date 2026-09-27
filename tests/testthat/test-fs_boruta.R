@@ -310,3 +310,21 @@ test_that("fs_boruta prunes duplicated features via cutoff_cor", {
     expect_gte(res$scores[[kept]], res$scores[[pair_dropped]])
   }
 })
+
+test_that("fs_boruta grows its forests on a single thread", {
+  skip_if_not_installed("Boruta")
+  skip_on_cran()
+
+  # Regression test: Boruta's default importance sources (fru with
+  # threads = 0, ranger with num.threads = NULL) use every core unless told
+  # otherwise, contradicting featR's sequential default. Boruta forwards `...`
+  # to the importance source, where num.threads is honoured.
+  set.seed(515)
+  n <- 60
+  y <- factor(rep(c("a", "b"), each = n / 2))
+  d <- data.frame(y = y, x1 = as.numeric(y) + rnorm(n, sd = 0.3),
+                  n1 = rnorm(n))
+
+  res <- fs_boruta(d, "y", maxRuns = 12, cutoff_cor = NULL, seed = 1)
+  expect_identical(res$model$call$num.threads, 1L)
+})

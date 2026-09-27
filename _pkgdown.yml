@@ -2,8 +2,7 @@ url: https://elkronos.github.io/featR/
 
 template:
   bootstrap: 5
-  bslib:
-    bootswatch: flatly
+  bootswatch: flatly
 
 home:
   title: "featR: A Unified Toolkit for Feature Selection"

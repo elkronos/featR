@@ -46,9 +46,10 @@ pruned. Set NULL to skip this step. Default 0.7.}
 and return only confirmed attributes. If FALSE, tentative attributes are
 included in the selected set. Default TRUE.}
 
-\item{seed}{Optional integer for reproducibility. Applied locally: the
-previous RNG state is restored when the function exits. Default NULL
-(the RNG is never seeded unless requested).}
+\item{seed}{Optional single whole number (within the range of an R integer)
+for reproducibility; fractional or out-of-range values are an error.
+Applied locally: the previous RNG state is restored when the function
+exits. Default NULL (the RNG is never seeded unless requested).}
 
 \item{verbose}{Logical; if TRUE, report progress and name any features
 dropped by correlation pruning. This maps to Boruta's \code{doTrace = 1}
@@ -93,13 +94,23 @@ feature that beats the best shadow often enough to be unlikely by chance.
 Redundant-but-informative features are therefore all confirmed. That makes
 it a good fit for understanding a dataset, and a poor fit when you need a
 compact model. It also costs many forest fits, and the outcome varies from
-run to run unless \code{seed} is supplied.
+run to run unless \code{seed} is supplied. The forests are grown on a single
+thread (\code{num.threads = 1} is passed to Boruta's importance source), in line
+with featR's sequential default.
 
 The \code{cutoff_cor} pruning and the \code{cutoff_features} cap are featR additions,
 applied to Boruta's output in that order; both rank features by median
 Boruta importance. Features still undecided when \code{maxRuns} is reached stay
 Tentative; \code{resolve_tentative = TRUE} settles them with the
 \code{Boruta::TentativeRoughFix()} heuristic rather than with further evidence.
+That heuristic confirms a tentative feature whenever its median importance
+beats the median of the best shadow, a weaker test than the one that
+confirms features during the run, so it trades false negatives for false
+positives. In a simulation of 20 data sets with one real predictor and
+three pure-noise predictors (150 rows, 100 runs), Boruta alone confirmed
+5 percent of the noise predictors and 8.3 percent after the rough fix. Use
+\code{resolve_tentative = FALSE} and inspect \code{details$decisions} when false
+positives are costly, or raise \code{maxRuns} so fewer features stay tentative.
 }
 \examples{
 \donttest{

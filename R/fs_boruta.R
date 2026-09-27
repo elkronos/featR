@@ -275,6 +275,14 @@ boruta_prune_correlated <- function(predictors,
 #' Boruta importance. Features still undecided when `maxRuns` is reached stay
 #' Tentative; `resolve_tentative = TRUE` settles them with the
 #' `Boruta::TentativeRoughFix()` heuristic rather than with further evidence.
+#' That heuristic confirms a tentative feature whenever its median importance
+#' beats the median of the best shadow, a weaker test than the one that
+#' confirms features during the run, so it trades false negatives for false
+#' positives. In a simulation of 20 data sets with one real predictor and
+#' three pure-noise predictors (150 rows, 100 runs), Boruta alone confirmed
+#' 5 percent of the noise predictors and 8.3 percent after the rough fix. Use
+#' `resolve_tentative = FALSE` and inspect `details$decisions` when false
+#' positives are costly, or raise `maxRuns` so fewer features stay tentative.
 #'
 #' @param data A data frame (or data-frame-like object, or matrix). Predictor
 #'   columns may be numeric, factor, character, logical, Date or POSIXt;

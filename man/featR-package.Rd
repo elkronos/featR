@@ -98,17 +98,13 @@ optional approximate solver).}
 Useful links:
 \itemize{
   \item \url{https://github.com/elkronos/featR}
+  \item \url{https://elkronos.github.io/featR/}
   \item Report bugs at \url{https://github.com/elkronos/featR/issues}
 }
 
 }
 \author{
 \strong{Maintainer}: Justin Chase \email{jchase.msu@gmail.com} [copyright holder]
-
-Authors:
-\itemize{
-  \item Justin Chase \email{jchase.msu@gmail.com} [copyright holder]
-}
 
 }
 \keyword{internal}

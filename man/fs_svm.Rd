@@ -59,8 +59,8 @@ actually run. An unrecognized value is always an error.}
 number of encoded predictors. For \code{"svm_rfe"} the top
 \code{n_features} ranked features are kept and the cross-validated size
 search is skipped; for \code{"rf_rfe"} it truncates the selection to its
-first \code{n_features} entries and sets how many features the
-random-forest fallback keeps. Ignored when
+first \code{n_features} entries and is the minimum number of features
+the random-forest fallback keeps (see Details). Ignored when
 \code{feature_select = FALSE}. Default \code{NULL} (the size is chosen
 automatically).}
 
@@ -68,7 +68,9 @@ automatically).}
 classification, up-samples classes within CV resampling (default
 \code{FALSE}).}
 
-\item{seed}{Optional seed, applied locally for the duration of the call
+\item{seed}{Optional whole-number seed (within the R integer range;
+fractional values are an error, not truncated), applied locally for the
+duration of the call
 and restored afterwards; also used to set reproducible RNG streams on
 parallel workers when \code{n_cores > 1}. Default \code{NULL} (never
 seeds by default).}
@@ -140,7 +142,7 @@ SVM is fitted on the centered and scaled encoded training matrix, the
 features are ranked by the squared primal weight \code{w^2} (recovered
 from the fit's support vectors and coefficients, summed over the
 pairwise problems of a multi-class fit), the lowest-ranked feature is
-dropped (the lowest 10\\% while more than 50 features remain), and the
+dropped (the lowest 10 percent while more than 50 features remain), and the
 SVM is \emph{refitted} on the reduced set until one feature is left.
 Reversing the elimination order gives the ranking, so rank 1 is the
 feature eliminated last. SVM-RFE requires \code{kernel = "linear"},
@@ -153,19 +155,27 @@ from the final model, which is tuned over \code{tune_grid}.
 exactly that many (the top of the ranking). Otherwise a short ladder of
 candidate sizes -- the powers of two up to the number of features, plus
 the full size, trimmed to at most six entries but always including 1
-and the full size -- is scored by \code{nfolds}-fold cross-validation
-with the same linear SVM, on folds shared by every candidate size. The
-winner is the size with the highest mean accuracy (classification) or
-the lowest mean RMSE (regression), ties going to the smaller size; if
-no size could be scored, all features are kept.
+and the full size -- is scored by nested \code{nfolds}-fold
+cross-validation with the same linear SVM, on folds shared by every
+candidate size. Inside each fold the standardization and the whole
+elimination are re-run on that fold's training rows only, and the top
+features of that fold's own ranking are scored on its held-out rows, so
+the size search is free of the selection bias of scoring a ranking that
+has already seen the held-out rows. The winner is the size with the
+highest mean accuracy (classification) or the lowest mean RMSE
+(regression), ties going to the smaller size, and the kept features are
+the top of the ranking computed on the whole training split; if no size
+could be scored, all features are kept.
 \item \code{select_method = "rf_rfe"} keeps the older random-forest
 screening (\code{caret::rfFuncs}) and works with every kernel. It runs
 its own 10-fold cross-validation over subset sizes 1 to p, independent
 of \code{nfolds}. If \code{rfe()} fails or selects nothing, a plain
-random forest is fitted and its most important features are used
-instead, with a warning -- and because the fallback keeps exactly
-\code{n_features} of them, a failure with \code{n_features = NULL}
-leaves a single feature.
+random forest is fitted instead, with a warning, and every predictor
+with a positive mean decrease in node impurity is kept -- or, if fewer
+than \code{n_features} (1 when \code{n_features = NULL}) qualify, the
+top \code{n_features} by that importance. With \code{n_features}
+supplied the result is then truncated to \code{n_features}, so the
+fallback keeps exactly that many (capped at the number available).
 \item Selection always runs on the training split only, so the test set
 never informs which features survive.
 \item Class-imbalance handling (\code{class_imbalance = TRUE},

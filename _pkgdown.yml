@@ -1,0 +1,87 @@
+url: https://elkronos.github.io/featR/
+
+template:
+  bootstrap: 5
+  bslib:
+    bootswatch: flatly
+
+home:
+  title: "featR: A Unified Toolkit for Feature Selection"
+  description: >
+    Filter, wrapper, embedded, and dimensionality-reduction methods for
+    choosing predictors in R, behind one calling convention and one return
+    type.
+
+navbar:
+  structure:
+    left: [intro, reference, articles, news]
+    right: [search, github]
+
+articles:
+  - title: Start here
+    navbar: ~
+    contents:
+      - featR
+      - articles/fs-result
+      - articles/choosing-a-method
+  - title: Method guides
+    navbar: Method guides
+    contents:
+      - articles/filters
+      - articles/regularization
+      - articles/wrappers
+      - articles/dimensionality-reduction
+  - title: Doing it honestly
+    navbar: Doing it honestly
+    contents:
+      - articles/validation-and-leakage
+      - articles/reproducibility
+
+reference:
+  - title: Working with results
+    desc: >
+      Every selection function returns an `fs_result`. These are its
+      accessor and display methods.
+    contents:
+      - selected
+      - print.fs_result
+      - summary.fs_result
+  - title: Filters
+    desc: >
+      Score each feature without fitting a predictive model. Cheap, and
+      suitable for a first cut on wide data, but they judge features one at a
+      time.
+    contents:
+      - fs_supervised
+      - fs_unsupervised
+      - fs_chi
+      - fs_infogain
+      - fs_correlation
+  - title: Regularization and embedded importance
+    desc: >
+      One model fit whose own structure names the survivors.
+    contents:
+      - fs_lasso
+      - fs_elastic
+      - fs_randomforest
+      - fs_mars
+  - title: Wrappers
+    desc: >
+      Refit a model over candidate subsets. The most expensive family, and the
+      one most closely tied to the model you intend to use.
+    contents:
+      - fs_recursivefeature
+      - fs_svm
+      - fs_boruta
+      - fs_stepwise
+      - fs_bayes
+  - title: Dimensionality reduction
+    desc: >
+      Replace the original columns with new components instead of keeping a
+      subset. These return their own list rather than an `fs_result`.
+    contents:
+      - fs_pca
+      - fs_svd
+  - title: Package
+    contents:
+      - featR-package

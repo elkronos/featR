@@ -4,6 +4,8 @@ A unified R package of feature-selection methods: statistical filters, regulariz
 
 Heavy modeling engines (brms, caret, glmnet, randomForest, ...) are optional **Suggests**; each function checks for what it needs and tells you what to install.
 
+**Documentation:** <https://elkronos.github.io/featR/>. It has the function reference, a getting-started guide, method guides for every family, and articles on validation and reproducibility.
+
 ## Installation
 
 ```r
@@ -13,11 +15,13 @@ devtools::install_github("elkronos/featR")
 
 ## The convention
 
-Every selection function takes the data first and the target column second, and returns the same object:
+Every selection function takes the data first and the **name** of the target column second, and returns the same object:
 
 ```r
-fs_<method>(data, target, ..., seed = NULL, verbose = FALSE, n_cores = 1L)
+fs_<method>(data, target, <method options>, ...)
 ```
+
+Housekeeping arguments come last. Every function takes `verbose`. Functions that use randomness take `seed = NULL`, and functions that can run in parallel take `n_cores` and/or `parallel`. The [method guide](https://elkronos.github.io/featR/articles/choosing-a-method.html) has a table showing exactly which function accepts which. Functions with no outcome, `fs_unsupervised()`, `fs_correlation()`, `fs_pca()`, and `fs_svd()`, take no `target`.
 
 ```r
 library(featR)
@@ -27,7 +31,7 @@ res <- fs_lasso(mtcars, "mpg", nfolds = 5, seed = 1)
 res               # <fs_result> lasso (regression), with the selected features
 selected(res)     # character vector of chosen features
 res$scores        # per-feature scores, comparable within a method
-res$model         # the fitted model, when the method produced one and you asked for it
+res$model         # the fitted model (fs_lasso keeps it only with return_model = TRUE)
 res$details       # everything method-specific
 summary(res)      # ranked score table, selected features marked
 ```
@@ -35,11 +39,15 @@ summary(res)      # ranked score table, selected features marked
 Because the shape is shared, methods are interchangeable:
 
 ```r
-methods <- list(lasso = fs_lasso, boruta = fs_boruta, rfe = fs_recursivefeature)
-lapply(methods, function(f) selected(f(mtcars, "mpg", seed = 1)))
+runs <- list(
+  lasso    = fs_lasso(mtcars, "mpg", nfolds = 5, seed = 1),
+  stepwise = fs_stepwise(mtcars, "mpg"),
+  rfe      = fs_recursivefeature(mtcars, "mpg", sizes = c(2, 4), seed = 1)
+)
+lapply(runs, selected)
 ```
 
-Functions are **sequential by default** (parallelism is opt-in and capped), **never seed the RNG** unless you pass `seed`, and signal progress with suppressible `message()`s.
+Functions are **sequential by default** (parallelism is opt-in and capped at the detected core count), **never seed the RNG** unless you pass `seed` (and then restore your RNG state on exit), and signal progress with suppressible `message()`s.
 
 ## Functions
 

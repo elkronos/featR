@@ -354,3 +354,43 @@ test_that("filter_output shapes an empty selection for all seven out values", {
   expect_identical(lst$names, character(0))
   expect_identical(lst$scores, scores)
 })
+
+test_that("local_parallel_cluster restores the caller's own foreach backend", {
+  skip_if_not_installed("foreach")
+  skip_if_not_installed("doParallel")
+  skip_on_cran()
+
+  # A backend the caller registered themselves must survive a featR call:
+  # previously it was either forced to doSEQ or left pointing at featR's
+  # stopped cluster.
+  user_cl <- parallel::makeCluster(1L)
+  on.exit(parallel::stopCluster(user_cl), add = TRUE)
+  doParallel::registerDoParallel(user_cl)
+  on.exit(foreach::registerDoSEQ(), add = TRUE)
+
+  f <- function() {
+    local_parallel_cluster(2L)
+    foreach::getDoParWorkers()
+  }
+  expect_equal(f(), 2L)
+
+  `%dopar%` <- foreach::`%dopar%`
+  # The user's one-worker cluster is registered again, and it works.
+  expect_equal(foreach::getDoParWorkers(), 1L)
+  res <- foreach::foreach(i = 1:2, .combine = c) %dopar% (i * 2)
+  expect_equal(res, c(2, 4))
+})
+
+test_that("local_parallel_cluster falls back to sequential when nothing was registered", {
+  skip_if_not_installed("foreach")
+  skip_if_not_installed("doParallel")
+  skip_on_cran()
+
+  foreach::registerDoSEQ()
+  f <- function() {
+    local_parallel_cluster(2L)
+    stop("boom")
+  }
+  expect_error(f(), "boom")
+  expect_equal(foreach::getDoParName(), "doSEQ")
+})

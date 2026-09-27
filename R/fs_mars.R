@@ -747,12 +747,7 @@ fs_mars <- function(data,
 
   # ---- Optional parallel backend (opt-in, leak-proof) -----------------------
   if (n_cores > 1L) {
-    cluster <- parallel::makeCluster(n_cores)
-    on.exit({
-      try(parallel::stopCluster(cluster), silent = TRUE)
-      foreach::registerDoSEQ()
-    }, add = TRUE)
-    doParallel::registerDoParallel(cluster)
+    local_parallel_cluster(n_cores)
     mars_message(sprintf("Parallel backend registered with %d worker(s).",
                          n_cores), verbose)
   }

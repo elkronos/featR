@@ -248,31 +248,6 @@ lasso_sparse <- function(x) {
   Matrix::Matrix(x, sparse = TRUE)
 }
 
-#' Start and register a parallel cluster
-#'
-#' The caller is responsible for stopping the returned cluster (via
-#' `on.exit()` registered immediately after this call). If registration
-#' fails, the cluster is stopped here so it cannot leak.
-#'
-#' @param n_cores Integer > 1, already resolved via `resolve_cores()`.
-#' @param verbose Logical; whether to print a status message.
-#' @return The cluster object.
-#' @noRd
-lasso_cluster <- function(n_cores, verbose) {
-  cl <- parallel::makeCluster(n_cores)
-  tryCatch(
-    doParallel::registerDoParallel(cl),
-    error = function(e) {
-      try(parallel::stopCluster(cl), silent = TRUE)
-      stop(e)
-    }
-  )
-  if (verbose) {
-    message("Parallel cross-validation enabled with ", n_cores, " worker(s).")
-  }
-  cl
-}
-
 #' Fit a lasso/elastic-net model with cross-validation
 #'
 #' @param x_sparse A sparse matrix of predictors.
@@ -296,13 +271,10 @@ lasso_fit <- function(x_sparse, y, alpha, nfolds, standardize,
 
   parallel_flag <- FALSE
   if (use_parallel && n_cores > 1L) {
-    cl <- lasso_cluster(n_cores, verbose)
-    on.exit({
-      try(parallel::stopCluster(cl), silent = TRUE)
-      foreach::registerDoSEQ()
-    }, add = TRUE)
-    if (!is.null(seed)) {
-      parallel::clusterSetRNGStream(cl, iseed = as.integer(seed))
+    local_parallel_cluster(n_cores, seed = seed)
+    if (verbose) {
+      message("Parallel cross-validation enabled with ", n_cores,
+              " worker(s).")
     }
     parallel_flag <- TRUE
   } else if (use_parallel && verbose) {

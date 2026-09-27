@@ -404,11 +404,16 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
   # Regression
   if (is.numeric(test[[target]])) {
     obs <- test[[target]]
+    # earth's predict() returns an n x 1 matrix for a numeric response; flatten
+    # it so the predictions are a plain vector and R2 a plain number rather
+    # than a 1 x 1 matrix.
+    pred <- as.numeric(pred)
+    out$predictions <- pred
     rmse_val <- sqrt(mean((obs - pred)^2))
     mae_val <- mean(abs(obs - pred))
     # Note: caret::R2 is the squared correlation between predicted and
     # observed, not 1 - SSE/SST.
-    r2_val <- caret::R2(pred, obs)
+    r2_val <- unname(as.numeric(caret::R2(pred, obs)))
     out$metrics <- list(RMSE = rmse_val, MAE = mae_val, R2 = r2_val)
 
     # Classification

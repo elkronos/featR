@@ -16,7 +16,8 @@ fs_lasso(
   seed = NULL,
   verbose = FALSE,
   parallel = FALSE,
-  n_cores = 2L
+  n_cores = 2L,
+  lambda = c("min", "1se")
 )
 }
 \arguments{
@@ -65,11 +66,15 @@ backend status and how many design-matrix columns were selected.}
 \item{n_cores}{Integer >= 1; number of workers used only when
 \code{parallel = TRUE}. Default 2. Values above the detected core count are
 capped.}
+
+\item{lambda}{Which cross-validated penalty to select at: \code{"min"}
+(default, \code{lambda.min}) or \code{"1se"} (\code{lambda.1se}, sparser). See Details.}
 }
 \value{
 An \code{fs_result} object with:
-\item{selected}{Design-matrix columns whose raw coefficient at
-\code{lambda.min} is non-zero, ordered by decreasing \code{scores} magnitude.
+\item{selected}{Design-matrix columns whose raw coefficient at the
+chosen lambda (\code{lambda.min} by default) is non-zero, ordered by
+decreasing \code{scores} magnitude.
 (Selection reads the raw coefficients, so a constant column that glmnet
 nonetheless gave a non-zero coefficient is reported even though its
 standardized score is 0.)}
@@ -81,24 +86,29 @@ standardized scale when \code{standardize = TRUE} (see Details).}
 \item{task}{\code{"regression"} (gaussian family only).}
 \item{model}{The fitted cv.glmnet object when \code{return_model = TRUE}, else
 NULL.}
-\item{details}{List of \code{lambda_min} (lambda minimizing CV error, the one
-selection uses), \code{lambda_1se} (largest lambda within 1 SE of the
-minimum; reported only), \code{coefficients} (the same three-column table as
+\item{details}{List of \code{lambda_min} (lambda minimizing CV error),
+\code{lambda_1se} (largest lambda within 1 SE of the minimum),
+\code{lambda_used} (\code{"lambda.min"} or \code{"lambda.1se"}, the one selection and
+all coefficients are read at), \code{coefficients} (the same three-column table as
 \code{scores} but always on the raw coefficient scale) and \code{n_features}
 (number of design-matrix columns considered).}
 \item{call}{The matched call.}
 }
 \description{
 Fits a lasso (or elastic-net) model with \code{glmnet::cv.glmnet()} and reports
-which predictors survive at \code{lambda.min}. Numeric outcomes only (gaussian
-family).
+which predictors survive at \code{lambda.min} (default) or \code{lambda.1se}. Numeric
+outcomes only (gaussian family).
 }
 \details{
 Use this when the question is "which predictors keep a non-zero coefficient
 under a cross-validated L1 penalty (or, for \code{alpha < 1}, an elastic-net
-penalty)?". Selection happens at \code{lambda.min}, the penalty that minimizes
-cross-validated error; the more conservative \code{lambda.1se} is reported in
-\code{details} but is not used to select. The main caveat is that lasso tends to
+penalty)?". By default selection happens at \code{lambda.min}, the penalty that
+minimizes cross-validated error. \code{lambda.min} is tuned for prediction and
+is known to over-select (it tends to keep noise variables alongside the
+true ones); \code{lambda = "1se"} selects at \code{lambda.1se}, the largest penalty
+whose CV error is within one standard error of the minimum, which gives a
+sparser, more conservative set. Both values are reported in \code{details}
+whichever one is used. The main caveat is that lasso tends to
 keep one member of a group of strongly correlated predictors and zero out
 the rest, so an absent feature is not evidence that it is unrelated to the
 outcome.
@@ -106,7 +116,10 @@ outcome.
 The design matrix is built internally from every column of \code{data} except
 \code{target}, via \code{stats::model.frame(na.action = stats::na.pass)} followed by
 \code{stats::model.matrix()}: factors and characters are expanded to dummies and
-rows carrying NAs are preserved rather than silently dropped. The matrix
+rows carrying NAs are preserved rather than silently dropped. Non-syntactic
+column names are reported as the caller wrote them (without the backticks
+\code{model.matrix()} adds). The design matrix must have at least two columns,
+because \code{glmnet} cannot fit a single-column \code{x}. The matrix
 carries no intercept column of its own (\code{glmnet} fits its own intercept,
 which is dropped from the reported coefficients), so \code{selected}, \code{scores}
 and \code{details$coefficients} name design-matrix columns -- for a factor

@@ -16,7 +16,8 @@ fs_infogain(
 }
 \arguments{
 \item{data}{A data.frame (a data.table is accepted and is copied, never
-modified in place), or a list of data.frames each containing \code{target}.}
+modified in place), or a list of data.frames each containing \code{target}.
+Column names must be unique within each data.frame.}
 
 \item{target}{Character. Name of the target column.}
 
@@ -32,7 +33,9 @@ the section on cardinality bias.}
 the \code{top_n} highest-scoring features (fewer if fewer were scored). This
 is a rank cut, not a score floor: a zero-scoring feature is selected if
 the ranking reaches it. When \code{NULL} (default), \code{selected} instead holds
-every feature whose score is strictly greater than 0.}
+every feature whose score is strictly greater than 0. A gain within
+floating-point rounding of zero (as an exactly independent predictor
+produces) is reported as exactly 0, so it is not selected.}
 
 \item{remove_na}{Logical. If \code{TRUE} (default), rows with NA in the target
 are removed up front. See Details for its narrow practical effect.}

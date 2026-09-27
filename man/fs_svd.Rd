@@ -28,9 +28,11 @@ exceeding \code{min(dim(x))} are an error.}
 matrix alone), \code{"center"} (subtract column means only), or
 \code{"scale"} (divide only). Any other value is an error. The two
 dividing forms (\code{TRUE} and \code{"scale"}) require every column to
-have non-zero variance, and offending columns are reported by name (or by
-position when the matrix has no column names); \code{"center"} has no
-such requirement. Note that \code{"scale"} inherits
+have non-zero variance (a standard deviation above
+\code{1000 * .Machine$double.eps}, about 2e-13, times the column's
+largest absolute value, so the check is unit-free), and offending columns
+are reported by name (or by position when the matrix has no column
+names); \code{"center"} has no such requirement. Note that \code{"scale"} inherits
 \code{base::scale()}'s semantics: with no centering it divides by the
 root mean square, not by the standard deviation.}
 
@@ -99,6 +101,8 @@ path because all singular values were requested. Asking for
 \code{svd_method = "approx"} outright when \code{n_singular_values} equals
 \code{min(dim(x))} is not an error: it falls back to the exact solver with
 a message, because \code{RSpectra::svds()} cannot return the full set.
+If \code{RSpectra::svds()} converges on fewer than the requested number of
+singular values, the call warns and recomputes them with the exact solver.
 
 Centering and scaling, when requested, happen \emph{before} the
 decomposition, so the returned triplets factorize the transformed matrix

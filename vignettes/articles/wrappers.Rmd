@@ -106,9 +106,19 @@ selected(bo)
 selected(fs_boruta(bd, "y", maxRuns = 50, cutoff_cor = 0.7, seed = 1))
 ```
 
-`resolve_tentative = TRUE` (the default) settles features still undecided
-after `maxRuns` with `Boruta::TentativeRoughFix()`. That is a heuristic, not
-further evidence, so raise `maxRuns` if many features end up tentative.
+Look at `noise2`. It was generated independently of `y`, yet it is confirmed.
+Two things combine here. In this particular sample `noise2` happens to carry
+some random-forest importance: Boruta on its own leaves it Tentative after 50
+runs and confirms it in two of three seeds after 250. Then
+`resolve_tentative = TRUE` (the default) settles every feature still
+undecided with `Boruta::TentativeRoughFix()`. That compares median importance
+with the median of the best shadow, which is a weaker test than the one used
+during the run. In a simulation of 20 data sets like this one, Boruta alone
+confirmed 5% of the pure-noise features, and 8.3% after the rough fix.
+
+So Boruta limits false discoveries; it does not eliminate them. When they are
+costly, set `resolve_tentative = FALSE`, inspect `details$decisions`, raise
+`maxRuns`, and validate the confirmed set on held-out data.
 
 ## `fs_stepwise()`: AIC stepwise regression
 

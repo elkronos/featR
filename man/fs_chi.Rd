@@ -18,8 +18,9 @@ fs_chi(
 )
 }
 \arguments{
-\item{data}{A data.frame or data.table with features and target. Character
-columns are coerced to factor. The input object is never modified.}
+\item{data}{A data.frame or data.table with features and target, with
+unique column names. Character columns are coerced to factor. The input
+object is never modified.}
 
 \item{target}{Character scalar: name of the target column. It is coerced to
 a factor if necessary and must have at least 2 non-NA levels.}

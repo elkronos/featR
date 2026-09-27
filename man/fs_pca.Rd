@@ -62,7 +62,7 @@ observation and one column per retained PC.
 of total variance carried by each retained PC (see Details, especially
 for the large-data engine).
 \item \code{pca_df}: data.table of the scores with the label columns (every
-character/factor column, plus \code{label_col}) bound alongside, restricted
+non-numeric column, plus \code{label_col}) bound alongside, restricted
 to the rows that were kept.
 \item \code{meta}: list with \code{numeric_cols} (the features actually
 decomposed), \code{rows_kept} (logical vector over the rows of \code{data}),
@@ -76,11 +76,16 @@ and 'ggplot2' is available. Absent otherwise, so test for it with
 \description{
 Answers "how much of the spread in these numeric columns lives in a handful
 of directions, and which columns drive them?" Runs a PCA on the numeric
-columns of \code{data}. Character and factor columns are excluded from the
-feature set and kept as label candidates; an explicitly supplied \code{label_col}
-(numeric or not) is likewise excluded from the features and only used for
-labeling. Rows with missing values in the numeric columns and zero-variance
-columns are dropped before the decomposition.
+columns of \code{data}. Non-numeric columns (character, factor, logical, Date,
+...) are excluded from the feature set and kept as label candidates; an
+explicitly supplied \code{label_col} (numeric or not) is likewise excluded from
+the features and only used for labeling. Rows with missing values in the numeric columns and zero-variance
+columns are dropped before the decomposition; a column counts as
+zero-variance when its standard deviation is at most
+\code{1000 * .Machine$double.eps} (about 2e-13) times its largest absolute
+value, so a column that is constant up to floating-point round-off is
+dropped too, while small-unit or large-offset columns (timestamps, say) are
+kept.
 }
 \details{
 The caveat is what PCA is. This is unsupervised dimensionality reduction,

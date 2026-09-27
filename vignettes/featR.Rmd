@@ -29,16 +29,20 @@ Every selection function takes the data first and the name of the outcome
 column second:
 
 ```r
-fs_<method>(data, target, ..., seed = NULL, verbose = FALSE, n_cores = 1L)
+fs_<method>(data, target, <method options>, ...)
 ```
 
-The methods that have no single outcome -- `fs_correlation()`,
-`fs_unsupervised()`, `fs_pca()`, `fs_svd()` -- drop `target` and keep the rest.
+Housekeeping arguments come last. Every function takes `verbose`. Functions
+that use randomness take `seed = NULL`, and functions that can run in parallel
+take `n_cores`, `parallel`, or both. The methods that have no single outcome,
+`fs_correlation()`, `fs_unsupervised()`, `fs_pca()`, and `fs_svd()`, drop
+`target`. `fs_svd()` calls its input `x`, because it takes a matrix rather
+than a table of observations.
 
 Three conventions hold everywhere:
 
-* **Sequential by default.** Parallelism is opt-in through `n_cores`, and
-  requests are capped at the cores you actually have.
+* **Sequential by default.** Parallelism is opt-in through `n_cores` or
+  `parallel`, and requests are capped at the cores you actually have.
 * **The RNG is never touched** unless you pass `seed`, and the previous random
   state is restored when the call returns.
 * **Modeling engines are optional.** They live in `Suggests`; a function that

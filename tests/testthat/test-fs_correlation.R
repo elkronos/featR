@@ -375,3 +375,15 @@ test_that("polychoric runs on complete ordered factors", {
   expect_gt(cm["o1", "o2"], 0.5)
   expect_setequal(res$selected, c("o1", "o2"))
 })
+
+test_that("a character NA diag_value is rejected up front", {
+  # REGRESSION: is.na(NA_character_) passed validation, then diag<- turned
+  # the correlation matrix into character and abs() failed with
+  # "non-numeric argument to mathematical function".
+  d <- data.frame(a = c(1, 2, 3, 4), b = c(2, 4, 5, 9), c = c(4, 1, 3, 2))
+  expect_error(fs_correlation(d, 0.9, diag_value = NA_character_),
+               "single numeric value or NA")
+  expect_error(fs_correlation(d, 0.9, diag_value = "0"),
+               "single numeric value or NA")
+  expect_no_error(fs_correlation(d, 0.9, diag_value = NA))
+})

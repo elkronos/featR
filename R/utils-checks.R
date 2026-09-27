@@ -113,9 +113,21 @@ assert_target <- function(data, target, arg = "target") {
 }
 
 #' Wrap non-syntactic names in backticks for formula construction
+#'
+#' Inside backticks the R parser still processes escapes, so a backslash or
+#' backtick in the name is escaped first; otherwise a name such as `a\nb`
+#' would parse as a *different* symbol (containing a newline) and a name
+#' containing a backtick would not parse at all. Empty names cannot be
+#' referenced in a formula and are an error.
 #' @noRd
 backtick <- function(x) {
+  if (anyNA(x) || any(!nzchar(x))) {
+    stop("Column names used in a model formula must be non-empty and not NA.",
+         call. = FALSE)
+  }
   needs <- x != make.names(x)
-  x[needs] <- paste0("`", x[needs], "`")
+  esc <- gsub("\\", "\\\\", x[needs], fixed = TRUE)
+  esc <- gsub("`", "\\`", esc, fixed = TRUE)
+  x[needs] <- paste0("`", esc, "`")
   x
 }

@@ -40,8 +40,9 @@
 #' Finally, a p-value is evidence against independence, not an effect size:
 #' with enough rows a negligible association still clears any `sig_level`.
 #'
-#' @param data A data.frame or data.table with features and target. Character
-#'   columns are coerced to factor. The input object is never modified.
+#' @param data A data.frame or data.table with features and target, with
+#'   unique column names. Character columns are coerced to factor. The input
+#'   object is never modified.
 #' @param target Character scalar: name of the target column. It is coerced to
 #'   a factor if necessary and must have at least 2 non-NA levels.
 #' @param sig_level Numeric threshold for significance, strictly between 0
@@ -252,6 +253,15 @@ fs_chi <- function(
 .fs_validate_and_prepare_data <- function(data, target, verbose = FALSE) {
   assert_data_frame(data, "data")
   assert_target(data, target, "target")
+  # Columns are looked up by name, so a duplicated name would test its first
+  # copy twice and never the second (or fail inside data.table when the
+  # copies are character). Reject rather than silently mis-test.
+  dupes <- unique(names(data)[duplicated(names(data))])
+  if (length(dupes) > 0L) {
+    stop("'data' must have unique column names; duplicated: ",
+         paste(utils::head(dupes, 5L), collapse = ", "),
+         if (length(dupes) > 5L) ", ..." else "", ".", call. = FALSE)
+  }
 
   dt <- as_dt(data)
 

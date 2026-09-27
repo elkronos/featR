@@ -79,6 +79,11 @@ step_run_stepwise <- function(start_model, scope, direction, verbose, dots,
     dots$trace <- NULL
   }
 
+  # A user-supplied scope replaces the default one instead of colliding with
+  # it ("formal argument 'scope' matched by multiple actual arguments").
+  if ("scope" %in% names(dots)) {
+    scope <- NULL
+  }
   args <- c(
     list(object = start_model, direction = direction, trace = verbose),
     if (!is.null(scope)) list(scope = scope),
@@ -131,7 +136,7 @@ step_abs_t <- function(coefs) {
     return(empty)
   }
   out <- abs(as.numeric(coefs[keep, "t value"]))
-  names(out) <- rownames(coefs)[keep]
+  names(out) <- unbacktick_names(rownames(coefs)[keep])
   out
 }
 
@@ -175,6 +180,9 @@ step_abs_t <- function(coefs) {
 #' call in the *caller's* environment, where the private data object is not
 #' visible, so it fails with an object-not-found error.
 #'
+#' Non-syntactic column names are backticked into the formula and reported
+#' back without the backticks, so `selected` matches `names(data)`.
+#'
 #' `...` is forwarded to `MASS::stepAIC()` verbatim, which means it also
 #' absorbs arguments this function does not have. The removed `seed` and
 #' `return_models` are passed through and ignored rather than rejected, so a
@@ -196,7 +204,8 @@ step_abs_t <- function(coefs) {
 #' @param verbose Logical. If `TRUE`, emits progress messages and enables the
 #'   `stepAIC()` trace output on the console. Default `FALSE`.
 #' @param ... Additional arguments passed to `MASS::stepAIC()`, for example `k`
-#'   or `steps`. `trace` is the one exception: it is controlled by `verbose`,
+#'   (use `k = log(nrow(data))` for BIC), `steps`, or `scope` (which then
+#'   replaces the default scope described above). `trace` is the one exception: it is controlled by `verbose`,
 #'   and a user-supplied `trace` is dropped with a warning. See Details for
 #'   what else `...` quietly absorbs.
 #'
@@ -205,7 +214,10 @@ step_abs_t <- function(coefs) {
 #'   \item{selected}{Character vector of the selected predictor terms
 #'     (excluding the intercept).}
 #'   \item{scores}{Named numeric vector of absolute t statistics from the
-#'     final model's coefficient table, excluding the intercept.
+#'     final model's coefficient table, excluding the intercept. Scores are
+#'     per coefficient, so a selected factor term appears here under its
+#'     dummy names (e.g. `grpb`, `grpc` for the term `grp`), not under the
+#'     term label reported in `selected`.
 #'     \strong{Caveat}: these statistics (and the p-values in
 #'     `details$coefficients`) are computed after selection on the same data,
 #'     so they are optimistically biased and are not valid for inference.}
@@ -306,7 +318,11 @@ fs_stepwise <- function(data,
   )
 
   coefficients <- step_coef_summary(step_model)
-  terms_selected <- attr(stats::terms(step_model), "term.labels")
+  # Term labels of non-syntactic columns come back backticked; report the
+  # caller's column names instead.
+  terms_selected <- unbacktick_names(
+    attr(stats::terms(step_model), "term.labels")
+  )
 
   if (verbose) {
     message(sprintf(

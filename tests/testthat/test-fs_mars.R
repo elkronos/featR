@@ -313,3 +313,61 @@ test_that("binary classification with non-syntactic labels runs and keeps both c
   expect_setequal(names(res$scores), c("x1", "x2"))
   expect_output(print(res), "classification")
 })
+
+test_that("mars_predictor_scores strips caret's backticks before matching", {
+  imp <- c(`\`my var\`` = 100, `\`my grp\`b` = 30, x2 = 5)
+  out <- featR:::mars_predictor_scores(imp, c("my var", "my grp", "x2", "z"))
+  expect_identical(out, c(`my var` = 100, `my grp` = 30, x2 = 5, z = 0))
+})
+
+test_that("non-syntactic predictors are selected end-to-end", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("earth")
+  skip_on_cran()
+  set.seed(5)
+  n <- 120
+  d <- data.frame(`x a` = rnorm(n), `g h` = sample(c("p", "q"), n, TRUE),
+                  z = rnorm(n), check.names = FALSE)
+  d$y <- d$`x a` + 2 * (d$`g h` == "q") + rnorm(n, sd = 0.3)
+  res <- fs_mars(d, "y", degree = 1, nprune = c(5, 10), number = 3,
+                 repeats = 1, seed = 1)
+  expect_true(all(c("x a", "g h") %in% selected(res)))
+  expect_gt(res$scores[["x a"]], 0)
+})
+
+test_that("random search works for classification even when earth is not attached", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("earth")
+  skip_on_cran()
+  # caret's random grid calls earth::earth() before caret attaches earth, and
+  # earth then needs contr.earth.response on the search path.
+  if ("package:earth" %in% search()) {
+    suppressWarnings(detach("package:earth", character.only = TRUE))
+  }
+  res <- suppressWarnings(
+    fs_mars(iris, "Species", search = "random", tuneLength = 2,
+            number = 3, repeats = 1, seed = 1)
+  )
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$task, "classification")
+})
+
+test_that("regression metrics and predictions are plain numerics, not matrices", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("earth")
+  set.seed(3)
+  d <- data.frame(x1 = rnorm(80), x2 = rnorm(80))
+  d$y <- 2 * d$x1 + rnorm(80, sd = 0.3)
+  res <- fs_mars(d, "y", degree = 1, nprune = 5, number = 3, repeats = 1,
+                 seed = 1)
+  m <- res$details$metrics
+  for (nm in c("RMSE", "MAE", "R2")) {
+    expect_false(is.matrix(m[[nm]]), info = nm)
+    expect_length(m[[nm]], 1L)
+    expect_null(names(m[[nm]]))
+  }
+  expect_false(is.matrix(res$details$predictions))
+  expect_true(is.numeric(res$details$predictions))
+  expect_equal(m$R2, stats::cor(res$details$predictions,
+                                res$details$test_data$y)^2)
+})

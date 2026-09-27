@@ -2,7 +2,34 @@
 # Selection-mask and output-shaping machinery shared with fs_unsupervised()
 # lives in R/utils-filter.R.
 
+#' Is a numeric vector (numerically) constant?
+#'
+#' Scale-invariant: the spread is compared to the magnitude of the values, so
+#' a column measured on a tiny scale (say, values around 1e-10) is not
+#' mistaken for a constant one, while a constant column carrying only
+#' floating-point noise still is.
+#'
+#' @param x NA-free numeric vector.
+#' @return A single flag.
+#' @noRd
+sup_is_degenerate <- function(x) {
+  if (length(x) < 2L) {
+    return(TRUE)
+  }
+  s <- stats::sd(x)
+  if (!is.finite(s)) {
+    return(TRUE)
+  }
+  s <= 64 * .Machine$double.eps * max(abs(x))
+}
+
 #' Absolute Pearson correlation of each feature with a numeric target
+#'
+#' Both NA policies share one code path: with `na_rm = TRUE` incomplete pairs
+#' are dropped per feature, with `na_rm = FALSE` any NA makes the score `NA`.
+#' A (numerically) constant feature or target has an undefined correlation and
+#' scores `NA`, without the "standard deviation is zero" warning that
+#' `stats::cor()` would add on top of the one `filter_mask()` emits.
 #'
 #' @param dt data.table of numeric feature columns.
 #' @param y Numeric target vector.
@@ -11,28 +38,25 @@
 #' @noRd
 sup_score_correlation <- function(dt, y, na_rm) {
   y_num <- as.numeric(y)
-  tol <- .Machine$double.eps^0.5
   vapply(
     dt,
     function(col) {
+      col <- as.numeric(col)
       if (na_rm) {
         idx <- !is.na(col) & !is.na(y_num)
         col2 <- col[idx]
         y2 <- y_num[idx]
-        if (length(col2) < 2L) {
-          return(NA_real_)
-        }
-        sd_col <- stats::sd(col2)
-        sd_y <- stats::sd(y2)
-        if (!is.finite(sd_col) || sd_col < tol ||
-            !is.finite(sd_y) || sd_y < tol) {
-          return(NA_real_)
-        }
-        val <- stats::cor(col2, y2)
       } else {
-        # Let cor() handle NAs according to 'use', then sanitize the result.
-        val <- stats::cor(col, y_num, use = "everything")
+        if (anyNA(col) || anyNA(y_num)) {
+          return(NA_real_)
+        }
+        col2 <- col
+        y2 <- y_num
       }
+      if (sup_is_degenerate(col2) || sup_is_degenerate(y2)) {
+        return(NA_real_)
+      }
+      val <- stats::cor(col2, y2)
       if (is.na(val) || !is.finite(val)) {
         return(NA_real_)
       }
@@ -61,11 +85,9 @@ sup_score_anova <- function(dt, y, na_rm) {
         col2 <- col[idx]
         y2 <- y_fac[idx]
       } else {
-        # stats::lm()'s default na.action drops incomplete rows silently, so
-        # handing it the raw column would make na_rm = FALSE behave exactly
-        # like na_rm = TRUE. The documented contract is that an NA anywhere in
-        # the feature or the target makes the score undefined, which is what
-        # stats::cor(use = "everything") already does on the correlation path.
+        # The documented contract is that an NA anywhere in the feature or
+        # the target makes the score undefined (the correlation path does the
+        # same), so incomplete rows must not be dropped silently here.
         if (anyNA(col) || anyNA(y_fac)) {
           return(NA_real_)
         }
@@ -73,28 +95,33 @@ sup_score_anova <- function(dt, y, na_rm) {
         y2 <- y_fac
       }
 
-      if (length(col2) < 2L || length(unique(y2[!is.na(y2)])) < 2L) {
+      # Only the groups actually observed count towards the degrees of
+      # freedom (unused factor levels and levels emptied by NA removal).
+      y2 <- droplevels(y2)
+      n <- length(col2)
+      k <- nlevels(y2)
+      if (n <= k || k < 2L || any(!is.finite(col2)) ||
+          sup_is_degenerate(col2)) {
         return(NA_real_)
       }
 
-      fit <- tryCatch(
-        stats::lm(x ~ y, data = data.frame(x = col2, y = y2)),
-        error = function(e) NULL
-      )
-      if (is.null(fit)) {
-        return(NA_real_)
+      # Closed-form one-way ANOVA F = (SSB / (k - 1)) / (SSW / (n - k)),
+      # identical to stats::anova(lm(x ~ g)) but without its "essentially
+      # perfect fit" warning, and exact at the boundaries: a feature that
+      # separates the groups perfectly (no within-group spread) scores Inf --
+      # the strongest possible score -- instead of a ~1e30 value whose size
+      # is rounding noise. A constant feature (no spread at all) is NA.
+      grand <- mean(col2)
+      grp_mean <- tapply(col2, y2, mean)
+      grp_n <- tabulate(y2, nbins = k)
+      ssb <- sum(grp_n * (grp_mean - grand)^2)
+      ssw <- sum((col2 - grp_mean[as.integer(y2)])^2)
+      # Within-group spread at or below the rounding floor of the residuals
+      # themselves counts as none at all.
+      if (ssw <= n * (64 * .Machine$double.eps * max(abs(col2)))^2) {
+        return(Inf)
       }
-
-      a <- tryCatch(stats::anova(fit), error = function(e) NULL)
-      if (is.null(a) || nrow(a) < 1L) {
-        return(NA_real_)
-      }
-
-      val <- a$`F value`[1L]
-      if (!is.numeric(val) || length(val) != 1L || !is.finite(val)) {
-        return(NA_real_)
-      }
-      val
+      (ssb / (k - 1L)) / (ssw / (n - k))
     },
     numeric(1L)
   )
@@ -162,7 +189,7 @@ sup_scores <- function(dt,
         paste0(
           "method = 'auto' resolved to '%s'. Note that the threshold scale ",
           "differs by method: |r| lies in [0, 1] for 'correlation', while ",
-          "the ANOVA F statistic lies in [0, Inf)."
+          "the ANOVA F statistic lies in [0, Inf]."
         ),
         method
       ))
@@ -215,9 +242,14 @@ sup_scores <- function(dt,
 #' Supported methods:
 #' \itemize{
 #'   \item \code{"correlation"}: Absolute Pearson correlation (numeric
-#'     target), so scores lie in \code{[0, 1]}.
+#'     target), so scores lie in \code{[0, 1]}. A constant feature (or
+#'     target) has no defined correlation and scores \code{NA}; the check is
+#'     relative to the column's magnitude, so features measured on a very
+#'     small scale are scored normally.
 #'   \item \code{"anova"}: One-way ANOVA F-statistic (categorical target),
-#'     so scores lie in \code{[0, Inf)}.
+#'     so scores lie in \code{[0, Inf]}: a feature that separates the
+#'     classes perfectly (no spread within any class) scores \code{Inf}, and
+#'     a constant feature scores \code{NA}.
 #'   \item \code{"auto"}: Chooses \code{"correlation"} for a numeric target
 #'     and \code{"anova"} for a categorical one. Because the two score scales
 #'     differ, a message reports the resolved method when
@@ -243,7 +275,7 @@ sup_scores <- function(dt,
 #' @param threshold Non-negative, finite numeric scalar threshold applied to
 #'   the feature scores (not to the target directly). Default 0. Note that the
 #'   two methods put scores on different scales: \code{[0, 1]} for
-#'   \code{"correlation"} and \code{[0, Inf)} for \code{"anova"}.
+#'   \code{"correlation"} and \code{[0, Inf]} for \code{"anova"}.
 #' @param direction One of \code{"above"} (default), \code{"below"}; compares
 #'   scores to \code{threshold}.
 #' @param action One of \code{"keep"} (default), \code{"remove"}; determines

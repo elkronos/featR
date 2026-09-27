@@ -468,3 +468,58 @@ test_that("date expansion refuses to overwrite an existing column", {
   expect_true(all(c("when_year", "when_month", "when_day") %in% names(out)))
   expect_false("when" %in% names(out))
 })
+
+test_that("an exactly independent predictor scores exactly 0 and is not selected", {
+  # REGRESSION: IG = H(Y) - H(Y | X) is a difference of separately rounded
+  # sums, so a predictor exactly independent of the target could score
+  # 2.2e-16 bits and pass the default `score > 0` selection rule.
+  y <- rep(1:3, 21)
+  x <- rep(1:3, each = 21)
+  expect_true(all(table(x, y) == 7))
+  res <- fs_infogain(data.frame(x = as.character(x), y = as.character(y)), "y")
+  expect_identical(res$scores[["x"]], 0)
+  expect_identical(res$selected, character(0))
+
+  res_gr <- fs_infogain(data.frame(x = as.character(x), y = as.character(y)),
+                        "y", normalize = "gain_ratio")
+  expect_identical(res_gr$scores[["x"]], 0)
+})
+
+test_that("infinite values are binned into the outer bins instead of erroring", {
+  # REGRESSION: cut(breaks = <count>) needs a finite range, so a single Inf
+  # in any numeric predictor or a numeric target made the whole call fail
+  # with "'to' must be a finite number".
+  x <- c(1:9, Inf)
+  t <- rep(c(1, 2), 5)
+  res <- fs_infogain(data.frame(x = x, t = t), "t", numeric_bins = 3)
+  # Inf belongs in the top bin, alongside the largest finite value.
+  capped <- fs_infogain(data.frame(x = c(1:9, 9), t = t), "t",
+                        numeric_bins = 3)
+  expect_equal(res$scores[["x"]], capped$scores[["x"]], tolerance = 1e-12)
+
+  neg <- fs_infogain(data.frame(x = c(-Inf, 2:10), t = t), "t",
+                     numeric_bins = 3)
+  neg_capped <- fs_infogain(data.frame(x = c(2, 2:10), t = t), "t",
+                            numeric_bins = 3)
+  expect_equal(neg$scores[["x"]], neg_capped$scores[["x"]], tolerance = 1e-12)
+
+  # A numeric target with an Inf, and the automatic bin count.
+  expect_no_error(fs_infogain(data.frame(z = 1:10, t = c(1:9, Inf)), "t"))
+  expect_no_error(fs_infogain(data.frame(x = x, t = t), "t"))
+
+  # Fewer than two distinct finite values: kept categorical.
+  f <- featR:::ig_discretize(c(1, 1, Inf, NA))
+  expect_identical(nlevels(f), 2L)
+  expect_true(is.na(f[4]))
+})
+
+test_that("duplicated column names are rejected", {
+  # REGRESSION: predictors were looked up by name, so the second of two
+  # same-named columns was silently never scored.
+  d <- data.frame(a = 1:10, a = rep(1:2, 5), t = rep(1:2, 5),
+                  check.names = FALSE)
+  expect_error(fs_infogain(d, "t"), "unique column names; duplicated: a")
+  expect_error(fs_infogain(list(ok = data.frame(b = 1:10, t = rep(1:2, 5)),
+                                bad = d), "t"),
+               "unique column names")
+})

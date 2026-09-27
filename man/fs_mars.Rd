@@ -129,7 +129,9 @@ before fitting, so each importance row is attributed back to the source
 predictor by name (the longest candidate name it starts with) and a
 predictor keeps the largest importance of its encoded columns; that
 name-based attribution is ambiguous if one predictor's name happens to be a
-prefix of another predictor's encoded column name.
+prefix of another predictor's encoded column name. The backticks caret adds
+around non-syntactic names are stripped first, so such columns are
+attributed like any other.
 
 For classification, class imbalance is handled by \code{sampling = "up"} inside
 \code{caret::trainControl()}, i.e. upsampling happens within each resample; the

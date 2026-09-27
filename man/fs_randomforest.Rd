@@ -23,7 +23,10 @@ holding the target and the candidate predictors (every other column).
 index is not accepted.}
 
 \item{task}{One of \code{"classification"} (the default) or \code{"regression"},
-matched with \code{match.arg()}. A classification target is coerced with
+matched with \code{match.arg()}. The task is not inferred from the target:
+when \code{task} is left at its default and the target is numeric, a warning
+says so, since every distinct value would become a class. A
+classification target is coerced with
 \code{as.factor()} and must retain at least two levels; a regression target is
 coerced with \code{as.numeric()}. Either way, rows whose target is \code{NA} after
 coercion are dropped with a warning.}
@@ -32,8 +35,9 @@ coercion are dropped with a warning.}
 default is listed under Details. Unknown entries are an error, not a
 silent no-op. Default \code{list()}, i.e. all defaults.}
 
-\item{seed}{Optional single finite number for reproducibility, truncated to
-an integer with \code{as.integer()}. Applied for the duration of the call only;
+\item{seed}{Optional single whole number for reproducibility, within the
+range of an R integer; fractional or out-of-range values are an error
+rather than being truncated. Applied for the duration of the call only;
 the previous RNG state is restored on exit. With more than one worker it
 is also handed to \code{parallel::clusterSetRNGStream()}, and is then the only
 way to make the run reproducible. Default \code{NULL} (the RNG is never seeded
@@ -59,7 +63,9 @@ ranks rather than selects. Ordered by decreasing importance when
 importance was computed.}
 \item{scores}{Named numeric vector of permutation importance from
 \code{randomForest::importance(type = 1)} -- mean decrease in accuracy
-for classification, percent increase in MSE for regression -- scaled
+for classification, mean increase in MSE for regression (the
+column randomForest names with a percent sign, though it is not a
+percentage) -- scaled
 or not according to \code{control$scale_importance}. \code{NULL} when
 \code{control$importance = FALSE}.}
 \item{method}{"randomforest".}
@@ -119,9 +125,12 @@ count are capped. \code{NULL} keeps every row.
 \code{FALSE}, \code{scores} and \code{details$importance} are
 \code{NULL} and \code{selected} keeps plain column order.
 \item \code{scale_importance = TRUE} -- passed as \code{scale} to
-\code{randomForest::importance()}, which divides each mean decrease in
-accuracy by its permutation standard error. Set to \code{FALSE} for the
-raw, unscaled permutation importance.
+\code{randomForest::importance()}, which divides each permutation
+importance (mean decrease in accuracy, or mean increase in MSE) by its
+standard error over trees. Set to \code{FALSE} for the raw, unscaled
+permutation importance. With more than one worker the standard error
+is pooled across the sub-forests, so scaled scores do not depend on
+\code{n_cores}.
 \item \code{mtry = NULL} -- predictors sampled at each split. \code{NULL}
 means \code{floor(sqrt(p))} for classification and \code{floor(p / 3)}
 for regression; any value, supplied or derived, is clamped to
@@ -134,7 +143,8 @@ classification, 5 for regression).
 whole number >= 2, or \code{NULL} for no limit.
 \item \code{sampsize = NULL} -- rows drawn to grow each tree, passed to
 \code{randomForest}. A single number for regression (a vector is an
-error); one number per class is allowed for classification. Values are
+error); one number per class is allowed for classification. Entries
+must be whole numbers >= 1 (anything else is an error). Values are
 clamped to the training row count, and \code{NA} entries are replaced by
 the full training size when \code{replace = TRUE} and by
 \code{ceiling(0.632 * n)} otherwise.
@@ -151,7 +161,7 @@ still contains the target. See the leakage note below.
 training split only, and must select existing columns while retaining
 the target -- see the note below.
 \item \code{impute = TRUE} -- median (numeric) or modal
-(factor/character) values learned on the training data for every
+(factor/character/logical) values learned on the training data for every
 predictor and applied to NAs in train and test.
 \item \code{drop_zerovar = TRUE} -- near-zero variance removal with
 \code{caret::nearZeroVar()}, using training data only.

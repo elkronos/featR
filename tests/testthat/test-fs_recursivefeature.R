@@ -62,7 +62,13 @@ test_that("fs_recursivefeature validates data, target, flags, sizes, and train_r
                "'target' must be a single non-empty character string")
 
   expect_error(fs_recursivefeature(d, "y", sizes = "wide"),
-               "'sizes' must be a numeric vector or NULL")
+               "'sizes' must be a vector of whole numbers, or NULL")
+  # fractional sizes used to reach caret::rfe() and show up as a "1.5
+  # variables" row in the resampling results
+  expect_error(fs_recursivefeature(d, "y", sizes = c(1.5, 2)),
+               "'sizes' must be a vector of whole numbers, or NULL")
+  expect_error(fs_recursivefeature(d, "y", sizes = c(1, NA)),
+               "'sizes' must be a vector of whole numbers, or NULL")
   expect_error(fs_recursivefeature(d, "y", train_ratio = 0),
                "'train_ratio' must be strictly between 0 and 1")
   expect_error(fs_recursivefeature(d, "y", train_ratio = 1),
@@ -378,4 +384,127 @@ test_that("handle_categorical = TRUE one-hot encodes factor predictors", {
   expect_true(all(c("RMSE", "Rsquared", "MAE") %in%
                     names(res$details$test_metrics)))
   expect_true(is.finite(res$details$test_metrics[["RMSE"]]))
+})
+
+test_that("held-out accuracy counts predictions of classes absent from the test rows", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("e1071")
+  skip_on_cran()
+
+  # Regression test: with a character target the test factor was rebuilt from
+  # the test rows alone, so a class missing from them was not a level and
+  # caret::postResample() silently dropped every prediction of it, inflating
+  # the accuracy.
+  set.seed(5150)
+  d <- data.frame(
+    y  = c(rep("a", 28), rep("b", 28), rep("c", 4)),
+    x1 = c(rnorm(28, 0, 0.3), rnorm(28, 5, 0.3), rnorm(4, 10, 0.3)),
+    x2 = rnorm(60),
+    stringsAsFactors = FALSE
+  )
+  # The split is the first draw after seeding, so it can be replayed. With
+  # p = 0.9 all four "c" rows land in training; plant a "c"-looking test row.
+  train_idx <- withr::with_seed(
+    3, featR:::fs_split_index(factor(d$y), p = 0.9)
+  )
+  test_idx <- setdiff(seq_len(nrow(d)), train_idx)
+  expect_false("c" %in% d$y[test_idx])
+  d$x1[test_idx[d$y[test_idx] == "a"][1L]] <- 10
+
+  res <- fs_recursivefeature(
+    d, "y", sizes = 1:2, train_ratio = 0.9,
+    rfe_control = list(method = "cv", number = 3), seed = 3
+  )
+  expect_identical(res$details$test_index, test_idx)
+
+  pred <- predict(res$details$rfe, d[test_idx, c("x1", "x2")])$pred
+  expect_true("c" %in% as.character(pred))
+  reference <- mean(as.character(pred) == d$y[test_idx])
+  expect_equal(res$details$test_metrics[["Accuracy"]], reference)
+})
+
+test_that("a factor target with an unused level runs", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("e1071")
+  skip_on_cran()
+
+  # Regression test: the unused "setosa" level reached randomForest, which
+  # stops with "Can't have empty classes in y".
+  two <- iris[iris$Species != "setosa", ]
+  expect_identical(nlevels(two$Species), 3L)
+  res <- fs_recursivefeature(two, "Species", sizes = 1:2,
+                             rfe_control = list(method = "cv", number = 3),
+                             seed = 1)
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$task, "classification")
+  expect_true(is.finite(res$details$test_metrics[["Accuracy"]]))
+})
+
+test_that("a missing target value is a clear error", {
+  skip_if_not_installed("caret")
+
+  d <- data.frame(y = c(NA, rnorm(29)), x1 = rnorm(30), x2 = rnorm(30))
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = list(method = "cv", number = 3,
+                                                   functions = caret::lmFuncs),
+                        seed = 1),
+    "The target contains missing values"
+  )
+})
+
+test_that("non-syntactic predictor names work and are reported unchanged", {
+  skip_if_not_installed("caret")
+  skip_on_cran()
+
+  # Regression test: caret::lmFuncs rebuilds data frames with check.names =
+  # TRUE, so names like "a b" failed inside every resample ("replacement has
+  # 1 row, data has 0").
+  set.seed(77)
+  n <- 80
+  d <- data.frame(
+    `my y` = rnorm(n), `a b` = rnorm(n), `c-d` = rnorm(n), `1st` = rnorm(n),
+    check.names = FALSE
+  )
+  d$`my y` <- 3 * d$`a b` - 2 * d$`c-d` + rnorm(n, sd = 0.3)
+
+  res <- fs_recursivefeature(
+    d, "my y", sizes = 1:2,
+    rfe_control = list(method = "cv", number = 3, functions = caret::lmFuncs),
+    return_final_model = TRUE, model_method = "lm",
+    train_control = list(method = "cv", number = 3),
+    seed = 4
+  )
+  user_names <- c("a b", "c-d", "1st")
+  expect_true(all(c("a b", "c-d") %in% res$selected))
+  expect_true(all(res$selected %in% user_names))
+  expect_true(all(names(res$scores) %in% user_names))
+  expect_setequal(rownames(res$details$variable_importance), names(res$scores))
+  expect_true(all(res$details$final_model_variables %in% user_names))
+  expect_true(is.finite(res$details$test_metrics[["RMSE"]]))
+})
+
+test_that("parallel = TRUE restores the previously registered backend", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("foreach")
+  skip_if_not_installed("doParallel")
+  skip_on_cran()
+  cores <- tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
+  skip_if(is.na(cores) || cores < 2L, "fewer than two cores available")
+
+  foreach::registerDoSEQ()
+  before <- foreach::getDoParName()
+  res <- fs_recursivefeature(
+    mtcars, "mpg", sizes = c(2, 3),
+    rfe_control = list(method = "cv", number = 3, functions = caret::lmFuncs),
+    seed = 1, parallel = TRUE
+  )
+  expect_identical(foreach::getDoParName(), before)
+  seq_res <- fs_recursivefeature(
+    mtcars, "mpg", sizes = c(2, 3),
+    rfe_control = list(method = "cv", number = 3, functions = caret::lmFuncs),
+    seed = 1
+  )
+  expect_identical(res$selected, seq_res$selected)
 })

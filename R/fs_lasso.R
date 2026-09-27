@@ -155,6 +155,39 @@ lasso_handle_missing <- function(x, impute) {
   x
 }
 
+#' Strip formula backticks from design-matrix / term names
+#'
+#' `stats::model.matrix()`, `stats::lm()` and caret's formula interface name
+#' a non-syntactic column after its deparsed term label, so a column "my var"
+#' comes back as "`my var`" (and a factor "my grp" as "`my grp`b"). That
+#' leading backticked segment is replaced by the name it quotes, so reported
+#' names match the caller's columns. Names without a leading backtick are
+#' returned unchanged. Shared by fs_lasso(), fs_elastic(), fs_stepwise() and
+#' fs_mars().
+#'
+#' @param x Character vector of names (NULL passes through).
+#' @return `x` with the leading quoted segment unquoted.
+#' @noRd
+unbacktick_names <- function(x) {
+  if (is.null(x)) {
+    return(x)
+  }
+  quoted <- !is.na(x) & startsWith(x, "`")
+  if (!any(quoted)) {
+    return(x)
+  }
+  x[quoted] <- vapply(x[quoted], function(nm) {
+    m <- regmatches(nm, regexpr("^`((?:[^`\\\\]|\\\\.)*)`", nm, perl = TRUE))
+    if (length(m) == 0L) {
+      return(nm)
+    }
+    inner <- substr(m, 2L, nchar(m) - 1L)
+    inner <- gsub("\\\\(.)", "\\1", inner, perl = TRUE)
+    paste0(inner, substr(nm, nchar(m) + 1L, nchar(nm)))
+  }, character(1L), USE.NAMES = FALSE)
+  x
+}
+
 #' Prepare predictors as a numeric dense matrix without missing values
 #'
 #' Builds the design matrix through `stats::model.frame(na.action =
@@ -178,6 +211,13 @@ lasso_prepare <- function(x, impute) {
 
   if (is.null(colnames(mm))) {
     colnames(mm) <- paste0("V", seq_len(ncol(mm)))
+  }
+  # Report the caller's column names, not model.matrix()'s backticked labels.
+  colnames(mm) <- unbacktick_names(colnames(mm))
+
+  if (ncol(mm) < 2L) {
+    stop("fs_lasso() needs at least two design-matrix columns (glmnet cannot ",
+         "fit a single-column x).", call. = FALSE)
   }
 
   mm <- lasso_handle_missing(mm, impute)
@@ -208,31 +248,6 @@ lasso_sparse <- function(x) {
   Matrix::Matrix(x, sparse = TRUE)
 }
 
-#' Start and register a parallel cluster
-#'
-#' The caller is responsible for stopping the returned cluster (via
-#' `on.exit()` registered immediately after this call). If registration
-#' fails, the cluster is stopped here so it cannot leak.
-#'
-#' @param n_cores Integer > 1, already resolved via `resolve_cores()`.
-#' @param verbose Logical; whether to print a status message.
-#' @return The cluster object.
-#' @noRd
-lasso_cluster <- function(n_cores, verbose) {
-  cl <- parallel::makeCluster(n_cores)
-  tryCatch(
-    doParallel::registerDoParallel(cl),
-    error = function(e) {
-      try(parallel::stopCluster(cl), silent = TRUE)
-      stop(e)
-    }
-  )
-  if (verbose) {
-    message("Parallel cross-validation enabled with ", n_cores, " worker(s).")
-  }
-  cl
-}
-
 #' Fit a lasso/elastic-net model with cross-validation
 #'
 #' @param x_sparse A sparse matrix of predictors.
@@ -256,13 +271,10 @@ lasso_fit <- function(x_sparse, y, alpha, nfolds, standardize,
 
   parallel_flag <- FALSE
   if (use_parallel && n_cores > 1L) {
-    cl <- lasso_cluster(n_cores, verbose)
-    on.exit({
-      try(parallel::stopCluster(cl), silent = TRUE)
-      foreach::registerDoSEQ()
-    }, add = TRUE)
-    if (!is.null(seed)) {
-      parallel::clusterSetRNGStream(cl, iseed = as.integer(seed))
+    local_parallel_cluster(n_cores, seed = seed)
+    if (verbose) {
+      message("Parallel cross-validation enabled with ", n_cores,
+              " worker(s).")
     }
     parallel_flag <- TRUE
   } else if (use_parallel && verbose) {
@@ -287,15 +299,17 @@ lasso_fit <- function(x_sparse, y, alpha, nfolds, standardize,
   do.call(glmnet::cv.glmnet, args)
 }
 
-#' Named coefficient vector at lambda.min, intercept dropped
+#' Named coefficient vector at the chosen lambda, intercept dropped
 #'
 #' @param lasso_model A fitted cv.glmnet model.
 #' @param feature_names Optional character vector of feature names; when
 #'   NULL, coefficient row names are used where available.
+#' @param s Either "lambda.min" or "lambda.1se".
 #' @return A named numeric vector, one entry per design-matrix column.
 #' @noRd
-lasso_coefficients <- function(lasso_model, feature_names = NULL) {
-  cf <- stats::coef(lasso_model, s = "lambda.min")
+lasso_coefficients <- function(lasso_model, feature_names = NULL,
+                               s = "lambda.min") {
+  cf <- stats::coef(lasso_model, s = s)
   # cf is a sparse matrix; the first row is the intercept
   cf_vec <- as.vector(cf)[-1L]
 
@@ -337,15 +351,19 @@ lasso_importance <- function(coefs) {
 #' Lasso Feature Selection with Cross-Validation
 #'
 #' Fits a lasso (or elastic-net) model with `glmnet::cv.glmnet()` and reports
-#' which predictors survive at `lambda.min`. Numeric outcomes only (gaussian
-#' family).
+#' which predictors survive at `lambda.min` (default) or `lambda.1se`. Numeric
+#' outcomes only (gaussian family).
 #'
 #' @details
 #' Use this when the question is "which predictors keep a non-zero coefficient
 #' under a cross-validated L1 penalty (or, for `alpha < 1`, an elastic-net
-#' penalty)?". Selection happens at `lambda.min`, the penalty that minimizes
-#' cross-validated error; the more conservative `lambda.1se` is reported in
-#' `details` but is not used to select. The main caveat is that lasso tends to
+#' penalty)?". By default selection happens at `lambda.min`, the penalty that
+#' minimizes cross-validated error. `lambda.min` is tuned for prediction and
+#' is known to over-select (it tends to keep noise variables alongside the
+#' true ones); `lambda = "1se"` selects at `lambda.1se`, the largest penalty
+#' whose CV error is within one standard error of the minimum, which gives a
+#' sparser, more conservative set. Both values are reported in `details`
+#' whichever one is used. The main caveat is that lasso tends to
 #' keep one member of a group of strongly correlated predictors and zero out
 #' the rest, so an absent feature is not evidence that it is unrelated to the
 #' outcome.
@@ -353,7 +371,10 @@ lasso_importance <- function(coefs) {
 #' The design matrix is built internally from every column of `data` except
 #' `target`, via `stats::model.frame(na.action = stats::na.pass)` followed by
 #' `stats::model.matrix()`: factors and characters are expanded to dummies and
-#' rows carrying NAs are preserved rather than silently dropped. The matrix
+#' rows carrying NAs are preserved rather than silently dropped. Non-syntactic
+#' column names are reported as the caller wrote them (without the backticks
+#' `model.matrix()` adds). The design matrix must have at least two columns,
+#' because `glmnet` cannot fit a single-column `x`. The matrix
 #' carries no intercept column of its own (`glmnet` fits its own intercept,
 #' which is dropped from the reported coefficients), so `selected`, `scores`
 #' and `details$coefficients` name design-matrix columns -- for a factor
@@ -413,9 +434,12 @@ lasso_importance <- function(coefs) {
 #' @param n_cores Integer >= 1; number of workers used only when
 #'   `parallel = TRUE`. Default 2. Values above the detected core count are
 #'   capped.
+#' @param lambda Which cross-validated penalty to select at: `"min"`
+#'   (default, `lambda.min`) or `"1se"` (`lambda.1se`, sparser). See Details.
 #' @return An `fs_result` object with:
-#'   \item{selected}{Design-matrix columns whose raw coefficient at
-#'     `lambda.min` is non-zero, ordered by decreasing `scores` magnitude.
+#'   \item{selected}{Design-matrix columns whose raw coefficient at the
+#'     chosen lambda (`lambda.min` by default) is non-zero, ordered by
+#'     decreasing `scores` magnitude.
 #'     (Selection reads the raw coefficients, so a constant column that glmnet
 #'     nonetheless gave a non-zero coefficient is reported even though its
 #'     standardized score is 0.)}
@@ -427,9 +451,10 @@ lasso_importance <- function(coefs) {
 #'   \item{task}{`"regression"` (gaussian family only).}
 #'   \item{model}{The fitted cv.glmnet object when `return_model = TRUE`, else
 #'     NULL.}
-#'   \item{details}{List of `lambda_min` (lambda minimizing CV error, the one
-#'     selection uses), `lambda_1se` (largest lambda within 1 SE of the
-#'     minimum; reported only), `coefficients` (the same three-column table as
+#'   \item{details}{List of `lambda_min` (lambda minimizing CV error),
+#'     `lambda_1se` (largest lambda within 1 SE of the minimum),
+#'     `lambda_used` (`"lambda.min"` or `"lambda.1se"`, the one selection and
+#'     all coefficients are read at), `coefficients` (the same three-column table as
 #'     `scores` but always on the raw coefficient scale) and `n_features`
 #'     (number of design-matrix columns considered).}
 #'   \item{call}{The matched call.}
@@ -453,7 +478,8 @@ lasso_importance <- function(coefs) {
 fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
                      custom_folds = NULL, impute = c("none", "mean"),
                      return_model = FALSE, seed = NULL, verbose = FALSE,
-                     parallel = FALSE, n_cores = 2L) {
+                     parallel = FALSE, n_cores = 2L,
+                     lambda = c("min", "1se")) {
 
   mc <- match.call()
 
@@ -468,6 +494,8 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
 
   assert_target(data, target)
   impute <- match.arg(impute)
+  lambda <- match.arg(lambda)
+  lambda_s <- paste0("lambda.", lambda)
 
   predictor_names <- setdiff(names(data), target)
   if (length(predictor_names) == 0L) {
@@ -501,8 +529,8 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
                            parallel, n_cores, custom_folds, seed, verbose,
                            return_model)
 
-  # Coefficients at lambda.min, on the raw scale and on the standardized one
-  coefs_raw <- lasso_coefficients(lasso_model, colnames(x_dense))
+  # Coefficients at the chosen lambda, on the raw and the standardized scale
+  coefs_raw <- lasso_coefficients(lasso_model, colnames(x_dense), s = lambda_s)
   importance_raw <- lasso_importance(coefs_raw)
 
   if (isTRUE(standardize)) {
@@ -527,8 +555,8 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
   selected_features <- scores_df$Variable[scores_df$Variable %in% nonzero]
 
   if (isTRUE(verbose)) {
-    message(sprintf("Selected %d of %d design-matrix column(s) at lambda.min.",
-                    length(selected_features), nrow(importance_raw)))
+    message(sprintf("Selected %d of %d design-matrix column(s) at %s.",
+                    length(selected_features), nrow(importance_raw), lambda_s))
   }
 
   new_fs_result(
@@ -540,6 +568,7 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
     details  = list(
       lambda_min   = lasso_model$lambda.min,
       lambda_1se   = lasso_model$lambda.1se,
+      lambda_used  = lambda_s,
       coefficients = importance_raw,
       n_features   = nrow(importance_raw)
     ),

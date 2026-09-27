@@ -26,9 +26,11 @@ is converted to a plain data.frame on entry.}
 
 \item{target}{Single string naming the target column of \code{data}; a column
 index is not accepted. A factor, character, or logical target means
-classification, anything else regression.}
+classification (unused factor levels are dropped), anything else
+regression. The target may not contain missing values.}
 
-\item{sizes}{Numeric vector of feature-subset sizes to evaluate. Default
+\item{sizes}{Vector of whole-number feature-subset sizes to evaluate
+(fractional sizes are an error). Default
 \code{NULL}, which uses \code{1:p}, where \code{p} is the predictor count after any
 one-hot encoding. Values outside \verb{[1, p]} are dropped with a warning; if
 that leaves nothing, the call is an error rather than a silent empty run.}
@@ -65,8 +67,9 @@ dependent predictors are dropped from the selected set first, each with a
 warning, and what survives is recorded in \code{details$final_model_variables}.
 Default \code{FALSE}.}
 
-\item{seed}{Optional single finite number, truncated to an integer with
-\code{as.integer()}. It covers the split and the RFE resampling, is applied for
+\item{seed}{Optional single whole number within the range of an R integer;
+fractional or out-of-range values are an error rather than being
+truncated. It covers the split and the RFE resampling, is applied for
 the duration of the call only (the previous RNG state is restored on
 exit), and defaults to \code{NULL}, which never seeds. Under
 \code{parallel = TRUE} the seed is also used to set reproducible
@@ -79,9 +82,10 @@ report its own progress, unless \code{rfe_control$verbose} overrides the
 latter. Default \code{FALSE}.}
 
 \item{parallel}{Logical. If \code{TRUE}, registers a two-worker PSOCK cluster
-(capped at the detected core count) for the duration of the call and stops
-it again when the call returns; requires the suggested packages 'foreach'
-and 'doParallel'. Default \code{FALSE}.}
+(capped at the detected core count) for the duration of the call, then
+stops it and restores whichever foreach backend was registered before the
+call; requires the suggested packages 'foreach' and 'doParallel'.
+Default \code{FALSE}.}
 }
 \value{
 An object of class \code{fs_result} with:
@@ -133,7 +137,9 @@ Requires the suggested package 'caret'. The RFE function set comes from
 \code{rfe_control$functions} and defaults to \code{caret::rfFuncs}, which fits random
 forests, so the suggested package 'randomForest' must also be installed
 unless you supply a different set (for example
-\code{rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)}).
+\code{rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)});
+it is also needed for the default final model (\code{model_method = "rf"}) when
+\code{return_final_model = TRUE}. Both are checked before any fitting starts.
 Parallel execution additionally requires 'foreach' and 'doParallel';
 classification metrics use \code{caret::postResample()}, which needs 'e1071'.
 
@@ -153,10 +159,18 @@ resampling inside those same training rows on features that were already
 selected. Only \code{details$test_metrics} is computed on data the search never
 saw.
 
+Predictor names that are not syntactic R names (for example \code{"a b"}) are
+replaced by their \code{make.names()} versions inside the \code{rfe} object and the
+final model, because caret's function sets cannot handle them; \code{selected},
+\code{scores}, \code{details$variable_importance} and \code{details$final_model_variables}
+report the original names.
+
 Missing values in the \emph{training} predictors are rejected with an error;
 impute or drop incomplete rows before calling. NAs in the held-out rows are
-not checked here and will propagate through \code{predict()} into
-\code{details$test_metrics}. With \code{handle_categorical = TRUE} the encoded test
+not imputed: depending on the function set, \code{predict()} either stops (random
+forests) or returns \code{NA} for those rows, which \code{caret::postResample()} then
+leaves out of \code{details$test_metrics}; a warning reports how many rows were
+left out. With \code{handle_categorical = TRUE} the encoded test
 rows are row-count checked against their input, so an encoding that quietly
 loses rows becomes an error rather than a silently misaligned metric.
 }

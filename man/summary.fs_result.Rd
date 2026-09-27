@@ -21,16 +21,25 @@ Prints the result, the call that produced it, and a ranked score table.
 }
 \details{
 Everything \code{print()} shows, then the recorded call, then -- for methods
-that produce per-feature scores -- a table of every scored feature ranked
-by decreasing absolute score, with columns \code{feature}, \code{score} (four
+that produce per-feature scores -- a table of every scored feature, ranked
+strongest first, with columns \code{feature}, \code{score} (four
 significant digits) and \code{selected} (\code{*} marks the features that were kept).
 The table is truncated to \code{n} rows with a "... (m more)" tail.
 
 The ranking direction follows the method. For most methods a larger score
-means a stronger feature, and rows are ordered by decreasing absolute score
-so that signed scores such as regression coefficients sort sensibly. For
+means a stronger feature, and rows are ordered by decreasing score, so a
+negative importance (a feature that did worse than its permuted copy)
+ranks below every positive one. The exception is \code{\link{fs_lasso}},
+whose scores are signed standardized coefficients: those are ordered by
+decreasing absolute value, since the sign is the direction of the effect,
+not its strength. For
 methods that score by p-value, where smaller is better, rows are ordered
-ascending instead, so the most significant feature is listed first.
+ascending instead, so the most significant feature is listed first. The
+same ascending order is used for the threshold filters
+(\code{\link{fs_unsupervised}}, \code{\link{fs_supervised}}) when they kept
+the low side of the threshold (\code{direction = "below"} with
+\code{action = "keep"}, or \code{"above"} with \code{"remove"}), so the
+kept features come first.
 }
 \examples{
 res <- fs_unsupervised(

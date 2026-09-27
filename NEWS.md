@@ -1,17 +1,22 @@
 # featR 0.1.0
 
 First release. Unifies the `feature_selection` script collection into a package
-with 16 exported functions sharing one calling convention and one return type.
+with 16 exported `fs_*()` functions (plus the `selected()` accessor) sharing one
+calling convention and one return type.
 
 ## Calling convention
 
 All selection functions take the form:
 
 ```r
-fs_<method>(data, target, ..., seed = NULL, verbose = FALSE, n_cores = 1L)
+fs_<method>(data, target, <method options>, ...)
 ```
 
-`data` is always first and `target` (a single column-name string) always second.
+`data` is always first and `target` (a single column-name string) always second,
+for the functions that have an outcome. Housekeeping arguments come last:
+every function takes `verbose`, functions that use randomness take
+`seed = NULL`, and functions that can run in parallel take `n_cores` and/or
+`parallel`.
 This replaces the previous mix of `response_col`, `target_var`, `target_col`,
 `responseName`, `response_var`, `dependent_var`, and `x`/`y` argument pairs.
 Other renames: `p` -> `train_ratio`, `predictor_cols` -> `predictors`,
@@ -162,6 +167,96 @@ their own decomposition structure.
   literally named `"target"`, imputes test-only missing values, and accepts
   character predictors.
 * `fs_svd()` errors on invalid arguments instead of silently repairing them.
+
+## Pre-release adversarial review
+
+A full statistical, methodological, and programmatic review, with every
+finding reproduced in R before it was fixed and a regression test added for
+each.
+
+### Behavior changes
+
+* `fs_elastic()`'s default `alpha_seq` is now `seq(0.1, 1, by = 0.1)`. The old
+  default included `alpha = 0`, pure ridge. Ridge never zeroes a coefficient,
+  so whenever it won the tuning (it won on every seed tried with correlated
+  predictors) every predictor was reported as selected. A user-supplied
+  `alpha = 0` that wins now warns.
+* `fs_lasso()` gains `lambda = c("min", "1se")`. The default is unchanged;
+  `"1se"` selects at `lambda.1se` for a sparser, more stable set, and
+  `details$lambda_used` records which was used.
+* `summary()` ranks scores by value rather than by absolute value, except for
+  `fs_lasso()`'s signed coefficients. Negative permutation or Boruta
+  importance (worse than noise) previously ranked above useful features. It
+  also lists the kept side first when a threshold filter kept the low scores.
+* `fs_boruta()` passes `num.threads = 1` to Boruta's importance engine, which
+  otherwise used every core, contrary to featR's sequential default.
+* `seed` must be a whole number within the integer range. Fractional seeds
+  were silently truncated (`seed = 1.9` gave the same stream as `seed = 1`).
+* Parallel paths restore the caller's own foreach backend on exit, through
+  one shared helper. Previously they forced the session back to sequential,
+  or left a user-registered backend pointing at featR's stopped cluster.
+
+### Statistical corrections
+
+* `fs_svm()`'s SVM-RFE subset-size search was optimistically biased. It
+  scored the top of a ranking built on all training rows, including each
+  fold's held-out rows, and scaled once on all rows. On pure noise it reported
+  about 93% cross-validated accuracy where the truth is 50%. The elimination
+  and the scaling are now re-run inside every fold.
+* `fs_bayes()` no longer discards sampler and loo warnings. Convergence
+  problems and high Pareto *k* values are collected and summarized after the
+  search, saying whether the selected model is affected.
+
+* `fs_randomforest()` pooled per-forest importance standard errors with
+  `randomForest::combine()` when run in parallel, which inflates them by about
+  `sqrt(n_cores)` and shrank scaled importance by the same factor. They are
+  now pooled exactly across trees.
+* `fs_recursivefeature()` over-reported held-out accuracy for character and
+  logical targets. The test factor was rebuilt from the test rows alone, and
+  `caret::postResample()` silently dropped predictions of classes absent from
+  them.
+* `fs_supervised()` computes the ANOVA *F* in closed form. Perfect separation
+  scores `Inf` instead of a rounding-noise value near 1e31, only observed
+  groups count towards the degrees of freedom, and the "essentially perfect
+  fit" warning is gone. The constant-column check for correlation scores is
+  relative to the data's scale, so features measured in very small units are
+  no longer scored `NA`.
+* `fs_infogain()` clamps floating-point residue to zero, so exactly
+  independent predictors score 0 and are not selected, and bins columns
+  containing infinite values instead of failing.
+* `fs_pca()` and `fs_svd()` use a relative zero-variance tolerance. Columns
+  that are constant up to round-off are dropped rather than scaled up to take
+  a full share of a component, and columns in very small units are kept.
+  `fs_svd()` falls back to the exact solver when RSpectra fails to converge.
+* `fs_mars()` returns regression predictions and `R2` as plain numbers rather
+  than 1 x 1 matrices.
+
+### Bug fixes
+
+* Non-syntactic column names: `fs_mars()` never selected such predictors, and
+  `fs_lasso()`, `fs_elastic()`, and `fs_stepwise()` returned them backticked,
+  so `data[selected(res)]` failed. `fs_svm()` carried the same backticks into
+  its encoded feature names. `fs_recursivefeature()` crashed on them
+  with `caret::lmFuncs`. Formula construction now escapes backslashes and
+  backticks inside names.
+* `fs_chi()` and `fs_infogain()` reject duplicated column names. The second
+  copy was previously never tested.
+* `fs_lasso()` and `fs_elastic()` give a clear error for a single
+  design-matrix column instead of glmnet's.
+* `fs_stepwise()` accepts a user-supplied `scope` instead of erroring.
+* `fs_mars(search = "random")` with a factor outcome no longer fails on the
+  first call in a fresh session.
+* `fs_randomforest()` rejects invalid `sampsize` entries instead of silently
+  growing every tree on one row, imputes logical predictors, and warns when a
+  numeric target is modeled with the default `task = "classification"`.
+* `fs_recursivefeature()` handles unused factor levels in the target, rejects
+  fractional `sizes` and `NA` targets, reports `NA` test predictions, and
+  requires randomForest when its defaults need it.
+* `fs_correlation()` validates the type of `diag_value`. Its documentation
+  now describes the pruning rule accurately: strongest pair first, not
+  `caret::findCorrelation()`'s scan order.
+* `fs_pca()` keeps logical and date columns as labels instead of dropping them
+  silently.
 
 ## Package conventions
 

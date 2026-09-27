@@ -73,7 +73,9 @@ evaluation when \code{n_cores} resolves to 1. Because each model is then held
 to a single MCMC chain, cross-chain convergence diagnostics such as R-hat
 become unavailable; a warning says so. Default FALSE.}
 
-\item{seed}{Optional integer. When supplied, seeds the random sampling of
+\item{seed}{Optional whole number (within the R integer range; fractional
+values are an error rather than being truncated). When supplied, seeds
+the random sampling of
 combinations (see \code{sample_combinations}) locally; the previous RNG state
 is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
 asked. Note this does not seed the samplers; pass \code{seed} inside
@@ -141,6 +143,14 @@ Combinations whose model fails to fit are excluded from selection and
 counted in \code{details$n_failed_fits}, with a warning. If no fit yields a
 finite \code{elpd_loo} at all, the first successfully fitted model is returned
 with a warning; that is an arbitrary fallback, not a selection.
+
+Per-model sampler warnings (divergent transitions, R-hat, effective sample
+size) and loo's Pareto-k warnings are muffled while the models are fitted,
+so a search over many subsets does not flood the console, but they are not
+discarded: after the search one warning summarizes how many fits raised
+sampler warnings and another how many have observations with Pareto
+k > 0.7 (unreliable PSIS-LOO estimates), each stating whether the selected
+model is among them. \code{verbose = TRUE} shows every individual warning.
 
 Two caveats are worth stating plainly. \code{details$mae} and \code{details$rmse} are
 in-sample errors computed on the same rows used to fit and to select, so

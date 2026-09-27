@@ -66,7 +66,8 @@ test_that("fs_elastic signature and defaults are stable", {
     c("data", "target", "alpha_seq", "lambda_seq", "trControl", "metric",
       "use_pca", "nPCs", "seed", "verbose", "n_cores")
   )
-  expect_identical(eval(fx$alpha_seq), seq(0, 1, by = 0.1))
+  # alpha = 0 (ridge) cannot zero a coefficient, so it is not in the default
+  expect_identical(eval(fx$alpha_seq), seq(0.1, 1, by = 0.1))
   # NULL means "let glmnet pick its own path per alpha"
   expect_null(fx$lambda_seq)
   expect_null(fx$trControl)
@@ -401,4 +402,41 @@ test_that("fs_elastic handles a classification target end to end", {
   expect_true(res$details$best_alpha %in% c(0, 1))
   expect_true(res$details$best_lambda %in% c(0.01, 0.1))
   expect_s3_class(res$model, "train")
+})
+
+test_that("a winning alpha of 0 (ridge) warns that everything is selected", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  i <- seq_len(60)
+  d <- data.frame(x1 = sin(i), x2 = cos(i / 2), x3 = sin(i / 7))
+  d$y <- 2 * d$x1 + 0.05 * cos(11 * i)
+  expect_warning(
+    res <- fs_elastic(d, "y", alpha_seq = 0, lambda_seq = 0.1, seed = 1),
+    "winning alpha is 0"
+  )
+  expect_setequal(selected(res), c("x1", "x2", "x3"))
+})
+
+test_that("non-syntactic names are reported without backticks", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  i <- seq_len(60)
+  d <- data.frame(`my var` = sin(i), x2 = cos(i / 2), noise = sin(i / 7),
+                  check.names = FALSE)
+  d$y <- 3 * d$`my var` + 2 * d$x2 + 0.05 * cos(11 * i)
+  res <- fs_elastic(d, "y", alpha_seq = 1, seed = 1)
+  expect_true("my var" %in% selected(res))
+  expect_true(all(names(res$scores) %in% names(d)))
+})
+
+test_that("a single-column design matrix is a clear error", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  d <- data.frame(x = sin(1:20), y = cos(1:20))
+  expect_error(fs_elastic(d, "y"), "at least two design-matrix columns")
 })

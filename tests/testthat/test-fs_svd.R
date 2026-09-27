@@ -450,3 +450,42 @@ test_that("approx_args reach RSpectra::svds() and 'auto' takes the approximate p
                         msgs, fixed = TRUE)))
   expect_equal(auto$singular_values, svd(X)$d[1:3], tolerance = 1e-6)
 })
+
+test_that("the zero-variance check is relative to each column's scale", {
+  X <- matrix(c(1, 4, 2, 8, 5, 7,
+                3, 1, 4, 1, 5, 9,
+                2, 7, 1, 8, 2, 8), ncol = 3)
+  # a column in tiny units still varies; it used to be rejected by the
+  # absolute sqrt(eps) cut-off
+  small <- X
+  small[, 2] <- small[, 2] * 1e-9
+  res <- fs_svd(small)
+  expect_equal(res$singular_values, svd(scale(small))$d)
+
+  # a column that is constant up to round-off is rejected by position
+  rc <- X
+  rc[, 3] <- rep(c(0.3, 0.1 + 0.2), 3)
+  expect_gt(stats::sd(rc[, 3]), 0)
+  expect_error(fs_svd(rc), "zero \\(or undefined\\) variance: column 3")
+})
+
+test_that("an unconverged approximate solve falls back to the exact SVD", {
+  skip_if_not_installed("RSpectra")
+  set.seed(11)
+  X <- matrix(stats::rnorm(200 * 150), 200)
+  # RSpectra warns about the non-convergence itself; keep only featR's warning
+  warns <- character(0)
+  res <- withCallingHandlers(
+    fs_svd(X, n_singular_values = 10, svd_method = "approx",
+           approx_args = list(opts = list(maxitr = 1))),
+    warning = function(w) {
+      warns <<- c(warns, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+  expect_true(any(grepl("falling back to exact SVD", warns, fixed = TRUE)))
+  expect_length(res$singular_values, 10L)
+  expect_identical(dim(res$left_singular_vectors), c(200L, 10L))
+  expect_identical(dim(res$right_singular_vectors), c(150L, 10L))
+  expect_equal(res$singular_values, svd(scale(X))$d[1:10])
+})

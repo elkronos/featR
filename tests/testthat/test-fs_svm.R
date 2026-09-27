@@ -599,3 +599,128 @@ test_that("SVM-RFE ranks a regression target (eps-svr weight extraction)", {
   expect_true(all(sel$scores >= 0))
   expect_identical(names(res$details$performance), c("RMSE", "Rsquared", "MAE"))
 })
+
+test_that("svm_center_scale applies reference statistics to new rows", {
+  ref <- matrix(c(1, 2, 3, 4, 10, 10, 10, 10), ncol = 2,
+                dimnames = list(NULL, c("a", "k")))
+  new <- matrix(c(5, 11), ncol = 2, dimnames = list(NULL, c("a", "k")))
+  out <- featR:::svm_center_scale(new, ref = ref)
+  expect_equal(unname(out[1, "a"]), (5 - 2.5) / stats::sd(1:4))
+  # zero-variance reference column: centered with the reference mean only
+  expect_equal(unname(out[1, "k"]), 1)
+})
+
+test_that("SVM-RFE weights reproduce kernlab's decision values", {
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+
+  # For each one-against-one machine, x %*% w - b must equal kernlab's own
+  # decision value; the criterion is the sum of w^2 over the machines.
+  x <- featR:::svm_center_scale(iris[, 1:4])
+  fit <- featR:::svm_rfe_ksvm(x, iris$Species, "classification")
+  xm <- kernlab::xmatrix(fit)
+  cf <- kernlab::coef(fit)
+  dec <- kernlab::predict(fit, x, type = "decision")
+  expect_length(xm, 3L)
+  ref <- numeric(4)
+  for (i in seq_along(xm)) {
+    w <- crossprod(xm[[i]], cf[[i]])
+    expect_equal(as.numeric(x %*% w - kernlab::b(fit)[i]), dec[, i],
+                 tolerance = 1e-8)
+    ref <- ref + as.numeric(w)^2
+  }
+  expect_equal(unname(featR:::svm_rfe_weights(fit, colnames(x))), ref)
+})
+
+test_that("SVM-RFE size search re-ranks inside each fold (no selection bias)", {
+  # REGRESSION: the size search used to score the top-k of a ranking computed
+  # on ALL training rows, including each fold's held-out rows. On pure noise
+  # that made the cross-validated accuracy of small subsets look far better
+  # than chance (about 0.9 instead of 0.5).
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+
+  # Every elimination after the first (full-data) one must run on a strict
+  # subset of the rows: the fold's training rows.
+  seen_rows <- integer(0)
+  real_eliminate <- featR:::svm_rfe_eliminate
+  local_mocked_bindings(
+    svm_rfe_eliminate = function(x, y, task, verbose = FALSE) {
+      seen_rows <<- c(seen_rows, nrow(x))
+      real_eliminate(x, y, task, verbose)
+    },
+    .package = "featR"
+  )
+  d <- svm_rfe_toy()
+  set.seed(3)
+  featR:::svm_rfe_rank(d[, c("x1", "x2", "n1", "n2")], d$y,
+                       "classification", nfolds = 3)
+  expect_length(seen_rows, 4L)           # full data + one per fold
+  expect_identical(seen_rows[1], 60L)
+  expect_true(all(seen_rows[-1] < 60L))
+  expect_identical(sum(60L - seen_rows[-1]), 60L)  # folds partition the rows
+
+  # Statistical check on pure noise: honest CV accuracy stays near chance.
+  local_mocked_bindings(svm_rfe_eliminate = real_eliminate,
+                        .package = "featR")
+  set.seed(11)
+  n <- 40
+  x <- matrix(stats::rnorm(n * 64), n,
+              dimnames = list(NULL, paste0("v", seq_len(64))))
+  y <- factor(rep(c("a", "b"), n / 2))
+  res <- featR:::svm_rfe_rank(x, y, "classification", nfolds = 5)
+  expect_lt(max(res$size_scores), 0.8)
+})
+
+test_that("non-syntactic predictor names survive encoding without backticks", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+
+  # REGRESSION: dummyVars() copied the formula backticks into the encoded
+  # names, so `selected` held "`a b`" instead of the user's column "a b".
+  d <- svm_rfe_toy()
+  names(d) <- c("y", "x 1", "x-2", "n1", "n2")
+  d$`f g` <- factor(rep(c("u", "v", "w"), 20))
+
+  dv <- featR:::svm_dummy_encoder(d, "y")
+  enc <- featR:::svm_encode(dv, d)
+  expect_false(any(grepl("`", names(enc), fixed = TRUE)))
+  expect_true(all(c("x 1", "x-2", "f gv", "f gw") %in% names(enc)))
+
+  res <- suppressWarnings(fs_svm(
+    d, "y", "classification",
+    nfolds = 3, tune_grid = data.frame(C = 1),
+    feature_select = TRUE, n_features = 2, seed = 1
+  ))
+  expect_setequal(res$selected, c("x 1", "x-2"))
+  expect_true(all(res$selected %in% names(d)))
+  expect_false(any(grepl("`", names(res$scores), fixed = TRUE)))
+})
+
+test_that("n_cores > 1 stops its cluster and restores the foreach backend", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  skip_if_not_installed("doParallel")
+  skip_if_not_installed("foreach")
+  skip_on_cran()
+  skip_if(parallel::detectCores() < 2L, "needs 2 cores")
+
+  foreach::registerDoSEQ()
+  n_conn <- nrow(showConnections())
+  res <- fs_svm(svm_toy_classification(), "y", "classification",
+                nfolds = 3, tune_grid = data.frame(C = 1),
+                n_cores = 2, seed = 3)
+  expect_s3_class(res, "fs_result")
+  expect_identical(nrow(showConnections()), n_conn)
+  expect_identical(foreach::getDoParName(), "doSEQ")
+})
+
+test_that("fs_svm rejects a fractional seed before any work", {
+  expect_error(
+    fs_svm(svm_toy_classification(), "y", "classification", seed = 1.5),
+    "'seed' must be a whole number"
+  )
+})

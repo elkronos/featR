@@ -7,7 +7,7 @@
 fs_elastic(
   data,
   target,
-  alpha_seq = seq(0, 1, by = 0.1),
+  alpha_seq = seq(0.1, 1, by = 0.1),
   lambda_seq = NULL,
   trControl = NULL,
   metric = NULL,
@@ -25,7 +25,8 @@ candidate predictors.}
 \item{target}{Single string naming the outcome column in \code{data}.}
 
 \item{alpha_seq}{Numeric vector of alpha values to tune over, each in
-\verb{[0, 1]}. Default \code{seq(0, 1, by = 0.1)}.}
+\verb{[0, 1]}. Default \code{seq(0.1, 1, by = 0.1)}; 0 (ridge) is left out
+because it cannot zero a coefficient (see Details).}
 
 \item{lambda_seq}{Numeric vector of non-negative lambda values to tune
 over, or \code{NULL} (default) to use glmnet's own path per alpha.}
@@ -84,8 +85,11 @@ regularization via \code{caret::train(method = "glmnet")}. Supports regression
 \details{
 Use this when the question is "which predictors survive a jointly tuned
 L1/L2 penalty?". Both alpha and lambda are chosen by resampling, and every
-predictor with a non-zero coefficient at the winning pair is reported. When
-the winning alpha is below 1 the ridge component spreads weight across
+predictor with a non-zero coefficient at the winning pair is reported.
+\code{alpha = 0} is pure ridge, which never sets a coefficient to exactly zero,
+so it cannot select: the default \code{alpha_seq} therefore starts at 0.1, and if
+you include 0 yourself and it wins, every predictor is "selected" and a
+warning says so. When the winning alpha is below 1 the ridge component spreads weight across
 correlated predictors, so a group of collinear columns tends to survive
 together instead of being reduced to a single representative.
 
@@ -94,7 +98,10 @@ column of \code{data} is a candidate predictor, and non-syntactic names are
 backticked. Predictors then go through \code{stats::model.matrix()} and the
 intercept column is removed, so a k-level factor or character column
 contributes k - 1 dummy columns and \code{selected}, \code{scores} and \code{details$coef}
-name design-matrix columns rather than the original columns.
+name design-matrix columns rather than the original columns. Non-syntactic
+names are reported as the caller wrote them, without the backticks
+\code{model.matrix()} adds. \code{glmnet} needs at least two design-matrix columns,
+so a single numeric predictor is an error.
 
 Rows with a missing response, or a missing value in any predictor, are
 dropped before fitting (an error if that leaves nothing), and a constant

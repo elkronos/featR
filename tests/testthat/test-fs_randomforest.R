@@ -528,3 +528,130 @@ test_that("same seed reproduces results and the caller's RNG state is untouched"
   expect_identical(res1$selected, res2$selected)
   expect_identical(res1$scores, res2$scores)
 })
+
+test_that("invalid control$sampsize is an error, not a silent sampsize of 1", {
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+
+  # Regression test: any entry < 1 used to replace the whole vector with 1L,
+  # so every tree was grown on a single row (held-out R2 ~ 0) without a word.
+  set.seed(71)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- d$x1 + rnorm(n, sd = 0.3)
+
+  for (bad in list(-3, 0, 2.5, Inf, "10")) {
+    expect_error(
+      fs_randomforest(d, "y", "regression",
+                      control = list(ntree = 5, sampsize = bad), seed = 1),
+      "'control\\$sampsize' must contain whole numbers >= 1"
+    )
+  }
+  d$cls <- factor(rep(c("a", "b"), length.out = n))
+  expect_error(
+    fs_randomforest(d[, c("cls", "x1", "x2")], "cls", "classification",
+                    control = list(ntree = 5, sampsize = c(10, 0)), seed = 1),
+    "'control\\$sampsize' must contain whole numbers >= 1"
+  )
+})
+
+test_that("pooled importance SE of combined forests equals a one-piece fit", {
+  skip_if_not_installed("randomForest")
+
+  # randomForest::combine() averages per-forest *standard errors* as if they
+  # were per-tree SDs, inflating importanceSD by ~sqrt(n_cores) and shrinking
+  # scaled importance accordingly. rf_pool_importance_sd() recomputes it.
+  # In regression, forests grown back to back from one RNG stream are exactly
+  # the trees of a single forest grown from that stream, so the pooled SE must
+  # match the one-piece forest to numerical precision.
+  x <- iris[, 2:4]
+  y <- iris$Sepal.Length
+  set.seed(1)
+  a <- randomForest::randomForest(x, y, ntree = 20, importance = TRUE)
+  b <- randomForest::randomForest(x, y, ntree = 30, importance = TRUE)
+  set.seed(1)
+  whole <- randomForest::randomForest(x, y, ntree = 50, importance = TRUE)
+
+  merged <- randomForest::combine(a, b)
+  expect_equal(merged$importance, whole$importance)
+  # the bug being corrected: combine()'s own SE is off
+  expect_false(isTRUE(all.equal(merged$importanceSD, whole$importanceSD)))
+  expect_equal(rf_pool_importance_sd(list(a, b)), whole$importanceSD)
+
+  # classification keeps the per-class matrix shape and names
+  set.seed(2)
+  f1 <- randomForest::randomForest(iris[, 1:4], iris$Species, ntree = 10,
+                                   importance = TRUE)
+  f2 <- randomForest::randomForest(iris[, 1:4], iris$Species, ntree = 10,
+                                   importance = TRUE)
+  pooled <- rf_pool_importance_sd(list(f1, f2))
+  expect_identical(dimnames(pooled), dimnames(f1$importanceSD))
+  expect_true(all(pooled <= randomForest::combine(f1, f2)$importanceSD + 1e-12))
+})
+
+test_that("scaled importance does not shrink with n_cores", {
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  skip_if_not_installed("foreach")
+  skip_if_not_installed("doParallel")
+  skip_on_cran()
+  cores <- tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
+  skip_if(is.na(cores) || cores < 2L, "fewer than two cores available")
+
+  set.seed(91)
+  n <- 200
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n))
+  d$y <- 2 * d$x1 + d$x2 + rnorm(n)
+
+  s1 <- fs_randomforest(d, "y", "regression",
+                        control = list(ntree = 200, oob = FALSE), seed = 3)
+  s2 <- fs_randomforest(d, "y", "regression",
+                        control = list(ntree = 200, oob = FALSE), seed = 3,
+                        n_cores = 2)
+  # before the fix the parallel score was ~1/sqrt(2) = 0.71 of the serial one
+  ratio <- s2$scores[["x1"]] / s1$scores[["x1"]]
+  expect_gt(ratio, 0.85)
+  expect_lt(ratio, 1.18)
+  expect_equal(unname(s2$model$importanceSD),
+               unname(rf_pool_importance_sd(list(s2$model))),
+               tolerance = 1e-8)
+})
+
+test_that("NAs in a logical predictor are imputed like other predictors", {
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  skip_on_cran()
+
+  # Regression test: logical columns had no imputation branch, so an NA in one
+  # reached randomForest() ("NA not permitted in predictors") even with
+  # control$impute = TRUE.
+  set.seed(606)
+  n <- 80
+  d <- data.frame(y = rnorm(n), flag = rep(c(TRUE, FALSE), length.out = n),
+                  x1 = rnorm(n))
+  d$flag[c(1, 5, 9, 60, 70, 79)] <- NA
+
+  res <- fs_randomforest(d, "y", "regression",
+                         control = list(ntree = 10, return_test_data = TRUE),
+                         seed = 2)
+  expect_true("flag" %in% res$details$feature_names)
+  expect_false(anyNA(res$details$test_data$flag))
+  expect_true(is.logical(res$details$test_data$flag))
+  expect_false(anyNA(res$details$predictions))
+})
+
+test_that("a numeric target with a defaulted task warns", {
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+
+  d <- data.frame(y = rep(c(0, 1), 20), x1 = rnorm(40), x2 = rnorm(40))
+  expect_warning(
+    fs_randomforest(d, "y", control = list(ntree = 5), seed = 1),
+    "numeric but 'task' defaulted"
+  )
+  # an explicit task is taken at its word
+  expect_no_warning(
+    fs_randomforest(d, "y", task = "classification",
+                    control = list(ntree = 5), seed = 1)
+  )
+})

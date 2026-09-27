@@ -81,6 +81,45 @@ rf_apply_feature_select <- function(train_df, target, fun) {
   setdiff(kept, target)
 }
 
+#' Pool permutation-importance standard errors across sub-forests
+#'
+#' `randomForest` stores, for each permutation-importance column, the mean
+#' over trees in `importance` and the standard error
+#' `sqrt(popvar_over_trees / ntree)` in `importanceSD`. For forests grown
+#' separately and merged with `randomForest::combine()`, this recovers each
+#' forest's per-tree mean and population variance, pools them exactly, and
+#' returns the standard error the merged forest would have had had it been
+#' grown in one piece.
+#'
+#' @param forests List of `randomForest` objects fitted with
+#'   `importance = TRUE` on the same predictors.
+#' @return An object shaped like `forests[[1]]$importanceSD`.
+#' @noRd
+rf_pool_importance_sd <- function(forests) {
+  template <- forests[[1L]]$importanceSD
+  if (is.null(template)) {
+    return(NULL)
+  }
+  n <- vapply(forests, function(f) as.numeric(f$ntree), numeric(1L))
+  total <- sum(n)
+  k <- NCOL(template)
+  m <- lapply(forests, function(f) {
+    as.matrix(f$importance)[, seq_len(k), drop = FALSE]
+  })
+  se <- lapply(forests, function(f) as.matrix(f$importanceSD))
+  pooled_mean <- Reduce(`+`, Map(function(mi, ni) mi * ni, m, n)) / total
+  # E[x^2] per forest = popvar + mean^2, with popvar = se^2 * ntree
+  pooled_sq <- Reduce(`+`, Map(function(mi, si, ni) ni * (si^2 * ni + mi^2),
+                               m, se, n)) / total
+  out <- sqrt(pmax(pooled_sq - pooled_mean^2, 0) / total)
+  if (is.matrix(template)) {
+    dimnames(out) <- dimnames(template)
+    out
+  } else {
+    stats::setNames(as.numeric(out), names(template))
+  }
+}
+
 #' Random forest importance and held-out evaluation
 #'
 #' Answers "how much does each predictor contribute to a random forest, and how
@@ -107,15 +146,19 @@ rf_apply_feature_select <- function(train_df, target, fun) {
 #' @param target Single string naming the target column of `data`; a column
 #'   index is not accepted.
 #' @param task One of `"classification"` (the default) or `"regression"`,
-#'   matched with `match.arg()`. A classification target is coerced with
+#'   matched with `match.arg()`. The task is not inferred from the target:
+#'   when `task` is left at its default and the target is numeric, a warning
+#'   says so, since every distinct value would become a class. A
+#'   classification target is coerced with
 #'   `as.factor()` and must retain at least two levels; a regression target is
 #'   coerced with `as.numeric()`. Either way, rows whose target is `NA` after
 #'   coercion are dropped with a warning.
 #' @param control List of method-specific options; every accepted entry and its
 #'   default is listed under Details. Unknown entries are an error, not a
 #'   silent no-op. Default `list()`, i.e. all defaults.
-#' @param seed Optional single finite number for reproducibility, truncated to
-#'   an integer with `as.integer()`. Applied for the duration of the call only;
+#' @param seed Optional single whole number for reproducibility, within the
+#'   range of an R integer; fractional or out-of-range values are an error
+#'   rather than being truncated. Applied for the duration of the call only;
 #'   the previous RNG state is restored on exit. With more than one worker it
 #'   is also handed to `parallel::clusterSetRNGStream()`, and is then the only
 #'   way to make the run reproducible. Default `NULL` (the RNG is never seeded
@@ -144,9 +187,12 @@ rf_apply_feature_select <- function(train_df, target, fun) {
 #'     \code{FALSE}, \code{scores} and \code{details$importance} are
 #'     \code{NULL} and \code{selected} keeps plain column order.
 #'   \item \code{scale_importance = TRUE} -- passed as \code{scale} to
-#'     \code{randomForest::importance()}, which divides each mean decrease in
-#'     accuracy by its permutation standard error. Set to \code{FALSE} for the
-#'     raw, unscaled permutation importance.
+#'     \code{randomForest::importance()}, which divides each permutation
+#'     importance (mean decrease in accuracy, or mean increase in MSE) by its
+#'     standard error over trees. Set to \code{FALSE} for the raw, unscaled
+#'     permutation importance. With more than one worker the standard error
+#'     is pooled across the sub-forests, so scaled scores do not depend on
+#'     \code{n_cores}.
 #'   \item \code{mtry = NULL} -- predictors sampled at each split. \code{NULL}
 #'     means \code{floor(sqrt(p))} for classification and \code{floor(p / 3)}
 #'     for regression; any value, supplied or derived, is clamped to
@@ -159,7 +205,8 @@ rf_apply_feature_select <- function(train_df, target, fun) {
 #'     whole number >= 2, or \code{NULL} for no limit.
 #'   \item \code{sampsize = NULL} -- rows drawn to grow each tree, passed to
 #'     \code{randomForest}. A single number for regression (a vector is an
-#'     error); one number per class is allowed for classification. Values are
+#'     error); one number per class is allowed for classification. Entries
+#'     must be whole numbers >= 1 (anything else is an error). Values are
 #'     clamped to the training row count, and \code{NA} entries are replaced by
 #'     the full training size when \code{replace = TRUE} and by
 #'     \code{ceiling(0.632 * n)} otherwise.
@@ -176,7 +223,7 @@ rf_apply_feature_select <- function(train_df, target, fun) {
 #'     training split only, and must select existing columns while retaining
 #'     the target -- see the note below.
 #'   \item \code{impute = TRUE} -- median (numeric) or modal
-#'     (factor/character) values learned on the training data for every
+#'     (factor/character/logical) values learned on the training data for every
 #'     predictor and applied to NAs in train and test.
 #'   \item \code{drop_zerovar = TRUE} -- near-zero variance removal with
 #'     \code{caret::nearZeroVar()}, using training data only.
@@ -240,7 +287,9 @@ rf_apply_feature_select <- function(train_df, target, fun) {
 #'         importance was computed.}
 #'   \item{scores}{Named numeric vector of permutation importance from
 #'         `randomForest::importance(type = 1)` -- mean decrease in accuracy
-#'         for classification, percent increase in MSE for regression -- scaled
+#'         for classification, mean increase in MSE for regression (the
+#'         column randomForest names with a percent sign, though it is not a
+#'         percentage) -- scaled
 #'         or not according to `control$scale_importance`. `NULL` when
 #'         `control$importance = FALSE`.}
 #'   \item{method}{"randomforest".}
@@ -293,9 +342,18 @@ fs_randomforest <- function(data,
                             n_cores = 1L) {
   cl_call <- match.call()
 
+  task_defaulted <- missing(task)
   task <- match.arg(task)
   assert_data_frame(data, "data")
   assert_target(data, target, arg = "target")
+  if (task_defaulted && is.numeric(data[[target]])) {
+    warning(sprintf(paste(
+      "Target '%s' is numeric but 'task' defaulted to \"classification\",",
+      "so every distinct value is treated as a class. Pass",
+      "task = \"regression\" for a numeric outcome, or",
+      "task = \"classification\" to silence this warning."
+    ), target), call. = FALSE)
+  }
   if (!is.list(control)) {
     stop("'control' must be a list.", call. = FALSE)
   }
@@ -537,6 +595,15 @@ fs_randomforest <- function(data,
         } else if (is.factor(x) || is.character(x)) {
           tab <- table(x, useNA = "no")
           impute_values[[i]] <- if (length(tab) > 0L) names(which.max(tab)) else NA
+        } else if (is.logical(x)) {
+          # Modal value, kept logical. Without this branch an NA in a logical
+          # predictor survived imputation and randomForest() refused to fit.
+          tab <- table(x, useNA = "no")
+          impute_values[[i]] <- if (length(tab) > 0L) {
+            as.logical(names(which.max(tab)))
+          } else {
+            NA
+          }
         } else {
           impute_values[[i]] <- NA
         }
@@ -608,10 +675,15 @@ fs_randomforest <- function(data,
       # discarded the per-class sizes the user did supply, e.g. c(10, NA).
       sampsize_eff[is.na(sampsize_eff)] <- repl
     }
-    sampsize_eff <- as.integer(sampsize_eff)
-    if (any(!is.finite(sampsize_eff)) || any(sampsize_eff < 1L)) {
-      sampsize_eff <- 1L
+    # Reject invalid sizes instead of silently replacing the whole vector with
+    # 1L, which grew every tree on a single row (regression R2 ~ 0) or failed
+    # deep inside randomForest ("fewer than two classes in the in-bag sample").
+    if (!is.numeric(sampsize_eff) || any(!is.finite(sampsize_eff)) ||
+        any(sampsize_eff < 1) || any(sampsize_eff != trunc(sampsize_eff))) {
+      stop("'control$sampsize' must contain whole numbers >= 1 (or NA).",
+           call. = FALSE)
     }
+    sampsize_eff <- as.integer(sampsize_eff)
     if (length(sampsize_eff) == 1L) {
       sampsize_eff <- min(sampsize_eff, nrow(x_train))
     } else {
@@ -661,25 +733,15 @@ fs_randomforest <- function(data,
   rf_message(sprintf("Growing %d trees on %d worker(s).", ntree, n_cores),
              verbose)
   if (n_cores > 1L) {
-    fs_require(c("foreach", "doParallel"), "parallel random forest training")
-
-    cl <- parallel::makeCluster(n_cores)
-    doParallel::registerDoParallel(cl)
-    on.exit({
-      try(foreach::registerDoSEQ(), silent = TRUE)
-      try(parallel::stopCluster(cl), silent = TRUE)
-    }, add = TRUE)
-
-    if (!is.null(seed)) {
-      parallel::clusterSetRNGStream(cl, as.integer(seed))
-    }
+    # Teardown (stop the cluster, restore the caller's foreach backend) is
+    # scheduled before registration, so nothing leaks if registration fails.
+    local_parallel_cluster(n_cores, seed = seed)
 
     ntree_part <- NULL # foreach iteration variable; quiets R CMD check
     dopar_op <- get("%dopar%", asNamespace("foreach"))
-    rf_model <- dopar_op(
+    forests <- dopar_op(
       foreach::foreach(
         ntree_part = ntree_list,
-        .combine = randomForest::combine,
         .packages = "randomForest"
       ),
       {
@@ -688,6 +750,14 @@ fs_randomforest <- function(data,
         do.call(randomForest::randomForest, args_i)
       }
     )
+    rf_model <- do.call(randomForest::combine, forests)
+    # combine() pools the per-forest standard errors as if each were a
+    # per-tree SD, which inflates importanceSD by about sqrt(n_cores) and so
+    # shrinks the scaled importance by the same factor. Recompute it from the
+    # pieces so scale_importance = TRUE means the same thing at any n_cores.
+    if (isTRUE(ctrl$importance)) {
+      rf_model$importanceSD <- rf_pool_importance_sd(forests)
+    }
   } else {
     args_serial <- rf_args
     args_serial$ntree <- ntree

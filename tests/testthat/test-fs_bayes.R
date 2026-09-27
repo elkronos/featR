@@ -412,3 +412,97 @@ test_that("fs_bayes end-to-end smoke run returns the documented fs_result", {
 
   expect_output(print(res), "bayes")
 })
+
+test_that("fs_bayes rejects a fractional seed up front", {
+  d <- data.frame(y = c(1.5, 2.5, 3.5), x1 = c(1, 2, 3))
+  expect_error(fs_bayes(d, "y", "x1", seed = 1.5),
+               "'seed' must be a whole number")
+})
+
+test_that("bayes_fit_model records the sampler warnings it muffles", {
+  skip_if_not_installed("brms")
+  skip_on_cran() # loading the brms namespace alone is slow
+
+  # REGRESSION: every brm() warning (divergences, R-hat, ESS) was muffled and
+  # discarded, so an unconverged model could be selected without any signal.
+  local_mocked_bindings(
+    brm = function(...) {
+      warning("There were 12 divergent transitions after warmup.")
+      structure(list(), class = "fake_brmsfit")
+    },
+    .package = "brms"
+  )
+  expect_silent(
+    fit <- featR:::bayes_fit_model(
+      data.frame(y = 1:3, x = 1:3), "y ~ x", stats::gaussian(), NULL, list()
+    )
+  )
+  expect_s3_class(fit$model, "fake_brmsfit")
+  expect_identical(fit$warnings,
+                   "There were 12 divergent transitions after warmup.")
+})
+
+test_that("bayes_warn_diagnostics summarizes sampler and Pareto-k problems", {
+  results <- list(
+    list(preds = "x1", model = "m", formula_str = "y ~ x1",
+         fit_warnings = "The largest R-hat is 1.07", n_bad_k = 0L),
+    list(preds = "x2", model = "m", formula_str = "y ~ x2",
+         fit_warnings = character(0), n_bad_k = 3L),
+    list(preds = "x3", model = NULL, formula_str = "y ~ x3",
+         fit_warnings = "ignored: failed fit", n_bad_k = NA_integer_)
+  )
+  w <- character(0)
+  withCallingHandlers(
+    out <- featR:::bayes_warn_diagnostics(results, chosen = 1L),
+    warning = function(cond) {
+      w <<- c(w, conditionMessage(cond))
+      invokeRestart("muffleWarning")
+    }
+  )
+  expect_length(w, 2L)
+  expect_match(w[1], "1 of 2 fitted model\\(s\\), INCLUDING the selected")
+  expect_match(w[1], "R-hat is 1.07", fixed = TRUE)
+  expect_match(w[2], "1 of 2 fitted model\\(s\\) have observations with Pareto k")
+  expect_false(grepl("INCLUDING", w[2]))
+
+  clean <- list(list(preds = "x1", model = "m", formula_str = "y ~ x1",
+                     fit_warnings = character(0), n_bad_k = 0L))
+  expect_silent(featR:::bayes_warn_diagnostics(clean, 1L))
+})
+
+test_that("fs_bayes surfaces diagnostics of the muffled fits", {
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+
+  # Pipeline test without Stan: the fits are mocked, everything after them
+  # (selection, diagnostics, result assembly) is real.
+  fake_eval <- function(preds, data, target, brm_family, prior, brm_args,
+                        verbose = FALSE) {
+    list(preds = preds, model = structure(list(), class = "fake"),
+         loo = NULL, loo_val = -10 - length(preds),
+         formula_str = paste("y ~", paste(preds, collapse = " + ")),
+         fit_warnings = if ("x2" %in% preds) "divergent transitions" else
+           character(0),
+         n_bad_k = if (length(preds) == 1L) 2L else 0L)
+  }
+  local_mocked_bindings(
+    bayes_evaluate_combination = fake_eval,
+    bayes_add_metrics_to_data = function(data, model, verbose = FALSE) data,
+    .package = "featR"
+  )
+  d <- data.frame(y = c(1, 2, 3, 4), x1 = c(4, 3, 1, 2), x2 = c(1, 1, 2, 2))
+  w <- character(0)
+  res <- withCallingHandlers(
+    fs_bayes(d, "y", c("x1", "x2")),
+    warning = function(cond) {
+      w <<- c(w, conditionMessage(cond))
+      invokeRestart("muffleWarning")
+    }
+  )
+  # loo objects are NULL, so the comparison is unavailable and the raw elpd
+  # maximum (the single-predictor x1 model) is selected.
+  expect_identical(res$selected, "x1")
+  expect_true(any(grepl("sampling warnings for 2 of 3", w)))
+  expect_true(any(grepl("2 of 3 fitted model\\(s\\), INCLUDING the selected model have observations with Pareto k", w)))
+})

@@ -28,7 +28,8 @@ are backticked into the formula, so they work.}
 \code{stepAIC()} trace output on the console. Default \code{FALSE}.}
 
 \item{...}{Additional arguments passed to \code{MASS::stepAIC()}, for example \code{k}
-or \code{steps}. \code{trace} is the one exception: it is controlled by \code{verbose},
+(use \code{k = log(nrow(data))} for BIC), \code{steps}, or \code{scope} (which then
+replaces the default scope described above). \code{trace} is the one exception: it is controlled by \code{verbose},
 and a user-supplied \code{trace} is dropped with a warning. See Details for
 what else \code{...} quietly absorbs.}
 }
@@ -38,7 +39,10 @@ An object of class \code{fs_result} with:
 \item{selected}{Character vector of the selected predictor terms
 (excluding the intercept).}
 \item{scores}{Named numeric vector of absolute t statistics from the
-final model's coefficient table, excluding the intercept.
+final model's coefficient table, excluding the intercept. Scores are
+per coefficient, so a selected factor term appears here under its
+dummy names (e.g. \code{grpb}, \code{grpc} for the term \code{grp}), not under the
+term label reported in \code{selected}.
 \strong{Caveat}: these statistics (and the p-values in
 \code{details$coefficients}) are computed after selection on the same data,
 so they are optimistically biased and are not valid for inference.}
@@ -94,6 +98,9 @@ the data explicitly, e.g. \code{update(model, . ~ . - x, data = my_data)}. Plain
 \code{update(model)} does \emph{not} work: \code{update()} re-evaluates the stored
 call in the \emph{caller's} environment, where the private data object is not
 visible, so it fails with an object-not-found error.
+
+Non-syntactic column names are backticked into the formula and reported
+back without the backticks, so \code{selected} matches \code{names(data)}.
 
 \code{...} is forwarded to \code{MASS::stepAIC()} verbatim, which means it also
 absorbs arguments this function does not have. The removed \code{seed} and

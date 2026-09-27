@@ -1,0 +1,178 @@
+---
+title: "Wrapper methods"
+---
+
+```{r setup, include = FALSE}
+# message = FALSE hides the "Loading required package" notes that caret
+# prints when it attaches its model packages.
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE)
+library(featR)
+has <- function(...) all(vapply(c(...), requireNamespace, logical(1), quietly = TRUE))
+```
+
+Wrappers refit a model over many candidate subsets and keep the subset that
+model likes best. They are the most expensive methods in featR, and their
+answer is specific to the model family they wrap. The search itself can overfit
+too, so always validate the chosen set on rows the search never saw.
+
+## `fs_recursivefeature()`: recursive feature elimination
+
+`fs_recursivefeature()` wraps `caret::rfe()`. It first splits the data. On the
+training rows it repeatedly fits a model, ranks the predictors, and drops the
+weakest. Resampling chooses the subset size. It then evaluates the result on
+the held-out rows.
+
+```{r, eval = has("caret", "randomForest", "e1071")}
+rfe <- fs_recursivefeature(
+  iris, "Species",
+  sizes = 1:4,
+  rfe_control = list(method = "cv", number = 5),
+  seed = 1
+)
+selected(rfe)
+rfe$details$optimal_size
+rfe$details$test_metrics         # held out: the honest estimate
+rfe$details$resampling_results   # inside the training rows
+```
+
+By default the elimination uses random forests (`caret::rfFuncs`). Pass
+another caret function set to match your model, for example
+`rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)` for
+linear regression. `handle_categorical = TRUE` one-hot encodes factors with an
+encoder fitted on the training rows only. `return_final_model = TRUE` also
+trains a caret model (`model_method`) on the selected features.
+
+Only `details$test_metrics` is a held-out estimate. `resampling_results` is
+computed inside the training rows over the candidate sizes, and the size with
+the best score is chosen from it, so the winning size's score is optimistic.
+
+## `fs_svm()`: SVM-RFE
+
+`fs_svm()` trains a support vector machine through caret and kernlab. It can
+run **SVM-RFE** (Guyon et al., 2002) first. SVM-RFE fits a linear SVM on
+centered and scaled training data, ranks features by their squared weight
+`w^2`, drops the weakest, and refits, until one feature is left. The order in
+which features were eliminated gives the ranking.
+
+```{r, eval = has("caret", "kernlab", "e1071")}
+sv <- fs_svm(
+  iris, "Species",
+  task = "classification",
+  kernel = "linear",
+  tune_grid = data.frame(C = c(0.1, 1)),
+  feature_select = TRUE,
+  select_method = "svm_rfe",
+  nfolds = 5,
+  seed = 1
+)
+selected(sv)
+sv$details$selection$ranking
+sv$details$performance$overall[c("Accuracy", "Kappa")]
+```
+
+Without `n_features`, the number of features to keep is chosen by
+cross-validation over a short ladder of sizes (1, 2, 4, 8, ..., p). You must
+state `task` explicitly. SVM-RFE needs `kernel = "linear"`, because the
+ranking uses the primal weight vector, which exists only for a linear kernel.
+For other kernels, use `select_method = "rf_rfe"`, which screens with random
+forests instead. Selection always runs on the training split, and
+`details$performance` comes from the test split. Selection works on the
+**dummy-encoded** predictors, so factor levels are selected individually.
+
+## `fs_boruta()`: all-relevant selection
+
+Boruta asks a different question: which features carry *any* information about
+the outcome? It adds "shadow" copies of every feature with their values
+shuffled, grows random forests, and confirms each feature that beats the best
+shadow significantly more often than chance. Redundant but informative
+features are **all** confirmed. That is useful for understanding a data set,
+and less useful when you want a compact model.
+
+```{r, eval = has("Boruta")}
+set.seed(3)
+bd <- data.frame(
+  signal  = rnorm(150),
+  noise1  = rnorm(150),
+  noise2  = rnorm(150)
+)
+bd$echo <- bd$signal + rnorm(150, sd = 0.2)
+bd$y <- factor(ifelse(bd$signal + rnorm(150, sd = 0.5) > 0, "a", "b"))
+
+bo <- fs_boruta(bd, "y", maxRuns = 50, cutoff_cor = NULL, seed = 1)
+bo$details$decisions
+selected(bo)
+
+# featR addition: within each correlated group, keep the most important member
+selected(fs_boruta(bd, "y", maxRuns = 50, cutoff_cor = 0.7, seed = 1))
+```
+
+Look at `noise2`. It was generated independently of `y`, yet it is confirmed.
+Two things combine here. In this particular sample `noise2` happens to carry
+some random-forest importance: Boruta on its own leaves it Tentative after 50
+runs and confirms it in two of three seeds after 250. Then
+`resolve_tentative = TRUE` (the default) settles every feature still
+undecided with `Boruta::TentativeRoughFix()`. That compares median importance
+with the median of the best shadow, which is a weaker test than the one used
+during the run. In a simulation of 20 data sets like this one, Boruta alone
+confirmed 5% of the pure-noise features, and 8.3% after the rough fix.
+
+So Boruta limits false discoveries; it does not eliminate them. When they are
+costly, set `resolve_tentative = FALSE`, inspect `details$decisions`, raise
+`maxRuns`, and validate the confirmed set on held-out data.
+
+## `fs_stepwise()`: AIC stepwise regression
+
+`fs_stepwise()` runs `MASS::stepAIC()` on a linear regression. It is cheap,
+deterministic, and returns an ordinary `lm`.
+
+```{r, eval = has("MASS")}
+st <- fs_stepwise(mtcars, "mpg", direction = "both")
+selected(st)
+st$scores
+```
+
+Pass `k = log(nrow(data))` to use BIC, which selects fewer terms. Stepwise
+search is greedy and unstable: small changes to the data can change the
+answer. The *t* statistics in `scores` and the p-values in
+`details$coefficients` are computed after selection on the same data, so they
+are biased toward significance. **Do not use them for inference.**
+
+## `fs_bayes()`: Bayesian model comparison
+
+`fs_bayes()` fits a brms model for every candidate predictor subset and
+compares them by approximate leave-one-out cross-validation, using
+`loo::loo_compare()`. By default it applies a one-standard-error rule: the
+chosen subset is the smallest one whose expected log predictive density is
+within one standard error of the best.
+
+```r
+res <- fs_bayes(
+  mtcars, "mpg",
+  predictors = c("wt", "hp", "qsec"),
+  brm_args = list(chains = 2, iter = 1000, seed = 1),
+  seed = 1
+)
+selected(res)
+res$details$loo_comparison
+```
+
+This is the most expensive method in featR. With `p` candidates it fits
+`2^p - 1` models, and each one compiles and samples a Stan program. Bound the
+search with `max_comb_size` or `sample_combinations`. It needs brms, loo, and
+a working C++ toolchain, which is why this example is not run here.
+`details$mae` and `details$rmse` are in-sample, and the posterior of the
+returned model is post-selection, so neither is an honest estimate on its own.
+
+## References
+
+Guyon, I., Weston, J., Barnhill, S. and Vapnik, V. (2002). Gene selection for
+cancer classification using support vector machines. *Machine Learning* 46,
+389–422. <https://doi.org/10.1023/A:1012487302797>
+
+Kursa, M. B. and Rudnicki, W. R. (2010). Feature selection with the Boruta
+package. *Journal of Statistical Software* 36(11).
+<https://doi.org/10.18637/jss.v036.i11>
+
+Vehtari, A., Gelman, A. and Gabry, J. (2017). Practical Bayesian model
+evaluation using leave-one-out cross-validation and WAIC. *Statistics and
+Computing* 27, 1413–1432. <https://doi.org/10.1007/s11222-016-9696-4>

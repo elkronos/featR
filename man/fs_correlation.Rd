@@ -45,9 +45,12 @@ so those pairs can never be flagged.}
 reduced non-redundant set: variables are dropped one at a time until no
 two retained variables correlate above \code{threshold}, each step
 dropping the member of the strongest remaining pair with the HIGHER mean
-absolute correlation to the other retained variables (the
-\code{caret::findCorrelation()} heuristic, implemented here with base
-stats). Variables that were never flagged are always retained.
+absolute correlation to the other retained variables. This borrows the
+tie-break of \code{caret::findCorrelation()} but not its scan order
+(caret visits columns in order of mean correlation rather than pairs in
+order of strength), so the two can drop different variables, and
+neither is guaranteed to drop the fewest. Variables that were never
+flagged are always retained.
 If \code{FALSE}, \code{selected} is every variable appearing in at least
 one flagged pair, i.e. the redundant set, and nothing is dropped.}
 

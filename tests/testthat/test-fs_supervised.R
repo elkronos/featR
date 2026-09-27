@@ -515,3 +515,77 @@ test_that("fs_supervised's formals match the unified API", {
   expect_identical(fx$na_rm, TRUE)
   expect_identical(fx$verbose, FALSE)
 })
+
+test_that("correlation scoring is scale-invariant (no absolute sd tolerance)", {
+  # REGRESSION: an absolute sd < 1.5e-8 cut-off declared any feature (or
+  # target) measured on a small scale "constant", so a feature correlating
+  # 0.9999 with the target scored NA and was never selected -- but only under
+  # na_rm = TRUE; na_rm = FALSE scored it correctly.
+  y <- c(0.3, -1.2, 0.8, 2.1, -0.4, 1.5, -2.2, 0.1, 0.9, -0.7)
+  noise <- c(1, -1, 0.5, -0.5, 0.2, -0.2, 0.1, -0.1, 0.3, -0.3)
+  d <- data.frame(tiny = y * 1e-10 + noise * 1e-12, y = y)
+  ref <- abs(cor(d$tiny, d$y))
+
+  for (na_rm in c(TRUE, FALSE)) {
+    res <- fs_supervised(d, "y", method = "correlation", threshold = 0.5,
+                         na_rm = na_rm)
+    expect_equal(res$scores[["tiny"]], ref, tolerance = 1e-12)
+    expect_identical(res$selected, "tiny")
+  }
+
+  # The same for a target on a tiny scale.
+  d2 <- data.frame(x = y, y = y * 1e-9 + noise * 1e-11)
+  expect_equal(fs_supervised(d2, "y")$scores[["x"]],
+               abs(cor(d2$x, d2$y)), tolerance = 1e-12)
+
+  # A constant column (even one built with floating-point arithmetic) is
+  # still undefined, with one warning rather than an extra one from cor().
+  d3 <- data.frame(k = rep(0.1 + 0.2, 10), y = y)
+  for (na_rm in c(TRUE, FALSE)) {
+    w <- character(0)
+    s <- withCallingHandlers(
+      fs_supervised(d3, "y", na_rm = na_rm, output = "result")$scores,
+      warning = function(cnd) {
+        w <<- c(w, conditionMessage(cnd))
+        invokeRestart("muffleWarning")
+      }
+    )
+    expect_true(is.na(s[["k"]]))
+    expect_false(any(grepl("standard deviation is zero", w)))
+  }
+})
+
+test_that("ANOVA F matches stats and is Inf, silently, under perfect separation", {
+  # REGRESSION: the lm()/anova() route reported a perfectly separating
+  # feature as ~1e30 (rounding noise, so the ranking between such features
+  # was arbitrary) and leaked anova.lm()'s "essentially perfect fit" warning
+  # once per feature.
+  d <- data.frame(
+    sep   = c(1, 1, 1, 2, 2, 2),
+    sep2  = c(0.1, 0.1, 0.1, 0.7, 0.7, 0.7),
+    noisy = c(1, 3, 2, 4, 2, 5),
+    g     = factor(rep(c("a", "b"), each = 3))
+  )
+  expect_silent(res <- fs_supervised(d, "g", method = "anova", threshold = 100))
+  expect_identical(res$scores[["sep"]], Inf)
+  expect_identical(res$scores[["sep2"]], Inf)
+  expect_setequal(res$selected, c("sep", "sep2"))
+  ref <- anova(lm(noisy ~ g, data = d))$`F value`[1]
+  expect_equal(res$scores[["noisy"]], ref, tolerance = 1e-10)
+
+  # Agreement with anova(lm()) on ordinary data, with an unused level and a
+  # level emptied by NA removal (neither may count towards the df).
+  x <- c(2.3, 1.1, 3.4, 0.2, 2.8, 1.9, 4.1, 0.7, 2.2, 3.3, 1.4, 2.6)
+  g <- factor(rep(c("a", "b", "c"), 4), levels = c("a", "b", "c", "zz"))
+  g[g == "c"][1:2] <- NA
+  s <- fs_supervised(data.frame(x = x, g = g), "g")$scores[["x"]]
+  ok <- !is.na(g)
+  expect_equal(s, anova(lm(x[ok] ~ droplevels(g[ok])))$`F value`[1],
+               tolerance = 1e-10)
+
+  # A constant feature is undefined, not Inf.
+  d$k <- 5
+  expect_warning(r2 <- fs_supervised(d, "g", method = "anova", threshold = 1),
+                 "undefined scores and were excluded: k")
+  expect_true(is.na(r2$scores[["k"]]))
+})

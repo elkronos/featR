@@ -1,0 +1,127 @@
+---
+title: "The fs_result object"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(featR)
+```
+
+Fourteen of featR's sixteen functions return the same object, an `fs_result`.
+This article covers what is in it, how to read it, and how to use it to compare
+methods. The two exceptions, `fs_pca()` and `fs_svd()`, do dimensionality
+reduction and return their own lists. The
+[dimensionality reduction](dimensionality-reduction.html) article covers them.
+
+## Anatomy
+
+An `fs_result` is a plain list with seven elements, always in this order:
+
+| Element | Type | Meaning |
+|---|---|---|
+| `selected` | character | The features the method kept. It may be `character(0)`, never `NULL`. |
+| `scores` | named numeric, data.frame, or `NULL` | Per-feature scores. They are comparable within one method, not across methods. |
+| `method` | string | What actually ran, for example `"supervised_correlation"` or `"svm_linear"`. |
+| `task` | string | `"classification"`, `"regression"`, or `NA`. |
+| `model` | object or `NULL` | The fitted model, when the method fits one. |
+| `details` | named list | Method-specific extras, documented on each help page. |
+| `call` | call | The matched call. |
+
+```{r}
+d <- data.frame(
+  signal = c(1.1, 2.3, 2.9, 4.2, 5.1, 5.8, 7.2, 8.1),
+  flip   = c(8, 7, 6, 5, 4, 3, 2, 1),
+  noise  = c(3, 1, 4, 1, 5, 9, 2, 6),
+  y      = 1:8
+)
+res <- fs_supervised(d, target = "y", threshold = 0.5)
+
+str(unclass(res), max.level = 1, give.attr = FALSE)
+```
+
+## Reading a result
+
+`print()` gives a compact overview:
+
+```{r}
+res
+```
+
+`summary()` adds the call and a ranked score table. An asterisk marks the
+features that were kept:
+
+```{r}
+summary(res)
+```
+
+`selected()` is the stable accessor for the chosen names. Prefer it to
+`res$selected` in code you intend to keep:
+
+```{r}
+selected(res)
+```
+
+## What `scores` means, method by method
+
+Scores are only comparable **within** one method. A correlation of 0.8 and a
+Boruta importance of 0.8 have nothing in common. The direction also differs:
+for `fs_chi()`, smaller is better. `summary()` knows this and sorts
+accordingly.
+
+| Function | `scores` | Better is |
+|---|---|---|
+| `fs_supervised()` | absolute Pearson *r* (numeric target) or ANOVA *F* (factor target) | larger |
+| `fs_unsupervised()` | variance, MAD, IQR, range, missing proportion, or distinct count | depends on the criterion |
+| `fs_chi()` | multiplicity-adjusted p-value | **smaller** |
+| `fs_infogain()` | information gain in bits, or gain ratio | larger |
+| `fs_correlation()` | each variable's largest absolute correlation with any other variable | larger means **more redundant** |
+| `fs_lasso()` | data.frame of standardized coefficients (`AbsCoefficient` ranks) | larger magnitude |
+| `fs_elastic()` | absolute coefficients on the scale the model saw (`NULL` for multinomial) | larger |
+| `fs_randomforest()` | permutation importance (mean decrease in accuracy, or %IncMSE) | larger |
+| `fs_mars()` | earth variable importance via `caret::varImp()` | larger |
+| `fs_recursivefeature()` | resample-averaged importance from the RFE model | larger |
+| `fs_svm()` | SVM-RFE criterion `w^2`, or random-forest importance (`NULL` without selection) | larger |
+| `fs_boruta()` | median Boruta importance | larger |
+| `fs_stepwise()` | absolute *t* statistics of the retained terms (not valid for inference) | larger |
+| `fs_bayes()` | `NULL`: selection is between whole models, so there is no per-feature score | not applicable |
+
+Some methods score **design-matrix columns** rather than original columns.
+`fs_lasso()`, `fs_elastic()`, and `fs_svm()` all do this. A factor predictor
+`colour` therefore shows up as `colourgreen`, `colourred`, and so on. Map the
+names back yourself if you need the original variables.
+
+## Comparing methods
+
+Because every result has the same shape, a comparison is a loop:
+
+```{r}
+d2 <- data.frame(
+  x1 = c(2.1, 3.9, 6.2, 7.8, 10.1, 12.2, 13.8, 16.1, 18.2, 19.9),
+  x2 = c(1, 3, 2, 5, 4, 6, 8, 7, 10, 9),
+  x3 = c(5, 5, 4, 5, 6, 5, 4, 5, 6, 5),
+  y  = c(1.0, 2.1, 2.9, 4.2, 5.0, 6.1, 6.8, 8.1, 9.0, 9.9)
+)
+
+runs <- list(
+  supervised = fs_supervised(d2, "y", threshold = 0.9),
+  infogain   = fs_infogain(d2, "y", top_n = 2)
+)
+lapply(runs, selected)
+```
+
+Agreement between methods that work on different principles is weak evidence
+that a feature matters. Disagreement tells you to look closer. Neither is a
+substitute for validating the final set on data that played no part in
+choosing it. The [validation and leakage](validation-and-leakage.html)
+article covers that.
+
+## Empty selections
+
+When nothing passes, `selected` is `character(0)` and a warning says so. Code
+that consumes results should handle a length-zero selection:
+
+```{r}
+none <- suppressWarnings(fs_unsupervised(d[, 1:3], threshold = 1e6))
+selected(none)
+length(selected(none)) == 0
+```

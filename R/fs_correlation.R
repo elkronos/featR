@@ -52,9 +52,12 @@
 #'   reduced non-redundant set: variables are dropped one at a time until no
 #'   two retained variables correlate above \code{threshold}, each step
 #'   dropping the member of the strongest remaining pair with the HIGHER mean
-#'   absolute correlation to the other retained variables (the
-#'   \code{caret::findCorrelation()} heuristic, implemented here with base
-#'   stats). Variables that were never flagged are always retained.
+#'   absolute correlation to the other retained variables. This borrows the
+#'   tie-break of \code{caret::findCorrelation()} but not its scan order
+#'   (caret visits columns in order of mean correlation rather than pairs in
+#'   order of strength), so the two can drop different variables, and
+#'   neither is guaranteed to drop the fewest. Variables that were never
+#'   flagged are always retained.
 #'   If \code{FALSE}, \code{selected} is every variable appearing in at least
 #'   one flagged pair, i.e. the redundant set, and nothing is dropped.
 #' @param na.rm Logical. If \code{TRUE}, missing values are removed pairwise
@@ -299,9 +302,11 @@ corr_validate_inputs <- function(data, threshold, method, prune, na.rm,
     stop("`output_format` must be 'matrix' or 'data.frame'.")
   }
 
-  # diag_value: allow numeric scalar or any single NA
+  # diag_value: a numeric scalar or a logical NA. A character NA would pass
+  # an is.na() test but turn the whole correlation matrix into character.
   if (!(length(diag_value) == 1L &&
-        (is.numeric(diag_value) || is.na(diag_value)))) {
+        (is.numeric(diag_value) ||
+         (is.logical(diag_value) && is.na(diag_value))))) {
     stop("`diag_value` must be a single numeric value or NA.")
   }
 
@@ -424,20 +429,8 @@ corr_calculate_pointbiserial_correlation <- function(data, na.rm, parallel, n_co
       message("Running point-biserial in parallel on ", n_cores, " cores.")
     }
 
-    # Remember whatever backend the caller had registered, so exiting restores
-    # their session rather than forcing it sequential.
-    prev_backend <- foreach::getDoParName()
-
-    cl <- parallel::makeCluster(n_cores)
-    # Register the teardown before registerDoParallel() can throw: otherwise a
-    # failure there leaves the cluster running with no reference to stop it.
-    on.exit({
-      try(parallel::stopCluster(cl), silent = TRUE)
-      if (is.null(prev_backend) || identical(prev_backend, "doSEQ")) {
-        try(foreach::registerDoSEQ(), silent = TRUE)
-      }
-    }, add = TRUE)
-    doParallel::registerDoParallel(cl)
+    # Stops the cluster and restores the caller's own foreach backend on exit.
+    local_parallel_cluster(n_cores)
 
     `%dopar%` <- foreach::`%dopar%`
 
@@ -591,12 +584,12 @@ corr_max_abs_scores <- function(corr_matrix) {
 
 #' Drop redundant members of correlated groups
 #'
-#' Reimplements the caret::findCorrelation() heuristic with base stats: while
-#' any pair among the retained variables still exceeds `threshold`, take the
-#' strongest such pair and drop whichever member has the LARGER mean absolute
-#' correlation to the other retained variables. The representative that
-#' survives each group is therefore the member with the LOWEST mean absolute
-#' correlation to everything else. An exact tie drops the later column.
+#' A strongest-pair-first variant of the caret::findCorrelation() heuristic,
+#' in base stats: while any pair among the retained variables still exceeds
+#' `threshold`, take the strongest such pair and drop whichever member has the
+#' LARGER mean absolute correlation to the other retained variables. caret
+#' instead scans columns in order of mean correlation, so the two can drop
+#' different variables. An exact tie drops the later column.
 #' NA (and non-finite) correlations are treated as 0, so a pair whose
 #' correlation is unknown is never called redundant.
 #'

@@ -16,8 +16,11 @@ test_that("fs_lasso signature and defaults are stable", {
   expect_identical(
     names(fx),
     c("data", "target", "alpha", "nfolds", "standardize", "custom_folds",
-      "impute", "return_model", "seed", "verbose", "parallel", "n_cores")
+      "impute", "return_model", "seed", "verbose", "parallel", "n_cores",
+      "lambda")
   )
+  # lambda.min stays the default; "1se" is opt-in
+  expect_identical(eval(fx$lambda), c("min", "1se"))
   expect_identical(fx$alpha, 1)
   expect_identical(fx$nfolds, 5)
   expect_identical(fx$standardize, TRUE)
@@ -219,7 +222,8 @@ test_that("fs_lasso returns an fs_result with the documented shape", {
   expect_s3_class(res$scores, "data.frame")
   expect_named(res$scores, c("Variable", "Coefficient", "AbsCoefficient"))
   expect_named(res$details,
-               c("lambda_min", "lambda_1se", "coefficients", "n_features"))
+               c("lambda_min", "lambda_1se", "lambda_used", "coefficients",
+                 "n_features"))
   expect_identical(res$details$n_features, nrow(res$scores))
   expect_s3_class(res$details$coefficients, "data.frame")
   expect_identical(names(res$details$coefficients),
@@ -335,4 +339,62 @@ test_that("same seed reproduces results and the caller's RNG state is untouched"
   expect_identical(res1$scores, res2$scores)
   expect_identical(res1$details$coefficients, res2$details$coefficients)
   expect_identical(res1$selected, res2$selected)
+})
+
+test_that("unbacktick_names strips model.matrix quoting only (helper-level)", {
+  expect_identical(
+    featR:::unbacktick_names(c("`my var`", "`my grp`b", "x2", "grpa")),
+    c("my var", "my grpb", "x2", "grpa")
+  )
+  expect_null(featR:::unbacktick_names(NULL))
+})
+
+test_that("non-syntactic column names are reported without backticks", {
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  i <- seq_len(60)
+  d <- data.frame(`my var` = sin(i), x2 = cos(i / 2), noise = sin(i / 7),
+                  check.names = FALSE)
+  d$y <- 3 * d$`my var` + 2 * d$x2 + 0.05 * cos(11 * i)
+  res <- fs_lasso(d, "y", seed = 1)
+  expect_true("my var" %in% selected(res))
+  expect_false(any(grepl("`", res$scores$Variable, fixed = TRUE)))
+  expect_true(all(selected(res) %in% names(d)))
+})
+
+test_that("a single-column design matrix is a clear error, not a glmnet one", {
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  d <- data.frame(x = sin(1:20), y = cos(1:20))
+  expect_error(fs_lasso(d, "y"), "at least two design-matrix columns")
+})
+
+test_that("lambda = '1se' selects at lambda.1se and matches cv.glmnet", {
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  set.seed(8)
+  n <- 100
+  X <- matrix(rnorm(n * 10), n)
+  colnames(X) <- paste0("x", 1:10)
+  d <- as.data.frame(X)
+  d$y <- 2 * X[, 1] - X[, 2] + rnorm(n)
+  folds <- rep_len(1:5, n)
+
+  res <- fs_lasso(d, "y", custom_folds = folds, lambda = "1se")
+  ref <- glmnet::cv.glmnet(X, d$y, foldid = folds)
+  cf <- as.matrix(stats::coef(ref, s = "lambda.1se"))[-1L, 1L]
+
+  expect_identical(res$details$lambda_used, "lambda.1se")
+  expect_equal(res$details$lambda_1se, ref$lambda.1se)
+  expect_setequal(selected(res), names(cf)[cf != 0])
+  raw <- res$details$coefficients
+  expect_equal(raw$Coefficient[match(names(cf), raw$Variable)], unname(cf),
+               tolerance = 1e-6)
+
+  res_min <- fs_lasso(d, "y", custom_folds = folds)
+  expect_identical(res_min$details$lambda_used, "lambda.min")
+  expect_true(all(selected(res) %in% selected(res_min)))
+  expect_error(fs_lasso(d, "y", lambda = "max"), "should be one of")
 })

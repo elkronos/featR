@@ -33,7 +33,7 @@ other type is an error.}
 \item{threshold}{Non-negative, finite numeric scalar threshold applied to
 the feature scores (not to the target directly). Default 0. Note that the
 two methods put scores on different scales: \code{[0, 1]} for
-\code{"correlation"} and \code{[0, Inf)} for \code{"anova"}.}
+\code{"correlation"} and \code{[0, Inf]} for \code{"anova"}.}
 
 \item{direction}{One of \code{"above"} (default), \code{"below"}; compares
 scores to \code{threshold}.}
@@ -122,9 +122,14 @@ redundancy afterwards, or a wrapper such as \code{\link[=fs_recursivefeature]{fs
 Supported methods:
 \itemize{
 \item \code{"correlation"}: Absolute Pearson correlation (numeric
-target), so scores lie in \code{[0, 1]}.
+target), so scores lie in \code{[0, 1]}. A constant feature (or
+target) has no defined correlation and scores \code{NA}; the check is
+relative to the column's magnitude, so features measured on a very
+small scale are scored normally.
 \item \code{"anova"}: One-way ANOVA F-statistic (categorical target),
-so scores lie in \code{[0, Inf)}.
+so scores lie in \code{[0, Inf]}: a feature that separates the
+classes perfectly (no spread within any class) scores \code{Inf}, and
+a constant feature scores \code{NA}.
 \item \code{"auto"}: Chooses \code{"correlation"} for a numeric target
 and \code{"anova"} for a categorical one. Because the two score scales
 differ, a message reports the resolved method when

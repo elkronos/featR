@@ -281,7 +281,9 @@ second before it was fixed, and each fix has a regression test.
 * `fs_recursivefeature()`, `fs_svm(select_method = "rf_rfe")` and
   `fs_randomforest(control = list(drop_zerovar = FALSE))` remove (or reject)
   predictors that are constant on the training rows. These hung randomForest
-  indefinitely on classification targets.
+  indefinitely on classification targets. A predictor that is constant only
+  inside one cross-validation resample (a rare indicator) is now set aside
+  for that resample's fits, with importance 0.
 * Encoding: when a dummy name such as `g1` (factor `g`, level `1`) collides
   with another column or the target, `fs_recursivefeature()`, `fs_svm()`,
   `fs_lasso()`, `fs_elastic()` and `fs_stepwise()` now stop with an error. The

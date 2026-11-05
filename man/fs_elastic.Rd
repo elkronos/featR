@@ -56,10 +56,12 @@ predictor matrix. Default \code{NULL}, which is an error when
 before resampling and tuning. Default \code{NULL} (never seeds by default).
 The resampling folds are drawn in the main R process and the glmnet fits
 themselves are deterministic, so a seeded \code{n_cores > 1} run gives the
-same result as a seeded sequential one. The parallel workers are not
-given seeded RNG streams, so a user \code{trControl} whose resamples use
-randomness on the workers (for example \code{sampling = "up"}) should set
-its own \code{seeds}.}
+same result as a seeded sequential one. When \code{trControl$seeds} is unset
+(\code{NA}, the \code{trainControl()} default), caret draws one seed per resample
+in the main process from this seed and sets it on each worker, so seeded
+runs that use worker-side randomness (for example \code{sampling = "up"}) are
+reproducible with any \code{n_cores}. A user-supplied \code{trControl$seeds} takes
+precedence.}
 
 \item{verbose}{Logical. Print progress messages. Default \code{FALSE}.}
 
@@ -175,9 +177,12 @@ one of the final model's knots), not interpolated between knots.
 The resampled metrics (in \code{model$results} and \code{details$metric_value}) are
 caret's: \code{RMSE}, \code{Rsquared} and \code{MAE} for regression, where \code{Rsquared} is
 the \emph{squared Pearson correlation} between held-out-fold predictions
-and observations (\code{caret::postResample()}), not \code{1 - SSE/SST}, so it is
-never negative and not comparable with an \code{R2} defined as \code{1 - SSE/SST}
-(for example \code{fs_randomforest()}'s); \code{Accuracy} and Cohen's \code{Kappa} for
+and observations (\code{caret::postResample()}), not \code{1 - SSE/SST}, and is not
+comparable with an \code{R2} defined as \code{1 - SSE/SST} (for example
+\code{fs_randomforest()}'s). It lies in [0, 1], except that a fold where it is
+undefined (constant predictions, typical at the large-lambda end of the
+path) is recorded as \code{-Inf} by featR's summary function, so such grid rows
+show \code{-Inf} in \code{model$results}; \code{Accuracy} and Cohen's \code{Kappa} for
 classification, which needs the suggested package 'e1071' (checked before
 any fitting).
 }

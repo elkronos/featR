@@ -891,3 +891,42 @@ test_that("a large-offset predictor is not removed as constant", {
   )
   expect_true("ts" %in% names(res$scores))
 })
+
+test_that("a predictor constant inside one CV fold does not hang RFE", {
+  # REGRESSION: a rare indicator (one non-zero row) is constant in the fold
+  # that holds that row out; caret's size-1 randomForest fit on it never
+  # returned. The guarded function set drops it inside that resample only.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_on_cran()
+  set.seed(1)
+  n <- 60
+  d <- data.frame(y = factor(sample(c("a", "b"), n, TRUE)), x1 = rnorm(n),
+                  x2 = rnorm(n), k = c(1, rep(0, n - 1)))
+  res <- fs_recursivefeature(d, "y", rfe_control = list(method = "cv",
+                                                        number = 10),
+                             seed = 1)
+  expect_s3_class(res, "fs_result")
+  expect_setequal(names(res$scores), c("x1", "x2", "k"))
+})
+
+test_that("rfe_guard_rf_funcs ranks every column and handles all-constant fits", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  f <- featR:::rfe_guard_rf_funcs(caret::rfFuncs)
+  set.seed(2)
+  x <- data.frame(a = rnorm(30), b = 0, c = rnorm(30))
+  y <- factor(rep(c("u", "v"), 15))
+  obj <- f$fit(x, y, first = TRUE, last = FALSE)
+  rk <- f$rank(obj, x, y)
+  expect_setequal(rk$var, c("a", "b", "c"))
+  expect_identical(rk$var[3L], "b")
+  expect_equal(nrow(f$pred(obj, x)), 30L)
+  const <- f$fit(x["b"], y, first = FALSE, last = FALSE)
+  expect_s3_class(const, "featr_constant_fit")
+  p <- f$pred(const, x["b"])
+  expect_true(all(c("pred", "u", "v") %in% names(p)))
+  expect_identical(f$rank(const, x["b"], y)$var, "b")
+  # Non-rf function sets are left untouched.
+  expect_identical(featR:::rfe_guard_rf_funcs(caret::lmFuncs), caret::lmFuncs)
+})

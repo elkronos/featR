@@ -568,9 +568,12 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #' The resampled metrics (in `model$results` and `details$metric_value`) are
 #' caret's: `RMSE`, `Rsquared` and `MAE` for regression, where `Rsquared` is
 #' the \emph{squared Pearson correlation} between held-out-fold predictions
-#' and observations (`caret::postResample()`), not `1 - SSE/SST`, so it is
-#' never negative and not comparable with an `R2` defined as `1 - SSE/SST`
-#' (for example `fs_randomforest()`'s); `Accuracy` and Cohen's `Kappa` for
+#' and observations (`caret::postResample()`), not `1 - SSE/SST`, and is not
+#' comparable with an `R2` defined as `1 - SSE/SST` (for example
+#' `fs_randomforest()`'s). It lies in \[0, 1\], except that a fold where it is
+#' undefined (constant predictions, typical at the large-lambda end of the
+#' path) is recorded as `-Inf` by featR's summary function, so such grid rows
+#' show `-Inf` in `model$results`; `Accuracy` and Cohen's `Kappa` for
 #' classification, which needs the suggested package 'e1071' (checked before
 #' any fitting).
 #'
@@ -603,10 +606,12 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #'   before resampling and tuning. Default `NULL` (never seeds by default).
 #'   The resampling folds are drawn in the main R process and the glmnet fits
 #'   themselves are deterministic, so a seeded `n_cores > 1` run gives the
-#'   same result as a seeded sequential one. The parallel workers are not
-#'   given seeded RNG streams, so a user `trControl` whose resamples use
-#'   randomness on the workers (for example `sampling = "up"`) should set
-#'   its own `seeds`.
+#'   same result as a seeded sequential one. When `trControl$seeds` is unset
+#'   (`NA`, the `trainControl()` default), caret draws one seed per resample
+#'   in the main process from this seed and sets it on each worker, so seeded
+#'   runs that use worker-side randomness (for example `sampling = "up"`) are
+#'   reproducible with any `n_cores`. A user-supplied `trControl$seeds` takes
+#'   precedence.
 #' @param verbose Logical. Print progress messages. Default `FALSE`.
 #' @param n_cores Integer >= 1. Number of workers for parallel training.
 #'   Default `1` (sequential; no cluster is created). Values above the

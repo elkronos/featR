@@ -745,7 +745,8 @@ svm_feature_selection <- function(x_enc,
 
   sizes <- seq_len(ncol(x_enc))
   ctrl <- caret::rfeControl(
-    functions = caret::rfFuncs,
+    # Guarded: a column constant inside one CV fold would hang randomForest.
+    functions = rfe_guard_rf_funcs(caret::rfFuncs),
     method = "cv",
     number = rfe_folds,
     verbose = FALSE,

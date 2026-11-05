@@ -174,3 +174,83 @@ assert_class_labels <- function(y, target) {
   }
   invisible(y)
 }
+
+#' Assert that numeric columns hold no infinite values
+#'
+#' `anyNA()` does not catch `Inf`/`-Inf`, which then reach modeling engines
+#' and fail there with opaque messages (or are silently zeroed). Checks every
+#' numeric (double/integer) column among `cols` and names the offenders.
+#'
+#' @param data A data.frame or matrix.
+#' @param cols Column names to check (default: all).
+#' @param fn Name of the calling function, for the message.
+#' @return Invisibly `data`.
+#' @noRd
+assert_finite_columns <- function(data, cols = colnames(data), fn) {
+  bad <- character(0)
+  for (nm in cols) {
+    x <- if (is.matrix(data)) data[, nm] else data[[nm]]
+    if (is.numeric(x) && any(is.infinite(x))) bad <- c(bad, nm)
+  }
+  if (length(bad) > 0L) {
+    stop(sprintf("%s() requires finite values; column(s) with Inf/-Inf: %s%s.",
+                 fn, paste(utils::head(bad, 5L), collapse = ", "),
+                 if (length(bad) > 5L) ", ..." else ""),
+         call. = FALSE)
+  }
+  invisible(data)
+}
+
+#' Identify numerically constant numeric vectors
+#'
+#' Exact `sd == 0` misses columns that are constant up to floating-point
+#' round-off (e.g. `1 + 1e-16 * rnorm(n)`), which centring/scaling then blows
+#' up to full weight. A column is treated as constant when its spread is
+#' negligible relative to its magnitude. The test uses the range (no
+#' squaring, so no underflow/overflow for tiny or huge units).
+#'
+#' @param x Numeric vector (NA ignored).
+#' @param tol Relative tolerance.
+#' @return `TRUE` when `x` is constant to within `tol`.
+#' @noRd
+is_numerically_constant <- function(x, tol = sqrt(.Machine$double.eps)) {
+  x <- x[is.finite(x)]
+  if (length(x) < 2L) return(TRUE)
+  r <- range(x)
+  spread <- r[2L] - r[1L]
+  if (spread == 0) return(TRUE)
+  scale <- max(abs(r))
+  spread <= tol * scale
+}
+
+#' Assert that encoded (dummy) column names are unique
+#'
+#' One-hot encoding names a dummy `<var><level>`, which can coincide with
+#' another column (factor `g` with level `1` -> `g1`) or the target. Name-based
+#' selection would then silently resolve to the wrong copy.
+#'
+#' @param nms Encoded predictor names.
+#' @param target Target name (may be `NULL`).
+#' @param fn Name of the calling function.
+#' @noRd
+assert_unique_encoded_names <- function(nms, target = NULL, fn) {
+  all_nms <- c(target, nms)
+  dupes <- unique(all_nms[duplicated(all_nms)])
+  if (length(dupes) > 0L) {
+    stop(sprintf("One-hot encoding in %s() produced column name(s) that collide with existing columns: %s. Rename the factor/level or the colliding column first.",
+                 fn, paste(utils::head(dupes, 5L), collapse = ", ")),
+         call. = FALSE)
+  }
+  invisible(nms)
+}
+
+#' Assert that a classification target has at least two observed classes
+#' @noRd
+assert_two_classes <- function(y, target, fn, where = "the data") {
+  y <- droplevels(as.factor(y[!is.na(y)]))
+  if (nlevels(y) < 2L) {
+    stop(sprintf("%s(): target '%s' has fewer than two observed classes in %s.",
+                 fn, target, where), call. = FALSE)
+  }
+  invisible(y)
+}

@@ -24,7 +24,10 @@ fs_bayes(
 \arguments{
 \item{data}{A data.frame or data.table. It is copied, never modified. Only
 \code{target}, \code{predictors} and \code{date_col} are carried forward, and rows with a
-missing value in any of them are dropped before any model is fitted.}
+missing value in any of them are dropped before any model is fitted.
+Infinite values in those columns are an error. None of those columns may
+be named \code{fitted_values}, \code{residuals}, \code{abs_residuals} or
+\code{squared_residuals}, which are appended to \code{details$data}.}
 
 \item{target}{Character. Name of the target (response) column, which must
 exist in \code{data} and suit \code{brm_family} (numeric for \code{stats::gaussian()},
@@ -52,6 +55,8 @@ adapt_delta = 0.99, max_treedepth = 15 and refresh = 0. \code{chains} and
 \code{cores} are respected when evaluating combinations sequentially (\code{cores}
 is capped at the detected core count; the defaults are 4 chains on 1
 core), but both are forced to 1 when \code{parallel_combinations = TRUE}.
+The PSIS-LOO step uses the same core count, never
+\code{getOption("mc.cores")}.
 Default \code{list()}.}
 
 \item{rule}{Selection rule: \code{"1se"} (default) keeps the most parsimonious
@@ -75,12 +80,15 @@ to a single MCMC chain, cross-chain convergence diagnostics such as R-hat
 become unavailable; a warning says so. Default FALSE.}
 
 \item{seed}{Optional whole number (within the R integer range; fractional
-values are an error rather than being truncated). When supplied, seeds
-the random sampling of
-combinations (see \code{sample_combinations}) locally; the previous RNG state
-is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
-asked. Note this does not seed the samplers; pass \code{seed} inside
-\code{brm_args} to control brms itself.}
+values are an error rather than being truncated). When supplied, the
+whole call runs on a local RNG stream and the caller's RNG state is
+restored on exit. It seeds the random sampling of combinations (see
+\code{sample_combinations}) and, unless \code{brm_args$seed} is given, also draws
+one Stan seed per combination from that stream, so the MCMC fits are
+reproducible too, including under \code{parallel_combinations = TRUE}. An
+explicit \code{brm_args$seed} is used for every model instead. Default NULL:
+fs_bayes() never seeds the RNG unless asked (brms/rstan then draw their
+seeds from the global stream).}
 
 \item{verbose}{Logical. Print progress information, and show a progress bar
 for sequential evaluation when the suggested pbapply package is
@@ -109,11 +117,15 @@ plus appended \code{fitted_values}, \code{residuals}, \code{abs_residuals} and
 \code{squared_residuals} columns), \code{mae} and \code{rmse} (in-sample,
 post-selection errors computed on the same rows used to fit and select,
 so they are optimistic), \code{formula} (the selected model's formula
-string), \code{best_elpd} (the selected model's elpd_loo, possibly \code{NA}),
+string), \code{best_elpd} (the selected model's elpd_loo, possibly \code{NA};
+optimistic because it was selected, see Details),
 \code{loo_comparison} (the \code{loo::loo_compare()} table -- a matrix or
 data.frame depending on the loo version -- or \code{NULL} when fewer than two
 models could be compared or the comparison failed), \code{n_failed_fits}
-(how many combinations failed to fit) and \code{n_features} (the number of
+(how many combinations failed to fit), \code{n_loo_failed} (how many fitted
+models were excluded because loo() failed), \code{n_compared} (how many
+models with a finite elpd_loo competed in the selection) and
+\code{n_features} (the number of
 candidate predictors, including \code{iso_week_id} when \code{date_col} is
 supplied).}
 \item{call}{The matched call.}
@@ -143,9 +155,14 @@ comparison. When no usable comparison table is available, both rules fall
 back to the raw elpd maximum, ties broken by fewer predictors.
 
 Combinations whose model fails to fit are excluded from selection and
-counted in \code{details$n_failed_fits}, with a warning. If no fit yields a
-finite \code{elpd_loo} at all, the first successfully fitted model is returned
-with a warning; that is an arbitrary fallback, not a selection.
+counted in \code{details$n_failed_fits}, with a warning that quotes the first
+brms error. Fitted models for which \code{loo::loo()} fails (or gives no finite
+elpd) are likewise excluded, counted in \code{details$n_loo_failed} and
+reported in a warning. If \code{loo::loo_compare()} itself fails, a warning
+says that the raw elpd maximum is used and \code{rule = "1se"} is not applied.
+If no fit yields a finite \code{elpd_loo} at all, the first successfully fitted
+model is returned with a warning; that is an arbitrary fallback, not a
+selection.
 
 Per-model sampler warnings (divergent transitions, R-hat, effective sample
 size) and loo's Pareto-k warnings are muffled while the models are fitted,
@@ -155,11 +172,18 @@ sampler warnings and another how many have observations with Pareto
 k > 0.7 (unreliable PSIS-LOO estimates), each stating whether the selected
 model is among them. \code{verbose = TRUE} shows every individual warning.
 
-Two caveats are worth stating plainly. \code{details$mae} and \code{details$rmse} are
-in-sample errors computed on the same rows used to fit and to select, so
-they are optimistic. And anything read off the returned \code{brmsfit}
-(posterior intervals, effect sizes) is post-selection inference: the model
-was chosen by looking at the same data it is reported on.
+Three caveats are worth stating plainly. \code{details$mae} and \code{details$rmse}
+are in-sample errors computed on the same rows used to fit and to select,
+so they are optimistic. \code{details$best_elpd} (and the \code{loo_comparison}
+table) is optimistic too: PSIS-LOO is roughly unbiased for one fixed model,
+but the selected model's elpd_loo is the maximum, or a near-maximum under
+\code{rule = "1se"}, over \code{details$n_compared} candidates, so it overstates the
+chosen model's out-of-sample predictive performance, and increasingly so
+the larger the search (selection-induced bias; Piironen and Vehtari, 2017).
+An honest estimate needs the whole search repeated inside an outer
+cross-validation, or held-out data. And anything read off the returned
+\code{brmsfit} (posterior intervals, effect sizes) is post-selection inference:
+the model was chosen by looking at the same data it is reported on.
 }
 \examples{
 # Fitting needs more than the brms package: brms compiles and samples a
@@ -192,4 +216,8 @@ if (requireNamespace("brms", quietly = TRUE)) {
   }
 }
 }
+}
+\references{
+Piironen, J. and Vehtari, A. (2017). Comparison of Bayesian predictive
+methods for model selection. \emph{Statistics and Computing}, 27(3), 711-735.
 }

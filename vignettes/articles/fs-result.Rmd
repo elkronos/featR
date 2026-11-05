@@ -66,7 +66,10 @@ selected(res)
 Scores are only comparable **within** one method. A correlation of 0.8 and a
 Boruta importance of 0.8 have nothing in common. The direction also differs:
 for `fs_chi()`, smaller is better. `summary()` knows this and sorts
-accordingly.
+accordingly. For `fs_mars()` and `fs_correlation(prune = TRUE)`, which do not
+select by a cut on the score, `summary()` lists the selected features first
+(each group ordered by score) so a kept feature is never ranked below a
+dropped one.
 
 | Function | `scores` | Better is |
 |---|---|---|
@@ -79,14 +82,15 @@ accordingly.
 | `fs_elastic()` | absolute coefficients on the scale the model saw (`NULL` for multinomial) | larger |
 | `fs_randomforest()` | permutation importance (mean decrease in accuracy, or %IncMSE) | larger |
 | `fs_mars()` | earth variable importance via `caret::varImp()` | larger |
-| `fs_recursivefeature()` | resample-averaged importance from the RFE model | larger |
+| `fs_recursivefeature()` | importance in the full-size RFE fit (every candidate present), averaged over all resamples | larger |
 | `fs_svm()` | SVM-RFE criterion `w^2`, or random-forest importance (`NULL` without selection) | larger |
 | `fs_boruta()` | median Boruta importance | larger |
 | `fs_stepwise()` | absolute *t* statistics of the retained terms (not valid for inference) | larger |
 | `fs_bayes()` | `NULL`: selection is between whole models, so there is no per-feature score | not applicable |
 
 Some methods score **design-matrix columns** rather than original columns.
-`fs_lasso()`, `fs_elastic()`, and `fs_svm()` all do this, and so do the
+`fs_lasso()`, `fs_elastic()`, `fs_svm()`, and
+`fs_recursivefeature(handle_categorical = TRUE)` all do this, and so do the
 `scores` of `fs_stepwise()` (one *t* statistic per coefficient). A factor predictor
 `colour` therefore shows up as `colourgreen`, `colourred`, and so on. Map the
 names back yourself if you need the original variables.

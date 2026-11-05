@@ -66,7 +66,10 @@ selected(fs_lasso(d, "y", nfolds = 5, seed = 1, lambda = "1se"))
   deviation. That makes them comparable across predictors measured in
   different units. The raw coefficients are in `details$coefficients`.
 * **Factors** are expanded into dummy columns, and the selection names those
-  columns (`colourred`, not `colour`).
+  columns (`colourred`, not `colour`). A factor with only one observed level,
+  or a dummy name that collides with another column (factor `g` with level
+  `b` next to a column called `gb`), is an error rather than a silent
+  mistake; so are infinite values.
 * **Missing values** are an error by default. Mean-imputing on the full data
   before cross-validation leaks information between folds.
 
@@ -108,7 +111,9 @@ rf$details$metrics
 
 The forest finds `x_nl`, which the linear methods cannot. To turn the ranking
 into a selection, pass a hook. It runs on the training rows only, so the
-held-out metrics stay honest:
+held-out `details$metrics` stay honest. The out-of-bag `details$oob` does
+not: the forest is grown on the same training rows the hook just used, so
+with a hook that looks at the outcome the OOB error is optimistic.
 
 ```{r, eval = has("randomForest", "caret")}
 top5 <- function(dt) {

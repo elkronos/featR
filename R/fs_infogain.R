@@ -109,7 +109,7 @@ ig_discretize <- function(x, bins = NULL) {
   rx <- range(xf)
   breaks <- unique(seq.int(rx[1L], rx[2L], length.out = bins + 1L))
   nb <- length(breaks)
-  if (nb < 3L || is_numerically_constant(xf, tol = 1024 * .Machine$double.eps)) {
+  if (nb < 3L || is_numerically_constant(xf)) {
     # One distinct finite value up to round-off: one level, plus a level each
     # for -Inf / Inf if present (as for the exactly-constant case).
     v <- x

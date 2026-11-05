@@ -108,7 +108,7 @@ elastic_drop_missing <- function(x, y) {
 #' Names of zero-variance (constant) columns
 #'
 #' A column counts as constant when its range is negligible relative to its
-#' magnitude (`is_numerically_constant()` with tolerance `1000 * eps`), so a
+#' magnitude (`is_numerically_constant()` with tolerance `64 * eps`), so a
 #' column that differs only by floating-point round-off (e.g. `0.1 + 0.2`
 #' versus `0.3`) is caught, while a genuinely varying column on a tiny scale
 #' (sd 1e-5) or with a large offset (a timestamp near 1.7e9) is not. Dense and
@@ -123,7 +123,7 @@ elastic_zero_sd_cols <- function(x) {
   if (nrow(x) < 2L) {
     return(character(0L))
   }
-  tol <- 1000 * .Machine$double.eps
+  tol <- 64 * .Machine$double.eps
   if (inherits(x, "sparseMatrix")) {
     n <- nrow(x)
     xc <- methods::as(x, "CsparseMatrix")
@@ -559,9 +559,20 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #' `selectionFunction = "oneSE"` picks the most penalized pair within one
 #' standard error of the best and is much sparser (1.8 on average in the same
 #' simulation). For the same reason `details$metric_value`, the best value
-#' over the whole grid, is an optimistic estimate of performance. Coefficients
+#' over the whole grid, is an optimistic estimate of performance; `fs_elastic()`
+#' holds out no test rows, so it reports no honest performance estimate, and
+#' one needs an outer resampling loop around the whole call. Coefficients
 #' are taken at exactly the winning lambda (refitting the path if it is not
 #' one of the final model's knots), not interpolated between knots.
+#'
+#' The resampled metrics (in `model$results` and `details$metric_value`) are
+#' caret's: `RMSE`, `Rsquared` and `MAE` for regression, where `Rsquared` is
+#' the \emph{squared Pearson correlation} between held-out-fold predictions
+#' and observations (`caret::postResample()`), not `1 - SSE/SST`, so it is
+#' never negative and not comparable with an `R2` defined as `1 - SSE/SST`
+#' (for example `fs_randomforest()`'s); `Accuracy` and Cohen's `Kappa` for
+#' classification, which needs the suggested package 'e1071' (checked before
+#' any fitting).
 #'
 #' @param data A data frame (or data.table) containing the target and the
 #'   candidate predictors, with unique, non-empty column names.
@@ -590,6 +601,12 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #'   `use_pca = TRUE` and ignored otherwise.
 #' @param seed Optional integer seed applied locally (and restored on exit)
 #'   before resampling and tuning. Default `NULL` (never seeds by default).
+#'   The resampling folds are drawn in the main R process and the glmnet fits
+#'   themselves are deterministic, so a seeded `n_cores > 1` run gives the
+#'   same result as a seeded sequential one. The parallel workers are not
+#'   given seeded RNG streams, so a user `trControl` whose resamples use
+#'   randomness on the workers (for example `sampling = "up"`) should set
+#'   its own `seeds`.
 #' @param verbose Logical. Print progress messages. Default `FALSE`.
 #' @param n_cores Integer >= 1. Number of workers for parallel training.
 #'   Default `1` (sequential; no cluster is created). Values above the
@@ -610,7 +627,8 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #'     `best_alpha` and `best_lambda` (the winning tuning pair), `metric_name`
 #'     (the metric caret actually optimized, which differs from `metric` when
 #'     caret fell back to its default), `metric_value` (its resampled value for that
-#'     pair, `NA` when the metric is absent from caret's results table),
+#'     pair, `NA` when the metric is absent from caret's results table; an
+#'     optimistic, in-sample-tuned figure, see Details),
 #'     `use_pca`, and `n_features` (number of columns the model saw, i.e.
 #'     `nPCs` when `use_pca = TRUE`).}
 #'   \item{call}{The matched call.}
@@ -759,6 +777,16 @@ fs_elastic <- function(data,
     metric <- task_info$metric
   }
   if (identical(task, "classification")) {
+    # caret's classification summary (defaultSummary -> postResample, used by
+    # the default elastic_safe_summary) needs e1071 inside every resample;
+    # fail here with a featR message instead of inside caret.
+    summary_fun <- if (is.null(trControl)) NULL else trControl$summaryFunction
+    if (is.null(summary_fun) ||
+        identical(summary_fun, elastic_safe_summary) ||
+        identical(summary_fun, caret::defaultSummary) ||
+        identical(summary_fun, caret::multiClassSummary)) {
+      fs_require("e1071", "classification metrics (caret::postResample)")
+    }
     counts <- table(y)
     small <- names(counts)[counts < 2L]
     if (length(small) > 0L) {

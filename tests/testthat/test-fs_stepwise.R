@@ -356,8 +356,26 @@ test_that("a saturated full model is a clear error in every direction", {
   i <- seq_len(5)
   d <- data.frame(y = sin(i), a = cos(i), b = sin(2 * i), c = cos(3 * i),
                   e = sin(5 * i))
-  for (dir in c("both", "backward", "forward")) {
+  for (dir in c("both", "backward")) {
     expect_error(fs_stepwise(d, "y", direction = dir),
                  "no residual degrees of freedom")
   }
+  # Forward starts from the intercept; walking into a perfect fit warns.
+  expect_warning(fs_stepwise(d, "y", direction = "forward"),
+                 "no residual degrees of freedom")
+})
+
+test_that("forward selection with more predictors than rows is allowed", {
+  # REGRESSION: the saturated-full-model check also fired for forward
+  # searches, which start from the intercept and are the usual p >= n tool.
+  skip_if_not_installed("MASS")
+  set.seed(3)
+  n <- 15
+  d <- as.data.frame(matrix(rnorm(n * 20), n))
+  d$y <- 2 * d$V1 + rnorm(n, sd = 0.3)
+  res <- suppressWarnings(fs_stepwise(d, "y", direction = "forward",
+                                      steps = 3))
+  expect_true("V1" %in% selected(res))
+  expect_error(fs_stepwise(d, "y", direction = "backward"),
+               "no residual degrees of freedom")
 })

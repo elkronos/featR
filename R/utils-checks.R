@@ -206,14 +206,18 @@ assert_finite_columns <- function(data, cols = colnames(data), fn) {
 #' Exact `sd == 0` misses columns that are constant up to floating-point
 #' round-off (e.g. `1 + 1e-16 * rnorm(n)`), which centring/scaling then blows
 #' up to full weight. A column is treated as constant when its spread is
-#' negligible relative to its magnitude. The test uses the range (no
+#' at round-off level relative to its magnitude: the default `tol` of
+#' `64 * .Machine$double.eps` (about 1.4e-14) flags spreads of a few dozen
+#' units in the last place, while a large-offset column that genuinely varies
+#' (an epoch timestamp in seconds or nanoseconds that varies by more than
+#' about 1e-14 of its value) is kept. The test uses the range (no
 #' squaring, so no underflow/overflow for tiny or huge units).
 #'
 #' @param x Numeric vector (NA ignored).
 #' @param tol Relative tolerance.
 #' @return `TRUE` when `x` is constant to within `tol`.
 #' @noRd
-is_numerically_constant <- function(x, tol = sqrt(.Machine$double.eps)) {
+is_numerically_constant <- function(x, tol = 64 * .Machine$double.eps) {
   x <- x[is.finite(x)]
   if (length(x) < 2L) return(TRUE)
   r <- range(x)

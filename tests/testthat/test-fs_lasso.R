@@ -521,3 +521,16 @@ test_that("lasso no longer needs a sparse helper or Matrix directly", {
                       inherits = FALSE))
   expect_identical(names(formals(featR:::lasso_fit))[1L], "x")
 })
+
+test_that("a large-offset predictor (epoch seconds) is not zeroed as constant", {
+  # REGRESSION: the near-constant screen used a sqrt(eps) tolerance and
+  # set a timestamp varying over ~20 s to 0, so it was never selected.
+  skip_if_not_installed("glmnet")
+  set.seed(11)
+  n <- 120
+  ts <- 1.7e9 + sample(0:20, n, replace = TRUE)
+  d <- data.frame(ts = ts, z = rnorm(n))
+  d$y <- (ts - 1.7e9) + rnorm(n, sd = 0.5)
+  res <- fs_lasso(d, "y", seed = 1)
+  expect_true("ts" %in% selected(res))
+})

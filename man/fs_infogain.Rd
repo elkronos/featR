@@ -17,7 +17,8 @@ fs_infogain(
 \arguments{
 \item{data}{A data.frame (a data.table is accepted and is copied, never
 modified in place), or a list of data.frames each containing \code{target}.
-Column names must be unique within each data.frame.}
+Column names must be unique, non-empty and non-NA within each
+data.frame.}
 
 \item{target}{Character. Name of the target column.}
 

@@ -995,3 +995,51 @@ test_that("rf_rfe fallback screens by permutation importance, not impurity", {
   expect_lt(length(out$selected), 22L)
   expect_true(any(out$scores <= 0))
 })
+
+test_that("rf_rfe fallback warning says when min_keep padded the selection", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_on_cran()
+  local_mocked_bindings(rfe = function(...) stop("simulated rfe failure"),
+                        .package = "caret")
+  set.seed(6)
+  n <- 80
+  x <- as.data.frame(matrix(stats::rnorm(n * 6), n))
+  y <- factor(sample(c("a", "b"), n, TRUE))
+  expect_warning(
+    out <- featR:::svm_feature_selection(x, y, min_keep = 6),
+    "plus the next top-ranked to reach min_keep = 6"
+  )
+  expect_length(out$selected, 6L)
+})
+
+test_that("a one-level categorical predictor is a clear featR error (C69)", {
+  # Previously failed inside model.matrix(): "contrasts can be applied only
+  # to factors with 2 or more levels". Checked before any package is needed.
+  d <- svm_toy_classification()
+  d$k <- "same"
+  expect_error(fs_svm(d, "y", task = "classification"),
+               "fs_svm\\(\\): categorical predictor\\(s\\) with fewer than two observed levels: 'k'")
+  d$k <- factor("same")
+  d$y <- seq_len(nrow(d)) / 10
+  expect_error(fs_svm(d, "y", task = "regression"),
+               "fewer than two observed levels: 'k'")
+})
+
+test_that("a factor left with one level in the training rows is a clear error (C69)", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  d <- svm_toy_classification()
+  d$k <- c(rep("common", nrow(d) - 1L), "rare")
+  # Force the split: every row but the last is training, so 'rare' exists
+  # only in the held-out rows (and that row is dropped as unseen).
+  local_mocked_bindings(
+    fs_split_index = function(y, p, ...) seq_len(length(y) - 2L)
+  )
+  expect_error(
+    suppressWarnings(fs_svm(d, "y", task = "classification",
+                            tune_grid = data.frame(C = 1), nfolds = 3)),
+    "fewer than two levels in the training rows: 'k'"
+  )
+})

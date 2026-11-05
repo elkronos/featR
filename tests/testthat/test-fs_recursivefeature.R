@@ -840,3 +840,54 @@ test_that("train_control and model_method are validated before the search (C71)"
     "rfe_perform was reached"
   )
 })
+
+test_that("one-level categorical predictors are removed with a warning under handle_categorical = TRUE (C69)", {
+  # Previously caret::dummyVars() failed with "contrasts can be applied only
+  # to factors with 2 or more levels"; handle_categorical = FALSE already
+  # removed such columns as constant.
+  skip_if_not_installed("caret")
+  skip_on_cran()
+  set.seed(11)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n),
+                  k = "same", f = factor(rep("z", n)))
+  d$y <- d$x1 + rnorm(n, sd = 0.3)
+  for (hc in c(TRUE, FALSE)) {
+    expect_warning(
+      res <- fs_recursivefeature(
+        d, "y", handle_categorical = hc, seed = 1,
+        rfe_control = list(method = "cv", number = 3,
+                           functions = caret::lmFuncs)
+      ),
+      "constant on the training rows before RFE: k, f"
+    )
+    expect_false(any(c("k", "f") %in% names(res$scores)))
+    expect_true("x1" %in% selected(res))
+  }
+})
+
+test_that("rfe_control$method is matched case-insensitively like caret", {
+  # REGRESSION: the method whitelist rejected 'lgocv', which caret accepts.
+  out <- featR:::rfe_validate_rfe_control(list(method = "lgocv", number = 3))
+  expect_identical(out$method, "LGOCV")
+  expect_error(featR:::rfe_validate_rfe_control(list(method = "nope", number = 3)),
+               "must be one of")
+})
+
+test_that("a large-offset predictor is not removed as constant", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_on_cran()
+  set.seed(4)
+  n <- 120
+  d <- data.frame(ts = 1.7e9 + sample(0:20, n, TRUE), w = rnorm(n))
+  d$y <- (d$ts - 1.7e9) + rnorm(n, sd = 0.5)
+  expect_no_warning(
+    res <- fs_recursivefeature(d, "y", sizes = 1:2,
+                               rfe_control = list(method = "cv", number = 3,
+                                                  functions = caret::lmFuncs),
+                               seed = 1),
+    message = "constant"
+  )
+  expect_true("ts" %in% names(res$scores))
+})

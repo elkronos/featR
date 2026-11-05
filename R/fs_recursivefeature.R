@@ -25,6 +25,8 @@ rfe_task_type <- function(y) {
 #' Validate RFE resampling control parameters
 #'
 #' `caret::rfeControl()` returns a plain list, so only lists are accepted.
+#' @return Invisibly, `control_params` with `method` normalised to caret's
+#'   canonical spelling.
 #' @noRd
 rfe_validate_rfe_control <- function(control_params) {
   if (!is.list(control_params)) {
@@ -42,11 +44,15 @@ rfe_validate_rfe_control <- function(control_params) {
   # ("attempt to set an attribute on NULL").
   rfe_methods <- c("cv", "repeatedcv", "LOOCV", "boot", "boot632", "LGOCV",
                    "test")
-  if (!control_params$method %in% rfe_methods) {
+  # caret matches the method case-insensitively; normalise to its canonical
+  # spelling so the checks below (and caret's own `== "LOOCV"`) see it.
+  m_idx <- match(tolower(control_params$method), tolower(rfe_methods))
+  if (is.na(m_idx)) {
     stop(sprintf("'rfe_control$method' must be one of %s; got '%s'.",
                  paste0("'", rfe_methods, "'", collapse = ", "),
                  control_params$method), call. = FALSE)
   }
+  control_params$method <- rfe_methods[m_idx]
   assert_count(control_params$number, "rfe_control$number", lower = 1L)
   # A one-fold CV leaves an empty training set in every resample.
   if (control_params$method %in% c("cv", "repeatedcv") &&
@@ -87,7 +93,7 @@ rfe_validate_rfe_control <- function(control_params) {
       assert_count(control_params$repeats, "rfe_control$repeats", lower = 1L)
     }
   }
-  invisible(TRUE)
+  invisible(control_params)
 }
 
 #' Refuse user-supplied resampling row indices
@@ -534,6 +540,15 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #' restricted to the optimal subset) on test rows that took no part in choosing
 #' either the features or the subset size.
 #'
+#' The metrics are caret's: for regression `RMSE`, `Rsquared` and `MAE`, where
+#' `Rsquared` is the \emph{squared Pearson correlation} between predictions
+#' and observations, not `1 - SSE/SST`. It is never negative and ignores bias
+#' and scale errors, so it is not comparable with an `R2` defined as
+#' `1 - SSE/SST` (for example `fs_randomforest()`'s `details$metrics$R2`).
+#' For classification they are `Accuracy` (proportion of held-out rows
+#' classified correctly) and `Kappa` (Cohen's kappa, accuracy corrected for
+#' chance agreement).
+#'
 #' Two other summaries on the result are \emph{not} held-out estimates, by
 #' construction. `details$resampling_results` summarizes resampling performed
 #' inside the training rows across candidate subset sizes, and, when
@@ -741,7 +756,7 @@ fs_recursivefeature <- function(data,
   assert_flag(parallel, "parallel")
 
   fs_require("caret", "recursive feature elimination")
-  rfe_validate_rfe_control(rfe_control)
+  rfe_control <- rfe_validate_rfe_control(rfe_control)
   if (return_final_model) {
     # Checked before the (expensive) search, not only once it has finished.
     rfe_validate_train_control(train_control)
@@ -839,6 +854,21 @@ fs_recursivefeature <- function(data,
       "%d held-out value(s) have a factor level not seen in the training",
       "rows and are treated as missing."
     ), n_unseen), call. = FALSE)
+  }
+
+  # Constant predictors (including a factor with a single level on the
+  # training rows) are removed before encoding: caret::dummyVars() cannot
+  # encode a one-level factor and failed with "contrasts can be applied only
+  # to factors with 2 or more levels".
+  const_raw <- rfe_constant_columns(train_raw,
+                                    setdiff(colnames(train_raw), target))
+  if (length(const_raw) > 0L) {
+    warning("Removing predictor(s) that are constant on the training rows ",
+            "before RFE: ", paste(const_raw, collapse = ", "), call. = FALSE)
+    train_raw <- train_raw[, setdiff(colnames(train_raw), const_raw),
+                           drop = FALSE]
+    test_raw <- test_raw[, setdiff(colnames(test_raw), const_raw),
+                         drop = FALSE]
   }
 
   preproc <- NULL

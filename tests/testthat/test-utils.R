@@ -477,3 +477,13 @@ test_that("safe_col_spread is immune to sd() over- and underflow", {
   }
   expect_identical(safe_col_spread(rep(0, 5))$rel, 0)
 })
+
+test_that("is_numerically_constant flags round-off only, not large-offset data", {
+  # REGRESSION: a sqrt(eps) default treated epoch timestamps varying by
+  # seconds as constant, so several wrappers silently dropped them.
+  expect_true(featR:::is_numerically_constant(c(0.3, 0.1 + 0.2, 0.3)))
+  expect_true(featR:::is_numerically_constant(1 + 1e-16 * (1:10)))
+  expect_false(featR:::is_numerically_constant(1.7e9 + 0:20))
+  expect_false(featR:::is_numerically_constant(1.7e18 + 1e5 * (0:5)))
+  expect_false(featR:::is_numerically_constant(1e-300 * (1:10)))
+})

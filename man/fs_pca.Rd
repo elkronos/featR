@@ -16,7 +16,13 @@ fs_pca(
 }
 \arguments{
 \item{data}{A data.frame or data.table with at least two rows and at least
-one numeric column.}
+one numeric column. Column names must be unique and non-empty. Non-numeric
+(label) columns must not be named like a retained score column (\code{PC1},
+\code{PC2}, ...), which would shadow them in \code{pca_df}; that is an error.
+Zero-variance detection is relative to each column's magnitude and immune
+to \code{sd()} over/underflow, so columns in extreme units (beyond about
+\code{1e154} or below \code{1e-154}) are kept; with \code{scale_data = FALSE} their
+variance cannot be represented and they are an error.}
 
 \item{num_pc}{Number of principal components to retain: a whole number
 \verb{>= 1}, or \code{NULL} (the default) to retain \code{min(2, max_possible)}.

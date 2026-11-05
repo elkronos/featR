@@ -656,3 +656,33 @@ test_that("a dummy name colliding with another column is an error", {
   d$y <- d$z + rnorm(n)
   expect_error(fs_elastic(d, "y", alpha_seq = 1), "collide with existing columns: gb")
 })
+
+test_that("classification checks for e1071 before any training (C61)", {
+  # caret's classification summary (defaultSummary -> postResample) needs
+  # e1071 inside every resample; the check must come first.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  local_mocked_bindings(
+    fs_require = function(pkgs, purpose = NULL) {
+      if ("e1071" %in% pkgs) stop("e1071 missing (mocked)", call. = FALSE)
+      invisible(TRUE)
+    },
+    elastic_train_models = function(...) stop("training was reached", call. = FALSE)
+  )
+  set.seed(2)
+  d <- data.frame(y = factor(rep(c("a", "b"), 20)), x1 = rnorm(40),
+                  x2 = rnorm(40))
+  expect_error(fs_elastic(d, "y", alpha_seq = 1), "e1071 missing")
+  # regression does not need it
+  d$y <- rnorm(40)
+  expect_error(fs_elastic(d, "y", alpha_seq = 1), "training was reached")
+  # nor does a classification summary that does not use postResample
+  d$y <- factor(rep(c("a", "b"), 20))
+  ctl <- caret::trainControl(method = "cv", number = 3,
+                             summaryFunction = caret::twoClassSummary,
+                             classProbs = TRUE)
+  expect_error(fs_elastic(d, "y", alpha_seq = 1, trControl = ctl,
+                          metric = "ROC"),
+               "training was reached")
+})

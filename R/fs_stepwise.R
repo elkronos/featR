@@ -243,10 +243,14 @@ step_term_scores <- function(model, coefs, term_labels) {
 #' before the search, because `stepAIC()` cannot compare models fitted on
 #' differing row sets.
 #'
-#' The full model must leave residual degrees of freedom: with as many
+#' For `direction = "backward"` or `"both"`, which start from the full
+#' model, the full model must leave residual degrees of freedom: with as many
 #' coefficients (intercept and factor dummies included) as complete rows it
 #' fits perfectly, its AIC is -Inf, and the call stops with an error naming
-#' the counts. A factor or character predictor with fewer than two observed
+#' the counts. A forward search starts from the intercept and may have more
+#' candidate predictors than rows; it warns if the model it ends on has no
+#' residual degrees of freedom (a perfect fit, so the selection is not
+#' meaningful). A factor or character predictor with fewer than two observed
 #' levels (after dropping incomplete rows) is an error, as is a factor dummy
 #' name that collides with another column or the target (factor `g` with
 #' level `b` next to a column `gb`).
@@ -386,12 +390,13 @@ fs_stepwise <- function(data,
   assign(".fs_stepwise_data", data, envir = fit_env)
 
   dots <- list(...)
-  # A forward search with a user-supplied scope never starts from the full `~ .`
-  # model, so only check saturation when that model is actually used.
+  # Backward and both-direction searches start from the full `~ .` model, so
+  # a saturated full model (AIC = -Inf) makes them meaningless. A forward
+  # search starts from the intercept and only uses the full model as its upper
+  # scope, so p >= n is a legitimate forward use case.
   parts <- step_build_models(dep_var, direction = direction,
                              fit_env = fit_env,
-                             check_saturated = !(direction == "forward" &&
-                                                   "scope" %in% names(dots)))
+                             check_saturated = direction != "forward")
 
   step_model <- step_run_stepwise(
     start_model = parts$start_model,
@@ -401,6 +406,12 @@ fs_stepwise <- function(data,
     dots = dots,
     fit_env = fit_env
   )
+  if (stats::df.residual(step_model) <= 0L) {
+    warning("fs_stepwise(): the forward search ended on a model with no ",
+            "residual degrees of freedom (a perfect fit); the selection is ",
+            "not meaningful. Limit 'steps' or use fewer candidate predictors.",
+            call. = FALSE)
+  }
 
   coefficients <- step_coef_summary(step_model)
   # Term labels of non-syntactic columns come back backticked; report the

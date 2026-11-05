@@ -609,10 +609,16 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' For classification, class imbalance is handled by `sampling = "up"` inside
 #' `caret::trainControl()`, i.e. upsampling happens within each resample; the
 #' data are never upsampled before cross-validation (which would leak
-#' duplicated rows across folds). The FIRST factor level is treated as the
-#' positive class for ROC/PR AUC, and the test-set ROC AUC is computed with a
-#' fixed direction, so a worse-than-chance model scores below 0.5 rather than
-#' being silently flipped. Classification requires the 'e1071' package
+#' duplicated rows across folds). The FIRST factor level (after unused levels
+#' are dropped and labels sanitized) is treated as the positive class for
+#' ROC/PR AUC and for the sensitivity/specificity (`Sens`/`Spec`) that
+#' `caret::twoClassSummary()` reports in `model$results`; there is no
+#' override, so reorder the target's levels with `stats::relevel()` to
+#' change it. This differs from `fs_randomforest()`, whose default positive
+#' class is the second level. ROC AUC does not depend on which class is
+#' positive, but PR AUC, sensitivity and specificity do. The test-set ROC AUC
+#' is computed with a fixed direction, so a worse-than-chance model scores
+#' below 0.5 rather than being silently flipped. Classification requires the 'e1071' package
 #' (used by `caret::confusionMatrix()` and caret's resampling summaries),
 #' which is checked before any training. Factor levels are sanitized with
 #' `make.names(unique = TRUE)`, so distinct labels can never be merged.
@@ -654,8 +660,12 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' @param remove_nzv Logical. Remove near-zero-variance predictors
 #'   (default TRUE).
 #' @param seed Optional whole number for reproducibility, applied locally and
-#'   restored on exit. Default NULL (never seeds by default). When NULL, no
-#'   deterministic resampling seed lists are constructed either.
+#'   restored on exit. Default NULL (never seeds by default). With a seed,
+#'   one seed per resample (and tuning candidate) is drawn from the locally
+#'   seeded RNG and passed to `caret::trainControl(seeds = )`, which is what
+#'   keeps a seeded `n_cores > 1` run reproducible; the parallel workers
+#'   themselves are not given seeded RNG streams. When NULL, no deterministic
+#'   resampling seed lists are constructed either.
 #' @param verbose Logical. Print progress messages, caret's per-fold iteration
 #'   log, and the small-class notice (default FALSE).
 #' @param n_cores Integer >= 1. Number of parallel workers for model training

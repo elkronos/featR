@@ -797,6 +797,7 @@ svm_feature_selection <- function(x_enc,
   ranked <- imp$Feature[ord]
   ranked_imp <- imp[[score_col]][ord]
   selected <- ranked[is.finite(ranked_imp) & ranked_imp > 0]
+  n_pos <- length(selected)
   if (length(selected) < keep_n) {
     selected <- utils::head(ranked, min(keep_n, length(ranked)))
   }
@@ -811,11 +812,18 @@ svm_feature_selection <- function(x_enc,
   warning(
     sprintf(
       paste0(
-        "feature selection failed (%s); falling back to the %d of %d ",
-        "predictor(s) with positive random-forest permutation importance ",
+        "feature selection failed (%s); falling back to %d of %d ",
+        "predictor(s): %s ",
         "(a weak screen, not a cross-validated selection)"
       ),
-      reason, length(selected), length(feature_names)
+      reason, length(selected), length(feature_names),
+      if (length(selected) > n_pos) {
+        sprintf(paste0("the %d with positive random-forest permutation ",
+                       "importance plus the next top-ranked to reach ",
+                       "min_keep = %d"), n_pos, keep_n)
+      } else {
+        "those with positive random-forest permutation importance"
+      }
     ),
     call. = FALSE
   )
@@ -986,7 +994,11 @@ svm_performance <- function(predictions, actuals, task) {
 #'     training are dropped with a warning. If a dummy column name
 #'     (\code{<factor><level>}) coincides with another column or the target,
 #'     for example factor \code{g} with level \code{"1"} next to a numeric
-#'     \code{g1}, the call stops and asks for a rename. Non-finite
+#'     \code{g1}, the call stops and asks for a rename. A factor or
+#'     character predictor with fewer than two distinct non-missing values
+#'     is an error naming the column, and so is one left with a single level
+#'     in the training rows because its other levels fell only into the
+#'     held-out rows. Non-finite
 #'     (\code{Inf}) values in the predictors or target are an error.
 #'   \item A numeric target with \code{task = "classification"} is coerced
 #'     to a factor (with a message) only when it has at most 10 unique
@@ -1040,9 +1052,13 @@ svm_performance <- function(predictions, actuals, task) {
 #' @param seed Optional whole-number seed (within the R integer range;
 #'   fractional values are an error, not truncated), applied locally for the
 #'   duration of the call
-#'   and restored afterwards; also used to set reproducible RNG streams on
-#'   parallel workers when \code{n_cores > 1}. Default \code{NULL} (never
-#'   seeds by default).
+#'   and restored afterwards. When \code{n_cores > 1}, caret's resampling
+#'   controls get \code{seeds = NULL}, so caret draws one seed per
+#'   resample from the locally seeded RNG; that is what makes two seeded
+#'   parallel runs agree. The workers also get L'Ecuyer-CMRG streams, but
+#'   those alone would not, because foreach hands resamples to whichever
+#'   worker is free. A seeded parallel run need not equal a seeded sequential
+#'   one. Default \code{NULL} (never seeds by default).
 #' @param verbose Logical; if \code{TRUE}, report progress (including each
 #'   SVM-RFE elimination step). Default \code{FALSE}.
 #' @param n_cores Number of parallel workers (default \code{1}, sequential).
@@ -1187,6 +1203,13 @@ fs_svm <- function(data,
   n_cores <- resolve_cores(n_cores)
   use_parallel <- n_cores > 1L
 
+  # A single-level factor/character predictor cannot be dummy-coded; without
+  # this check it failed inside model.matrix() with "contrasts can be applied
+  # only to factors with 2 or more levels".
+  lasso_check_categorical_levels(
+    data[, setdiff(names(data), target), drop = FALSE], "fs_svm"
+  )
+
   pkgs <- c("caret", "kernlab")
   if (task == "classification") {
     pkgs <- c(pkgs, "e1071")
@@ -1248,6 +1271,22 @@ fs_svm <- function(data,
   aligned <- svm_align_levels(train_set, test_set, target)
   train_set <- aligned$train_set
   test_set <- aligned$test_set
+  # A factor can have two levels in 'data' but only one in the training rows
+  # (the other level fell entirely into the held-out rows, which were dropped
+  # above). Dummy coding then fails the same way, so say so here.
+  one_level <- names(train_set)[vapply(names(train_set), function(nm) {
+    nm != target && is.factor(train_set[[nm]]) &&
+      length(unique(train_set[[nm]][!is.na(train_set[[nm]])])) < 2L
+  }, logical(1L))]
+  if (length(one_level) > 0L) {
+    stop(sprintf(paste0(
+      "fs_svm(): categorical predictor(s) with fewer than two levels in the ",
+      "training rows: %s. The other level(s) occur only in held-out rows, so ",
+      "the column cannot be dummy-coded; merge rare levels, remove the ",
+      "column, or change 'train_ratio' or 'seed'."),
+      paste0("'", utils::head(one_level, 5L), "'", collapse = ", ")),
+      call. = FALSE)
+  }
 
   # Optional parallel backend, created early so feature selection and
   # training can share it, and always cleaned up on exit.

@@ -573,3 +573,12 @@ test_that("values differing only by round-off are binned as one value", {
                    cut(x, breaks = ig_bins(x), include.lowest = TRUE,
                        ordered_result = TRUE))
 })
+
+test_that("resolvable large-magnitude values are not collapsed into one bin", {
+  # REGRESSION: a 1024*eps constant test merged nanosecond timestamps that
+  # differ by 1e5 (hundreds of ulps), scoring a perfect separator 0.
+  y <- factor(rep(c("a", "b"), each = 20))
+  d <- data.frame(t = 1.7e18 + ifelse(y == "a", 0, 1e5) , y = y)
+  res <- fs_infogain(d, "y")
+  expect_gt(res$scores[["t"]], 0.5)
+})

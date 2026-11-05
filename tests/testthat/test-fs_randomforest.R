@@ -901,3 +901,16 @@ test_that("a control$positive_class that names no level is an error", {
   expect_no_error(fs_randomforest(d, "y", seed = 1,
                                   control = list(ntree = 5, positive_class = "yes")))
 })
+
+test_that("large-offset predictors are not rejected as all-constant", {
+  # REGRESSION: the all-constant guard used a relative tolerance and
+  # rejected timestamp predictors that randomForest splits on fine.
+  skip_if_not_installed("randomForest")
+  set.seed(8)
+  n <- 100
+  d <- data.frame(ts = 1.7e9 + sample(0:20, n, TRUE))
+  d$y <- (d$ts - 1.7e9) + rnorm(n, sd = 0.5)
+  res <- fs_randomforest(d, "y", task = "regression", seed = 1,
+                         control = list(ntree = 50))
+  expect_s3_class(res, "fs_result")
+})

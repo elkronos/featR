@@ -72,12 +72,11 @@ capped.}
 }
 \value{
 An \code{fs_result} object with:
-\item{selected}{Design-matrix columns whose raw coefficient at the
-chosen lambda (\code{lambda.min} by default) is non-zero, ordered by
-decreasing \code{scores} magnitude.
-(Selection reads the raw coefficients, so a constant column that glmnet
-nonetheless gave a non-zero coefficient is reported even though its
-standardized score is 0.)}
+\item{selected}{Design-matrix columns whose coefficient at the chosen
+lambda (\code{lambda.min} by default) is non-zero, ordered by decreasing
+\code{scores} magnitude. Constant (and numerically constant) columns always
+have coefficient 0, so they are never selected; floating-point residue
+coefficients are zeroed (see Details).}
 \item{scores}{data.frame with columns Variable, Coefficient and
 AbsCoefficient, one row per design-matrix column (including those
 shrunk to zero), ordered by decreasing AbsCoefficient, on the
@@ -133,6 +132,22 @@ internally for fitting but reports coefficients back on the input scale, so
 those raw coefficients are kept in \code{details$coefficients}. With
 \code{standardize = FALSE}, \code{scores} is the raw table and the two are identical.
 
+Constant columns get a coefficient of exactly 0 and are never selected.
+The same holds for columns that are constant up to floating-point
+round-off (spread negligible relative to magnitude): standardization would
+otherwise blow that round-off up to a full-scale predictor with a raw
+coefficient around 1e15, so such columns are held at 0 during the fit. A
+column whose variance overflows (values around 1e154 or larger) is an
+error; rescale it first. Coefficients that are floating-point residue
+(below \code{1e-10} times the largest standardized coefficient) are reported as
+exactly 0: with all-level dummy coding of the first factor, the redundant
+level otherwise kept a coefficient around 1e-13 and was selected.
+
+Design-matrix names must be unique, because \code{selected} and \code{scores} name
+columns: a factor dummy that collides with another column or the target
+(factor \code{g} with level \code{b} next to a column \code{gb}) is an error, as is a
+factor or character predictor with fewer than two observed levels.
+
 Raw coefficient magnitude is a scale-dependent notion of importance: a
 predictor measured in small units earns a large coefficient for the same
 effect. That applies to \code{details$coefficients} always, and to \code{scores} when
@@ -147,8 +162,7 @@ that this leaks. Columns that are entirely NA are an error either way.
 }
 \examples{
 \donttest{
-if (requireNamespace("glmnet", quietly = TRUE) &&
-    requireNamespace("Matrix", quietly = TRUE)) {
+if (requireNamespace("glmnet", quietly = TRUE)) {
   n <- 100
   df <- data.frame(
     x1 = rnorm(n),

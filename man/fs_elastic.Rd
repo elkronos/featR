@@ -31,13 +31,18 @@ because it cannot zero a coefficient (see Details).}
 \item{lambda_seq}{Numeric vector of non-negative lambda values to tune
 over, or \code{NULL} (default) to use glmnet's own path per alpha.}
 
-\item{trControl}{Optional \code{caret::trainControl()} object. If \code{NULL}
-(default), 5-fold CV with an NA-safe summary function is used. When
-\code{use_pca = TRUE}, \code{pcaComp = nPCs} is injected into its \code{preProcOptions}.}
+\item{trControl}{Optional \code{caret::trainControl()} object (a partial list
+or a string is an error). If \code{NULL} (default), 5-fold CV with an NA-safe
+summary function is used. When \code{use_pca = TRUE}, \code{pcaComp = nPCs} is
+injected into its \code{preProcOptions}. If rows with missing values are
+dropped, user-supplied \code{index}, \code{indexOut} or \code{indexFinal} are an error,
+because their row numbers would no longer match.}
 
 \item{metric}{Optional character. Performance metric to optimize. If \code{NULL}
 (default), \code{"RMSE"} is used for regression and \code{"Accuracy"} for
-classification.}
+classification. A name caret does not find in the summary output makes
+caret warn and fall back to its default; \code{details$metric_name} then
+reports the metric actually used.}
 
 \item{use_pca}{Logical. Whether to project predictors onto principal
 components inside each resample. Default \code{FALSE}.}
@@ -48,7 +53,13 @@ predictor matrix. Default \code{NULL}, which is an error when
 \code{use_pca = TRUE} and ignored otherwise.}
 
 \item{seed}{Optional integer seed applied locally (and restored on exit)
-before resampling and tuning. Default \code{NULL} (never seeds by default).}
+before resampling and tuning. Default \code{NULL} (never seeds by default).
+The resampling folds are drawn in the main R process and the glmnet fits
+themselves are deterministic, so a seeded \code{n_cores > 1} run gives the
+same result as a seeded sequential one. The parallel workers are not
+given seeded RNG streams, so a user \code{trControl} whose resamples use
+randomness on the workers (for example \code{sampling = "up"}) should set
+its own \code{seeds}.}
 
 \item{verbose}{Logical. Print progress messages. Default \code{FALSE}.}
 
@@ -71,8 +82,10 @@ predictor has one coefficient per class and no single score exists.}
 \item{details}{List of \code{coef} (coefficients at the best lambda, intercept
 included: a sparse matrix, or a list of them for multinomial fits),
 \code{best_alpha} and \code{best_lambda} (the winning tuning pair), \code{metric_name}
-(the metric optimized), \code{metric_value} (its resampled value for that
-pair, \code{NA} when the metric is absent from caret's results table),
+(the metric caret actually optimized, which differs from \code{metric} when
+caret fell back to its default), \code{metric_value} (its resampled value for that
+pair, \code{NA} when the metric is absent from caret's results table; an
+optimistic, in-sample-tuned figure, see Details),
 \code{use_pca}, and \code{n_features} (number of columns the model saw, i.e.
 \code{nPCs} when \code{use_pca = TRUE}).}
 \item{call}{The matched call.}
@@ -101,11 +114,20 @@ contributes k - 1 dummy columns and \code{selected}, \code{scores} and \code{det
 name design-matrix columns rather than the original columns. Non-syntactic
 names are reported as the caller wrote them, without the backticks
 \code{model.matrix()} adds. \code{glmnet} needs at least two design-matrix columns,
-so a single numeric predictor is an error.
+so a single numeric predictor is an error. A factor or character
+predictor with fewer than two distinct values is an error naming the
+column, and so is a dummy name that collides with another column (factor
+\code{g} with level \code{b} next to a column called \code{gb}).
 
 Rows with a missing response, or a missing value in any predictor, are
-dropped before fitting (an error if that leaves nothing), and a constant
-predictor column is a hard error rather than a silently degenerate fit. A
+dropped before fitting (an error if that leaves nothing). The task is
+inferred from the remaining rows: a class that occurred only in dropped
+rows is removed with a message, and a class with fewer than two complete
+rows is an error. Infinite values (\code{Inf}/\code{-Inf}) in the target or any
+predictor are an error. A predictor column that is constant, or constant
+up to floating-point round-off (range below \code{1000 * .Machine$double.eps}
+times its magnitude), is a hard error rather than a silently degenerate
+fit; dense and sparse input use the same rule. A
 logical response is converted to a two-level factor with a message; a
 numeric response with only two distinct values is still treated as
 regression, with a warning telling you to convert it to a factor if you
@@ -144,9 +166,20 @@ average and at least one in every run. A \code{trControl} with
 \code{selectionFunction = "oneSE"} picks the most penalized pair within one
 standard error of the best and is much sparser (1.8 on average in the same
 simulation). For the same reason \code{details$metric_value}, the best value
-over the whole grid, is an optimistic estimate of performance. Coefficients
+over the whole grid, is an optimistic estimate of performance; \code{fs_elastic()}
+holds out no test rows, so it reports no honest performance estimate, and
+one needs an outer resampling loop around the whole call. Coefficients
 are taken at exactly the winning lambda (refitting the path if it is not
 one of the final model's knots), not interpolated between knots.
+
+The resampled metrics (in \code{model$results} and \code{details$metric_value}) are
+caret's: \code{RMSE}, \code{Rsquared} and \code{MAE} for regression, where \code{Rsquared} is
+the \emph{squared Pearson correlation} between held-out-fold predictions
+and observations (\code{caret::postResample()}), not \code{1 - SSE/SST}, so it is
+never negative and not comparable with an \code{R2} defined as \code{1 - SSE/SST}
+(for example \code{fs_randomforest()}'s); \code{Accuracy} and Cohen's \code{Kappa} for
+classification, which needs the suggested package 'e1071' (checked before
+any fitting).
 }
 \examples{
 \donttest{

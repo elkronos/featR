@@ -318,6 +318,13 @@ rf_pool_importance_sd <- function(forests) {
 #' has exactly two levels \emph{and} the suggested package 'pROC' is installed;
 #' it is \code{NA} otherwise, which includes every multi-class fit and (with a
 #' warning) a held-out split that contains only one of the two classes.
+#' For a binary target the positive class is \code{control$positive_class}
+#' or, by default, the \emph{second} factor level (after unused levels are
+#' dropped), which is the class whose predicted probability is scored.
+#' \code{fs_mars()} uses the \emph{first} level instead. ROC AUC is the same
+#' whichever class is called positive, so \code{auc} does not depend on this
+#' choice, but the two functions' class-specific quantities (such as
+#' \code{fs_mars()}'s PR AUC or sensitivity) are not directly comparable.
 #' \code{kappa} is Cohen's kappa computed from the held-out confusion table
 #' (\code{NA} when it is undefined, i.e. chance agreement is 1). Regression
 #' fits report RMSE, MAE, and R2 instead. R2 is \code{1 - SSE/SST} on the
@@ -776,11 +783,7 @@ fs_randomforest <- function(data,
   # randomForest never terminates on a classification fit in which no
   # predictor can be split (reachable with control$drop_zerovar = FALSE).
   all_constant <- all(vapply(x_train, function(x) {
-    if (is.numeric(x)) {
-      is_numerically_constant(x)
-    } else {
-      length(unique(x[!is.na(x)])) <= 1L
-    }
+    length(unique(x[!is.na(x)])) <= 1L
   }, logical(1L)))
   if (all_constant) {
     stop("Every predictor is constant in the training rows, so the forest ",

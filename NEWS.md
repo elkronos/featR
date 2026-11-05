@@ -374,7 +374,8 @@ second before it was fixed, and each fix has a regression test.
 * Clear featR errors replace cryptic engine errors for:
   * one-level factor predictors;
   * ordered, single-class, empty-label and unused-level targets;
-  * saturated stepwise models;
+  * saturated stepwise models (`backward`/`both`; a forward search that
+    ends on a perfect fit warns);
   * one-row splits;
   * list columns;
   * every predictor removed by filtering;

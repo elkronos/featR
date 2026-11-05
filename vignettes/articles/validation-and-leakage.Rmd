@@ -63,16 +63,31 @@ number honest:
   `fs_recursivefeature()`, and `fs_svm()` split the data first. Selection,
   tuning, and preprocessing that learns from data (near-zero-variance filters,
   correlation filters, one-hot encoders, imputation values) are fitted on the
-  training rows only. The metrics in `details` come from the held-out rows.
+  training rows only. The held-out metrics -- `details$metrics`
+  (`fs_randomforest()`, `fs_mars()`), `details$test_metrics`
+  (`fs_recursivefeature()`), `details$performance` (`fs_svm()`) -- come from
+  rows the selection never saw. Other entries of `details` are computed on
+  training rows and are optimistic; see the next points.
 * **Resampling-aware preprocessing.** `fs_elastic(use_pca = TRUE)` refits
   centering, scaling, and PCA inside each resample. Class upsampling in
   `fs_mars()` and `fs_svm()` also happens inside each resample, so duplicated
   rows never appear on both sides of a fold.
 * **No silent imputation.** `fs_lasso()` refuses missing predictors by default.
   `impute = "mean"` uses full-data means and warns you that it leaks.
-* **Labeled in-sample numbers.** `fs_bayes()`'s `details$mae` and
-  `details$rmse`, and `fs_stepwise()`'s *t* statistics and p-values, are
-  computed on the rows used for selection. The documentation says so.
+* **Labeled in-sample numbers.** `fs_bayes()`'s `details$mae`,
+  `details$rmse` and `details$best_elpd`, and `fs_stepwise()`'s *t*
+  statistics and p-values, are computed on the rows used for selection. The
+  documentation says so.
+* **Selection-reused numbers.** Some resampled numbers are computed on the
+  training rows after (or while) those rows chose the features or the
+  tuning values, so they are optimistic even though they look like
+  cross-validation: `fs_randomforest()`'s out-of-bag `details$oob` when a
+  `control$feature_select` hook looked at the target, `fs_svm()`'s
+  `model$results` with `feature_select = TRUE` and the chosen size's entry in
+  `details$selection$size_scores`, `fs_recursivefeature()`'s
+  `details$resampling_results`, and `fs_elastic()`'s `details$metric_value`
+  (the best value over the whole tuning grid; `fs_elastic()` holds out no
+  test rows). Use the held-out metrics above, or an outer resampling loop.
 
 ## What featR cannot do for you
 

@@ -110,7 +110,11 @@ you have. Use \code{\link[=fs_supervised]{fs_supervised()}} or a model-based met
 
 Supported methods:
 \itemize{
-\item \code{"variance"}: Sample variance (denominator n - 1).
+\item \code{"variance"}: Sample variance (denominator n - 1), in
+squared units. For values below about \code{1e-162} in magnitude the
+variance is smaller than the smallest double and is reported as 0, so
+to screen for constant columns on data in extreme units use
+\code{"range"} (threshold 0) or \code{"n_unique"} (threshold 1).
 \item \code{"mad"}: Median absolute deviation, computed with
 \code{stats::mad()}'s default consistency constant 1.4826
 (normal-consistent). Scores are therefore on the standard-deviation
@@ -140,7 +144,9 @@ both \code{action = "keep"} and \code{action = "remove"}; a warning
 reports how many such features were excluded.
 
 Columns are subset by integer index, never by name, so duplicated column
-names cannot select the wrong columns.
+names cannot select the wrong columns. Every column must have a non-empty,
+non-NA name; a matrix keeps its own column names (\code{V1}, \code{V2}, ... are used
+only when it has none).
 }
 \examples{
 df <- data.frame(

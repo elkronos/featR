@@ -76,7 +76,10 @@ diagonal of the reported correlation matrix. It is cosmetic: the diagonal
 never takes part in flagging, scoring, or pruning. Default \code{0}.}
 
 \item{seed}{Optional integer seed for reproducible sampling, applied
-locally; the previous RNG state is restored afterwards. Default
+locally; the previous RNG state is restored afterwards. It only matters
+for the row down-sampling, which happens in the main R process; the
+point-biserial computations run under \code{parallel = TRUE} use no
+random numbers, so no worker RNG streams are set or needed. Default
 \code{NULL} (never seeds).}
 
 \item{verbose}{Logical. Emit progress messages (row sampling, the

@@ -97,8 +97,8 @@ red$details$dropped
 red$details$pairs
 ```
 
-Pruning uses the `caret::findCorrelation()` heuristic. Within the strongest
-remaining pair, it drops the member with the larger mean absolute correlation
+Pruning is a variant of the `caret::findCorrelation()` heuristic. It takes the
+strongest remaining pair first and drops the member with the larger mean absolute correlation
 to everything else. That choice does not consult the outcome, so it may drop
 the member that predicts better. `fs_boruta()` prunes by importance instead.
 

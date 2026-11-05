@@ -263,6 +263,126 @@ each.
 * `fs_pca()` keeps logical and date columns as labels instead of dropping them
   silently.
 
+## Second adversarial review
+
+A second review, then a sweep of every bug class it found across the whole
+package. Every finding was reproduced in R by one checker and confirmed by a
+second before it was fixed, and each fix has a regression test.
+
+### Behavior changes
+
+* `fs_randomforest()`: `control$strata` must now be the name of a column. It
+  is read from the training rows. A vector was silently misaligned with the
+  training split. An `NA` in the strata column is an error.
+* `fs_recursivefeature()`: `scores` is now each candidate's full-size
+  importance averaged over every resample. caret's `varImp(rfe)` averaged only
+  over the resamples where a variable survived to the optimal size, and left
+  some candidates unscored. It remains in `details$variable_importance`.
+* `fs_recursivefeature()`, `fs_svm(select_method = "rf_rfe")` and
+  `fs_randomforest(control = list(drop_zerovar = FALSE))` remove (or reject)
+  predictors that are constant on the training rows. These hung randomForest
+  indefinitely on classification targets.
+* Encoding: when a dummy name such as `g1` (factor `g`, level `1`) collides
+  with another column or the target, `fs_recursivefeature()`, `fs_svm()`,
+  `fs_lasso()`, `fs_elastic()` and `fs_stepwise()` now stop with an error. The
+  real predictor was otherwise silently replaced by the dummy.
+* `Inf`/`-Inf` in the target or predictors is now a clear error in
+  `fs_elastic()`, `fs_svm()`, `fs_recursivefeature()`, `fs_randomforest()`,
+  `fs_boruta()` and `fs_bayes()`, and `fs_pca()` now errors on it too. These
+  previously failed inside the engine or were silently zeroed.
+* User row indices that featR's own `NA` drop or split would misapply are
+  refused: `index`, `indexOut` and now `indexFinal` (`fs_elastic()`,
+  `fs_recursivefeature()`).
+* Factor levels absent from the training rows are dropped before encoding in
+  `fs_recursivefeature()`, `fs_svm()` and `fs_randomforest()`, so they no
+  longer become all-zero candidate features.
+* `fs_lasso()` reports coefficients below 1e-10 times the largest
+  standardized coefficient as 0, and gives numerically constant columns a
+  coefficient of 0. Round-off residue was being selected.
+* `fs_stepwise()` `scores` are keyed by term, like `selected`. A factor term
+  scores the largest |t| among its coefficients. Per-coefficient values are in
+  `details$coefficient_scores`.
+* `fs_mars()` and `fs_randomforest()` return `NA` for ROC AUC when the
+  held-out rows contain one class (`fs_randomforest()` also warns). They used
+  to fail after training.
+* `fs_svm(select_method = "rf_rfe", n_features = k)` keeps the top `k` by the
+  reported scores. Its fallback screens on permutation importance, not
+  impurity importance, which almost every predictor passed.
+* `fs_bayes(seed = s)` now seeds the MCMC and no longer advances the caller's
+  RNG. Failed `loo()` fits and `loo_compare()` failures are now warnings.
+  `details$n_loo_failed` and `details$n_compared` are added.
+* `fs_chi(parallel = TRUE)` respects a future plan you already set, and
+  restores the previous plan even when worker start-up fails.
+* `summary()` lists selected features first for `fs_mars()` and
+  `fs_correlation(prune = TRUE)`.
+* Stricter, earlier validation:
+  * `rfe_control`/`train_control` methods, `number >= 2`, and complete
+    `functions` sets.
+  * Full `trainControl()` lists in `fs_elastic()`.
+  * `p_adjust_method` in `fs_chi()`.
+  * `control$positive_class` in `fs_randomforest()`.
+  * Engine requirements such as e1071, checked before any fitting.
+* `fs_elastic()` reports the metric caret actually optimized when it fell back
+  from an unknown `metric`.
+
+### Statistical corrections
+
+* `fs_elastic()` selected predictors whose coefficient is zero at the tuned
+  lambda. glmnet coefficients were interpolated between path knots; they are
+  now computed exactly.
+* `fs_mars()` dropped predictors that are in the final earth model when their
+  GCV importance was <= 0. Selection now reads the model's terms.
+* `fs_svm(rf_rfe)` weighted resamples by survivorship when averaging
+  importance.
+* Seeded parallel `fs_recursivefeature()` and `fs_svm()` runs were not
+  reproducible (caret's per-resample seeds); fixed.
+* `fs_chi()` warns when its Monte Carlo p-value floor, `1/(B+1)`, means a
+  feature cannot reach `sig_level` after multiplicity adjustment.
+* Constant-column tests across `fs_elastic()`, `fs_svm()`, `fs_lasso()`,
+  `fs_infogain()`, `fs_pca()`, `fs_svd()` and `fs_supervised()` are relative
+  to the data's scale. Round-off-constant columns are no longer scaled to full
+  weight, and columns in extreme units are no longer mistaken for constants.
+* `fs_randomforest()` regression `R2` is `NA` for a held-out target that is
+  constant up to round-off. It was about -1e29. Its `kappa` is computed
+  directly and is no longer silently `NA` without e1071. A factor target in
+  regression uses its labels, not its level codes.
+* Optimism is documented where a reported quantity reuses the rows that
+  selection saw:
+  * `fs_randomforest()` `details$oob` with a supervised `feature_select`.
+  * `fs_svm()` `model$results` and the chosen size's `size_scores`.
+  * `fs_bayes()` `details$best_elpd`.
+  * The best-of-grid `fs_elastic()` metric.
+
+  The held-out `details` metrics are the honest estimates. Metric definitions
+  (for example caret's `Rsquared` is a squared correlation) are stated.
+
+### Bug fixes
+
+* Names:
+  * Duplicated, empty or `NA` column names are rejected rather than silently
+    dropping or merging a column, across all the wrappers, `fs_boruta()`,
+    `fs_pca()`, `fs_chi()`, `fs_infogain()` and `fs_supervised()`.
+  * `fs_recursivefeature(handle_categorical = TRUE)` and `fs_mars()`
+    classification returned backticked names, or dropped non-syntactic
+    predictors.
+  * Fixed-name internal columns (`.mars_train_idx`, `desired_total`,
+    `residuals`, `fitted_values`, `iso_week_id`, a predictor named `data`) no
+    longer clash with user columns.
+  * Matrix input keeps its own column names.
+* `fs_mars()` classification with `n_cores > 1` failed on the workers. Random
+  search left earth's dependencies attached.
+* Clear featR errors replace cryptic engine errors for:
+  * one-level factor predictors;
+  * ordered, single-class, empty-label and unused-level targets;
+  * saturated stepwise models;
+  * one-row splits;
+  * list columns;
+  * every predictor removed by filtering;
+  * factor predictors with `caret::lmFuncs`.
+* Restoring the foreach backend no longer marks a never-registered session
+  as registered.
+* `fs_lasso()`'s `lambda` argument moved before the housekeeping arguments.
+
 ## Package conventions
 
 * Modeling engines are Suggests; each function checks for what it needs.

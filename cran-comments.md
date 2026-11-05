@@ -43,9 +43,11 @@ checking CRAN incoming feasibility ... NOTE
   naming the packages to install. All examples that use a suggested package are
   wrapped in `\donttest{}` behind `requireNamespace()` guards, and the test
   suite skips those paths when the package is absent.
-* `fs_bayes()` compiles a Stan program per candidate model, so its example uses
-  `\dontrun{}`: compilation alone exceeds a reasonable example budget. The
-  equivalent call is exercised in the test suite under `skip_on_cran()`.
+* `fs_bayes()` compiles a Stan program per candidate model. Its example is in
+  `\donttest{}`, guarded on brms being installed, limited to two
+  single-predictor models, and wrapped in `try()`, so a machine without a
+  working Stan toolchain skips it rather than failing. The equivalent call is
+  exercised in the test suite under `skip_on_cran()`.
 * Parallel execution is opt-in throughout. Every function defaults to a single
   worker, requested worker counts are capped at the detected core count, and no
   example or test uses more than two cores.

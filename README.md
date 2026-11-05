@@ -87,7 +87,7 @@ These reduce dimensions rather than select features, so they return their own de
 | Function | What it does |
 |---|---|
 | `fs_pca()` | PCA (prcomp, or bigstatsr for large data) with loadings, scores, variance explained, optional plot. |
-| `fs_svd()` | Exact or approximate (RSpectra) truncated SVD. Pass `n_singular_values < min(dim(x))` to enable the approximate solver. |
+| `fs_svd()` | Exact or approximate (RSpectra) truncated SVD. The approximate solver is used when `n_singular_values < min(dim(x))` and `min(dim(x))` exceeds `svd_threshold` (default 100). |
 
 ## Notes on honesty
 

@@ -147,9 +147,9 @@ their own decomposition structure.
 * `fs_elastic()` sets `allowParallel` from whether featR created a cluster.
   caret's default of `TRUE` meant a single-worker call would dispatch
   resamples to whatever backend the caller had registered elsewhere.
-* `fs_svm()`'s `min_keep` is a floor rather than a quota: when random-forest
-  RFE fails, the fallback keeps every predictor with positive impurity
-  importance and only drops to `min_keep` top-ranked predictors if fewer
+* In `fs_svm(select_method = "rf_rfe")`, when random-forest RFE fails, the
+  fallback keeps every predictor with positive impurity importance, and only
+  falls back to the top `n_features` (1 when `n_features = NULL`) if fewer
   qualify. It previously returned exactly one predictor.
 
 * `fs_mars()` no longer fails on every call (a data.table was indexed with the
@@ -201,8 +201,11 @@ each.
 * `fs_svm()`'s SVM-RFE subset-size search was optimistically biased. It
   scored the top of a ranking built on all training rows, including each
   fold's held-out rows, and scaled once on all rows. On pure noise it reported
-  about 93% cross-validated accuracy where the truth is 50%. The elimination
-  and the scaling are now re-run inside every fold.
+  cross-validated accuracy above 90% (up to 100% with 200 noise predictors and
+  60 rows) where the truth is 50%. The elimination and the scaling are now
+  re-run inside every fold. The best size's score is still the maximum over
+  the candidate sizes, so it remains mildly optimistic (about 60% on the same
+  noise); use the held-out `details$performance` as the honest estimate.
 * `fs_bayes()` no longer discards sampler and loo warnings. Convergence
   problems and high Pareto *k* values are collected and summarized after the
   search, saying whether the selected model is affected.
@@ -225,8 +228,10 @@ each.
   independent predictors score 0 and are not selected, and bins columns
   containing infinite values instead of failing.
 * `fs_pca()` and `fs_svd()` use a relative zero-variance tolerance. Columns
-  that are constant up to round-off are dropped rather than scaled up to take
-  a full share of a component, and columns in very small units are kept.
+  that are constant up to round-off are no longer scaled up to take a full
+  share of a component: `fs_pca()` drops them with a warning, and `fs_svd()`
+  rejects them with an error naming them when it is asked to scale. Columns
+  in very small units are kept.
   `fs_svd()` falls back to the exact solver when RSpectra fails to converge.
 * `fs_mars()` returns regression predictions and `R2` as plain numbers rather
   than 1 x 1 matrices.

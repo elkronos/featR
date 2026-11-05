@@ -32,7 +32,10 @@ identical(expected, observed)
 ```
 
 Without a `seed`, randomized methods draw from your global stream like any
-other R function, so `set.seed()` before the call also works.
+other R function, so `set.seed()` before the call also works for sequential
+runs. Parallel workers do not draw from your global stream, so pass `seed`
+to make a parallel run reproducible. For `fs_randomforest()`, whose workers
+grow the trees, `seed` is the only way.
 
 ### Which functions use randomness
 

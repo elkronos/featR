@@ -6,8 +6,9 @@ Authors@R:
            role = c("aut", "cre", "cph"))
 Description: Filter, wrapper, and embedded feature-selection methods behind a
     consistent set of functions that share one calling convention and one
-    return type: correlation and chi-squared filters, information gain, LASSO
-    and elastic net, Bayesian model comparison, Boruta, recursive feature
+    return type: univariate threshold filters, correlation and chi-squared
+    filters, information gain, LASSO and elastic net, Bayesian model
+    comparison, Boruta, recursive feature
     elimination, random forest importance, multivariate adaptive regression
     splines, support vector machine recursive feature elimination, stepwise
     selection, and principal component / singular value decomposition

@@ -18,8 +18,9 @@ too, so always validate the chosen set on rows the search never saw.
 ## `fs_recursivefeature()`: recursive feature elimination
 
 `fs_recursivefeature()` wraps `caret::rfe()`. It first splits the data. On the
-training rows it repeatedly fits a model, ranks the predictors, and drops the
-weakest. Resampling chooses the subset size. It then evaluates the result on
+training rows it fits a model, ranks the predictors by its importance, and
+refits on the top-ranked subset of each candidate size. Resampling chooses
+the subset size. It then evaluates the result on
 the held-out rows.
 
 ```{r, eval = has("caret", "randomForest", "e1071")}
@@ -71,7 +72,8 @@ sv$details$performance$overall[c("Accuracy", "Kappa")]
 ```
 
 Without `n_features`, the number of features to keep is chosen by
-cross-validation over a short ladder of sizes (1, 2, 4, 8, ..., p). You must
+cross-validation over a short ladder of sizes (1, 2, 4, 8, ..., p, at most six
+of them). You must
 state `task` explicitly. SVM-RFE needs `kernel = "linear"`, because the
 ranking uses the primal weight vector, which exists only for a linear kernel.
 For other kernels, use `select_method = "rf_rfe"`, which screens with random
@@ -131,7 +133,7 @@ selected(st)
 st$scores
 ```
 
-Pass `k = log(nrow(data))` to use BIC, which selects fewer terms. Stepwise
+Pass `k = log(nrow(data))` to use BIC, which usually selects fewer terms. Stepwise
 search is greedy and unstable: small changes to the data can change the
 answer. The *t* statistics in `scores` and the p-values in
 `details$coefficients` are computed after selection on the same data, so they

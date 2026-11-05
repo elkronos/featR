@@ -75,7 +75,12 @@ ig_bins <- function(x) {
 #' from the finite values alone, and the outermost breaks are widened to
 #' `-Inf` / `Inf`, so `-Inf` and `Inf` fall into the lowest and highest bins.
 #' A column with fewer than two distinct finite values is kept categorical
-#' instead (for example `c(1, 1, Inf)` has two levels).
+#' instead (for example `c(1, 1, Inf)` has two levels). Finite values that
+#' differ only by floating-point round-off (e.g. `0.3` and `0.1 + 0.2`) are
+#' too close for distinct equal-width breaks; coinciding breaks are merged,
+#' and when a single bin is all that is left, or the finite values' range is
+#' within `1024 * .Machine$double.eps` of their magnitude, they are treated
+#' as one value.
 #'
 #' @param x Numeric vector.
 #' @param bins Optional integer; when `NULL`, `ig_bins()` decides.
@@ -86,28 +91,39 @@ ig_discretize <- function(x, bins = NULL) {
   if (length(ux) <= 1L) {
     return(factor(ifelse(is.na(x), NA, ux[1L]), ordered = TRUE))
   }
-  if (all(is.finite(ux))) {
-    if (is.null(bins)) {
-      bins <- ig_bins(x)
-    }
-    bins <- max(2L, as.integer(bins))
-    return(cut(x, breaks = bins, include.lowest = TRUE,
-               ordered_result = TRUE))
-  }
-
-  xf <- x[is.finite(x)]
-  if (length(unique(xf)) < 2L) {
+  all_finite <- all(is.finite(ux))
+  xf <- if (all_finite) x[!is.na(x)] else x[is.finite(x)]
+  if (!all_finite && length(unique(xf)) < 2L) {
     return(factor(x, ordered = TRUE))
   }
   if (is.null(bins)) {
     bins <- ig_bins(xf)
   }
   bins <- max(2L, as.integer(bins))
-  # Same equal-width breaks cut() would build for the finite values ...
+  # Same equal-width breaks cut(breaks = <count>) builds for the finite
+  # values. When those values differ only by round-off (0.3 vs 0.1 + 0.2),
+  # the break spacing is below the floating-point resolution and adjacent
+  # breaks coincide, where cut() stops with "'breaks' are not unique".
+  # Merge coinciding breaks instead; if a single bin is all that is left, the
+  # finite values are constant to machine precision.
   rx <- range(xf)
-  breaks <- seq.int(rx[1L], rx[2L], length.out = bins + 1L)
-  # ... with the outer edges opened up to hold -Inf and Inf.
-  breaks[c(1L, bins + 1L)] <- c(-Inf, Inf)
+  breaks <- unique(seq.int(rx[1L], rx[2L], length.out = bins + 1L))
+  nb <- length(breaks)
+  if (nb < 3L || is_numerically_constant(xf, tol = 1024 * .Machine$double.eps)) {
+    # One distinct finite value up to round-off: one level, plus a level each
+    # for -Inf / Inf if present (as for the exactly-constant case).
+    v <- x
+    v[is.finite(v)] <- xf[1L]
+    return(factor(v, ordered = TRUE))
+  }
+  if (all_finite) {
+    # Widen the outer edges as cut() does, keeping its labels unchanged.
+    dx <- rx[2L] - rx[1L]
+    breaks[c(1L, nb)] <- c(rx[1L] - dx / 1000, rx[2L] + dx / 1000)
+  } else {
+    # Open the outer edges up to hold -Inf and Inf.
+    breaks[c(1L, nb)] <- c(-Inf, Inf)
+  }
   cut(x, breaks = breaks, include.lowest = TRUE, ordered_result = TRUE)
 }
 
@@ -313,13 +329,9 @@ ig_gain_ratio <- function(info_gain, split_entropy) {
 ig_single <- function(df, target, numeric_bins = NULL, remove_na = TRUE) {
   assert_target(df, target)
   # Predictors are looked up by name, so a duplicated name would score its
-  # first copy and silently never look at the second. Reject instead.
-  dupes <- unique(names(df)[duplicated(names(df))])
-  if (length(dupes) > 0L) {
-    stop("Each data.frame must have unique column names; duplicated: ",
-         paste(utils::head(dupes, 5L), collapse = ", "),
-         if (length(dupes) > 5L) ", ..." else "", ".", call. = FALSE)
-  }
+  # first copy and silently never look at the second, and an empty or NA
+  # name looks up NULL and would be scored NA. Reject instead.
+  assert_column_names(df, "fs_infogain")
   # A list column cannot be discretized or tabulated; it failed deep in the
   # entropy code with "unimplemented type 'list' in 'orderVector1'".
   list_cols <- names(df)[vapply(df, is.list, logical(1L))]
@@ -506,7 +518,8 @@ ig_collisions <- function(tab, score_col) {
 #'
 #' @param data A data.frame (a data.table is accepted and is copied, never
 #'   modified in place), or a list of data.frames each containing `target`.
-#'   Column names must be unique within each data.frame.
+#'   Column names must be unique, non-empty and non-NA within each
+#'   data.frame.
 #' @param target Character. Name of the target column.
 #' @param numeric_bins Optional whole number >= 1 (values below 2 are clamped
 #'   to 2) overriding the automatic bin count for numeric predictors and for a

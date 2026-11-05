@@ -103,11 +103,12 @@ pca_compute <- function(data,
   # relative to each column's magnitude: a column that is constant up to
   # floating-point round-off (e.g. 0.3 next to 0.1 + 0.2) has a tiny non-zero
   # sd, and scaling it to unit variance would hand pure round-off noise a full
-  # share of the decomposition.
-  sds <- vapply(Xdt, stats::sd, numeric(1L))
-  sds[!is.finite(sds)] <- 0
-  max_abs <- vapply(Xdt, function(col) max(abs(col)), numeric(1L))
-  keep_cols <- names(sds)[sds > 1000 * .Machine$double.eps * max_abs]
+  # share of the decomposition. The spread is measured on col / max(abs(col)),
+  # so a column in extreme units (|x| beyond ~1e154 or below ~1e-154, where
+  # stats::sd() overflows or underflows) is not mistaken for a constant one.
+  spreads <- lapply(Xdt, safe_col_spread)
+  rel_sds <- vapply(spreads, `[[`, numeric(1L), "rel")
+  keep_cols <- names(Xdt)[rel_sds > 1000 * .Machine$double.eps]
   drop_cols <- setdiff(names(Xdt), keep_cols)
 
   if (length(keep_cols) == 0L) {
@@ -122,6 +123,26 @@ pca_compute <- function(data,
 
   Xdt <- Xdt[, keep_cols, with = FALSE]
   numeric_cols <- keep_cols
+
+  # Columns whose variance is not representable in double precision. With
+  # scaling, standardisation is invariant to rescaling a column, so dividing
+  # such a column by its largest absolute value first gives exactly the same
+  # decomposition; without scaling the covariance itself over- or underflows.
+  extreme <- keep_cols[!vapply(spreads[keep_cols], `[[`, logical(1L),
+                               "representable")]
+  if (length(extreme) > 0L) {
+    if (!scale_data) {
+      stop("The variance of column(s) ",
+           paste(utils::head(extreme, 5L), collapse = ", "),
+           if (length(extreme) > 5L) ", ..." else "",
+           " is not representable in double precision (values too large or ",
+           "too small to square). Rescale them, or use scale_data = TRUE.",
+           call. = FALSE)
+    }
+    for (nm in extreme) {
+      data.table::set(Xdt, j = nm, value = Xdt[[nm]] / spreads[[nm]]$scale)
+    }
+  }
 
   n_rows <- nrow(Xdt)
   n_cols <- ncol(Xdt)
@@ -268,6 +289,16 @@ pca_results <- function(pca_fit,
     data.table::data.table()
   }
 
+  # A label column named like a score column (PC1, PC2, ...) would be
+  # shadowed by the scores in pca_df, and the plot would colour by scores.
+  clash <- intersect(cols_for_labels, colnames(pc_scores))
+  if (length(clash) > 0L) {
+    stop(sprintf(
+      "Label column(s) %s clash with the principal-component score column names; rename them before calling fs_pca().",
+      paste0("'", clash, "'", collapse = ", ")
+    ), call. = FALSE)
+  }
+
   pca_df <- cbind(data.table::as.data.table(pc_scores), label_data)
 
   list(
@@ -402,7 +433,13 @@ pca_plot <- function(pca_result, label_col) {
 #' retained components, warns and skips the plot.
 #'
 #' @param data A data.frame or data.table with at least two rows and at least
-#'   one numeric column.
+#'   one numeric column. Column names must be unique and non-empty. Non-numeric
+#'   (label) columns must not be named like a retained score column (`PC1`,
+#'   `PC2`, ...), which would shadow them in `pca_df`; that is an error.
+#'   Zero-variance detection is relative to each column's magnitude and immune
+#'   to `sd()` over/underflow, so columns in extreme units (beyond about
+#'   `1e154` or below `1e-154`) are kept; with `scale_data = FALSE` their
+#'   variance cannot be represented and they are an error.
 #' @param num_pc Number of principal components to retain: a whole number
 #'   `>= 1`, or `NULL` (the default) to retain `min(2, max_possible)`.
 #'   `max_possible` is `min(nrow - 1, ncol)` of the *usable* numeric data, that
@@ -476,6 +513,9 @@ fs_pca <- function(data,
                    plot = FALSE,
                    verbose = FALSE) {
   assert_data_frame(data, "data")
+  # Columns are selected by name, so a duplicated name would silently drop
+  # the second copy from the decomposition.
+  assert_column_names(data, "fs_pca")
   if (!is.null(num_pc)) {
     num_pc <- assert_count(num_pc, "num_pc", lower = 1L)
   }

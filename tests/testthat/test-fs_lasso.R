@@ -449,3 +449,75 @@ test_that("fs_lasso rejects duplicated column names instead of dropping a copy",
   d$y <- 3 * d[[2]] + rnorm(n)
   expect_error(fs_lasso(d, "y", nfolds = 3), "duplicated: x1")
 })
+
+test_that("a factor dummy colliding with another column name is a clear error", {
+  skip_if_not_installed("glmnet")
+  # factor g, level b -> dummy "gb", next to a numeric column "gb": selection
+  # and scores identify columns by name, so the old code selected "gb" twice
+  # (once on a zero coefficient)
+  i <- seq_len(60)
+  d <- data.frame(g = factor(rep(c("a", "b"), 30)), gb = sin(i), z = cos(i))
+  d$y <- 2 * (d$g == "b") + d$z + 0.1 * sin(7 * i)
+  expect_error(fs_lasso(d, "y", seed = 1), "collide with existing columns: gb")
+  # a dummy named like the target is ambiguous too
+  d2 <- data.frame(a = factor(rep(c("x", "y1"), 30)), b = sin(i), c = cos(i),
+                   ay1 = sin(i / 3))
+  expect_error(fs_lasso(d2, "ay1", seed = 1), "collide")
+})
+
+test_that("a single-level categorical predictor is a clear, named error", {
+  skip_if_not_installed("glmnet")
+  i <- seq_len(30)
+  d <- data.frame(y = sin(i), a = cos(i), b = sin(i / 3), f = "u")
+  expect_error(fs_lasso(d, "y"), "fewer than two observed levels: 'f'")
+  d$f <- factor("u")
+  expect_error(fs_lasso(d, "y"), "fewer than two observed levels: 'f'")
+})
+
+test_that("the redundant first-factor dummy is not selected on a residue", {
+  skip_if_not_installed("glmnet")
+  skip_on_cran()
+  set.seed(2)
+  n <- 150
+  d <- data.frame(g = factor(sample(c("lo", "hi"), n, TRUE)),
+                  x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- 1 * (d$g == "hi") + 0.3 * d$x1 + rnorm(n)
+  res <- fs_lasso(d, "y", seed = 1)
+  cf <- res$details$coefficients
+  # every reported non-zero coefficient is a real one, not ~1e-13 residue
+  nz <- cf$Coefficient[cf$Coefficient != 0]
+  expect_true(all(abs(nz) > 1e-8))
+  expect_setequal(selected(res), cf$Variable[cf$Coefficient != 0])
+  expect_false("glo" %in% selected(res))
+  expect_false(anyDuplicated(selected(res)) > 0L)
+})
+
+test_that("round-off-constant columns are never selected; overflow is an error", {
+  skip_if_not_installed("glmnet")
+  skip_on_cran()
+  set.seed(1)
+  n <- 100
+  d <- data.frame(a = rnorm(n), b = rnorm(n))
+  d$y <- d$a + rnorm(n)
+  # two values that both print as 0.3 (sd ~ 4e-17)
+  d$roff <- ifelse(d$y > 0, 0.1 + 0.2, 0.3)
+  res <- fs_lasso(d, "y", seed = 1)
+  expect_false("roff" %in% selected(res))
+  cf <- res$details$coefficients
+  expect_identical(cf$Coefficient[cf$Variable == "roff"], 0)
+  expect_true(all(abs(cf$Coefficient) < 1e6))
+  # exact constants keep coefficient 0 as before
+  d$k <- 5
+  expect_false("k" %in% selected(fs_lasso(d, "y", seed = 1,
+                                           standardize = FALSE)))
+
+  d2 <- data.frame(a = rnorm(n) * 1e170, b = rnorm(n))
+  d2$y <- d2$a / 1e170 + rnorm(n)
+  expect_error(fs_lasso(d2, "y", seed = 1), "variance overflows.*: a\\.")
+})
+
+test_that("lasso no longer needs a sparse helper or Matrix directly", {
+  expect_false(exists("lasso_sparse", envir = asNamespace("featR"),
+                      inherits = FALSE))
+  expect_identical(names(formals(featR:::lasso_fit))[1L], "x")
+})

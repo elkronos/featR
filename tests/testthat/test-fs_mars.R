@@ -433,3 +433,160 @@ test_that("predictors in the final earth model are selected even with GCV import
   # a used predictor keeps its signed importance; unused ones score 0
   expect_true(all(res$scores[setdiff(names(res$scores), used)] == 0))
 })
+
+# ---- Regression tests for the fs_mars fix round ------------------------------
+
+skip_mars_engine <- function() {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("earth")
+  skip_on_cran()
+}
+
+test_that("a column named .mars_train_idx cannot hijack the train/test split", {
+  skip_mars_engine()
+  set.seed(1)
+  n <- 100
+  d <- data.frame(a = rnorm(n), b = rnorm(n))
+  d$.mars_train_idx <- rep(1:2, n / 2)
+  d$y <- d$a * 2 + rnorm(n)
+  res <- fs_mars(d, "y", degree = 1, nprune = c(3, 5), number = 2,
+                 repeats = 1, seed = 1)
+  tr <- res$details$train_index
+  expect_equal(nrow(res$details$test_data), n - length(tr))
+  expect_length(res$details$predictions, n - length(tr))
+})
+
+test_that("targets containing a backtick or backslash build a valid formula", {
+  skip_mars_engine()
+  set.seed(1)
+  n <- 100
+  for (nm in c("y`z", "y\\z", "y\\n")) {
+    d <- data.frame(a = rnorm(n), b = rnorm(n))
+    d[[nm]] <- d$a * 2 + rnorm(n)
+    res <- fs_mars(d, nm, degree = 1, nprune = c(3, 5), number = 2,
+                   repeats = 1, seed = 1)
+    expect_s3_class(res, "fs_result")
+    expect_true("a" %in% res$selected)
+  }
+})
+
+test_that("a binary test split with one class gives ROC_AUC = NA, not an error", {
+  skip_mars_engine()
+  skip_if_not_installed("pROC")
+  set.seed(1)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n))
+  d$y <- factor(c(rep("a", 56), rep("b", 4)))
+  res <- suppressWarnings(
+    fs_mars(d, "y", seed = 1, number = 2, repeats = 1, nprune = 2:4,
+            degree = 1)
+  )
+  expect_s3_class(res, "fs_result")
+  # the scenario: no 'b' rows held out
+  expect_false("b" %in% as.character(res$details$test_data$y))
+  expect_true(is.na(res$details$metrics$ROC_AUC))
+  expect_null(res$details$metrics$PR_AUC)
+})
+
+test_that("random search on a factor target leaves the search path as it was", {
+  skip_mars_engine()
+  # make sure earth (and so its Depends) are detached first
+  for (p in c("package:earth", "package:plotmo", "package:plotrix",
+              "package:TeachingDemos", "package:Formula")) {
+    if (p %in% search()) {
+      suppressWarnings(try(detach(p, character.only = TRUE), silent = TRUE))
+    }
+  }
+  set.seed(1)
+  d <- data.frame(y = factor(sample(c("a", "b"), 80, TRUE)),
+                  x1 = rnorm(80), x2 = rnorm(80), x3 = rnorm(80))
+  invisible(suppressWarnings(fs_mars(d, "y", search = "random",
+                                     tuneLength = 2, number = 2,
+                                     repeats = 1, seed = 1)))
+  # earth and its Depends (Formula, plotmo, ...) are all detached again
+  expect_false(any(c("package:earth", "package:plotmo", "package:plotrix",
+                     "package:TeachingDemos", "package:Formula") %in% search()))
+})
+
+test_that("classification up-sampling resolves caret without caret attached", {
+  skip_if_not_installed("caret")
+  ctrl <- featR:::mars_train_control(
+    number = 2, repeats = 1, search = "grid",
+    train = data.table::data.table(y = factor(c("a", "b", "a")), x = 1:3),
+    target = "y", seed = NULL
+  )
+  expect_identical(ctrl$sampling$name, "up")
+  expect_true(isTRUE(ctrl$sampling$first))
+  # Evaluate the sampler where only base is visible -- as on a bare PSOCK
+  # worker. caret's built-in "up" calls upSample() by bare name and fails.
+  f <- ctrl$sampling$func
+  environment(f) <- baseenv()
+  x <- data.frame(x = 1:5)
+  y <- factor(c("a", "a", "a", "b", "b"))
+  out <- f(x, y)
+  expect_identical(as.vector(table(out$y)), c(3L, 3L))
+})
+
+test_that("classification checks for e1071 before any training", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("earth")
+  d <- data.frame(y = factor(rep(c("a", "b"), 20)), x1 = rnorm(40))
+  testthat::local_mocked_bindings(
+    fs_require = function(pkgs, purpose = NULL) {
+      if ("e1071" %in% pkgs) stop("Package 'e1071' is required", call. = FALSE)
+      invisible(TRUE)
+    },
+    mars_train_model = function(...) stop("training should not start")
+  )
+  expect_error(fs_mars(d, "y"), "Package 'e1071' is required")
+  # regression does not need it
+  d$y <- rnorm(40)
+  expect_error(fs_mars(d, "y"), "training should not start")
+})
+
+test_that("an empty predictor set after NZV removal is a clear error", {
+  skip_mars_engine()
+  set.seed(1)
+  d <- data.frame(y = rnorm(80), a = 1, b = c(rep(0, 79), 1))
+  expect_error(fs_mars(d, "y", degree = 1, nprune = 5, repeats = 1, seed = 1),
+               "No predictors remain after preprocessing.*remove_nzv = FALSE")
+})
+
+test_that("mars_predictor_scores peels the double quoting of classification fits", {
+  imp <- c("`\\`x 1\\``" = 100, "`\\`b-2\\``" = 51.6, c3 = 0, noise = 8)
+  out <- featR:::mars_predictor_scores(imp, c("x 1", "b-2", "c3", "noise"))
+  expect_identical(out, c(`x 1` = 100, `b-2` = 51.6, c3 = 0, noise = 8))
+})
+
+test_that("non-syntactic predictors are selected for a factor target", {
+  skip_mars_engine()
+  set.seed(1)
+  n <- 120
+  d <- data.frame(`x 1` = rnorm(n), `b-2` = rnorm(n), c3 = rnorm(n),
+                  noise = rnorm(n), check.names = FALSE)
+  d$y <- factor(ifelse(d$`x 1` * 2 + d$`b-2` + rnorm(n) > 0, "pos", "neg"))
+  res <- suppressWarnings(fs_mars(d, "y", seed = 1, degree = 1,
+                                  nprune = c(5, 10), number = 3, repeats = 1))
+  expect_true(all(c("x 1", "b-2") %in% res$selected))
+  expect_gt(res$scores[["x 1"]], 0)
+  expect_gt(res$scores[["b-2"]], 0)
+})
+
+test_that("a caret::varImp() failure warns and falls back to the model's terms", {
+  skip_mars_engine()
+  set.seed(1)
+  n <- 150
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n))
+  d$y <- 3 * d$x1 + 2 * d$x2 + rnorm(n, sd = 0.3)
+  testthat::local_mocked_bindings(
+    varImp = function(...) stop("simulated varImp failure"),
+    .package = "caret"
+  )
+  expect_warning(
+    res <- fs_mars(d, "y", degree = 1, nprune = c(5, 10), number = 2,
+                   repeats = 1, seed = 1),
+    "simulated varImp failure"
+  )
+  expect_null(res$scores)
+  expect_true(all(c("x1", "x2") %in% res$selected))
+})

@@ -536,3 +536,241 @@ test_that("bayes_validate_data guards iso_week_id, duplicates and bad dates (hel
   expect_error(featR:::bayes_add_week_feature(dt, "when", "x"),
                "Date column 'when' could not be converted to Date")
 })
+
+# ---- Regression tests for the fs_bayes review fixes -------------------------
+# These mock brms::brm() / loo::loo() so no Stan program is ever compiled.
+
+collect_warnings <- function(expr) {
+  w <- character(0)
+  value <- withCallingHandlers(expr, warning = function(cond) {
+    w <<- c(w, conditionMessage(cond))
+    invokeRestart("muffleWarning")
+  })
+  list(value = value, warnings = w)
+}
+
+fake_loo <- function(elpd) {
+  structure(
+    list(estimates = matrix(c(elpd, 1), 1L, 2L,
+                            dimnames = list("elpd_loo", c("Estimate", "SE"))),
+         diagnostics = list(pareto_k = rep(0.1, 5L))),
+    class = c("psis_loo", "loo")
+  )
+}
+
+bayes_test_data <- function(n = 20L) {
+  data.frame(y = sin(seq_len(n)), a = cos(seq_len(n)),
+             b = seq_len(n) %% 3)
+}
+
+test_that("a predictor named 'data' works with date_col", {
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+  # REGRESSION: data[!is.na(data[["iso_week_id"]])] resolved `data` to the
+  # predictor column inside data.table's i -> "subscript out of bounds".
+  local_mocked_bindings(
+    bayes_evaluate_combination = function(preds, data, target, brm_family,
+                                          prior, brm_args, verbose = FALSE) {
+      list(preds = preds, model = structure(list(), class = "fake"),
+           loo = NULL, loo_val = -10 - length(preds),
+           formula_str = paste("y ~", paste(preds, collapse = " + ")),
+           fit_warnings = character(0), n_bad_k = 0L)
+    },
+    bayes_add_metrics_to_data = function(data, model, verbose = FALSE) data,
+    .package = "featR"
+  )
+  d <- data.frame(y = sin(1:12), data = cos(1:12),
+                  dt = as.Date("2024-01-01") + 7 * (0:11))
+  res <- fs_bayes(d, "y", "data", date_col = "dt")
+  expect_identical(res$selected, "data")
+  expect_equal(nrow(res$details$data), 12L)
+})
+
+test_that("metric column names are guarded and MAE never partial-matches", {
+  # REGRESSION: a target/predictor named 'residuals' (etc.) was overwritten
+  # in details$data, and `$abs_residuals` partial-matched a user column.
+  d <- data.frame(y = c(1, 2, 3), residuals = c(3, 1, 2))
+  expect_error(featR:::bayes_validate_data(d, "y", "residuals"),
+               "would overwrite the column\\(s\\) used .*: residuals")
+  names(d)[1] <- "fitted_values"
+  names(d)[2] <- "x"
+  expect_error(featR:::bayes_validate_data(d, "fitted_values", "x"),
+               "fitted_values")
+
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+  local_mocked_bindings(
+    bayes_evaluate_combination = function(preds, data, target, brm_family,
+                                          prior, brm_args, verbose = FALSE) {
+      list(preds = preds, model = structure(list(), class = "fake"),
+           loo = NULL, loo_val = -10, formula_str = "y ~ abs_residuals_cm",
+           fit_warnings = character(0), n_bad_k = 0L)
+    },
+    # Families without an Estimate matrix add no metric columns.
+    bayes_add_metrics_to_data = function(data, model, verbose = FALSE) data,
+    .package = "featR"
+  )
+  d2 <- data.frame(y = c(1, 2, 3, 4), abs_residuals_cm = c(100, 200, 300, 400))
+  res <- fs_bayes(d2, "y", "abs_residuals_cm")
+  expect_true(is.na(res$details$mae))
+  expect_true(is.na(res$details$rmse))
+})
+
+test_that("fs_bayes rejects Inf before any model is fitted", {
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+  # REGRESSION: na.omit() kept Inf, so every Stan fit failed behind a
+  # misleading "toolchain" error after the whole search had run.
+  local_mocked_bindings(brm = function(...) stop("brm must not be called"),
+                        .package = "brms")
+  d <- bayes_test_data()
+  d$a[3] <- Inf
+  expect_error(fs_bayes(d, "y", c("a", "b")),
+               "fs_bayes\\(\\) requires finite values; column\\(s\\) with Inf/-Inf: a")
+  d <- bayes_test_data()
+  d$y[5] <- -Inf
+  expect_error(fs_bayes(d, "y", c("a", "b")), "Inf/-Inf: y")
+})
+
+test_that("loo() is pinned to the brms core budget, not getOption('mc.cores')", {
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+  withr::local_options(mc.cores = 4L)
+  seen_cores <- list()
+  local_mocked_bindings(brm = function(...) structure(list(), class = "fake"),
+                        .package = "brms")
+  local_mocked_bindings(
+    loo = function(x, ...) {
+      seen_cores[[length(seen_cores) + 1L]] <<- list(...)$cores
+      fake_loo(-10)
+    },
+    .package = "loo"
+  )
+  out <- featR:::bayes_evaluate_combination(
+    "a", bayes_test_data(), "y", stats::gaussian(), NULL,
+    list(chains = 1L, cores = 1L)
+  )
+  expect_equal(out$loo_val, -10)
+  expect_identical(seen_cores, list(1L))
+})
+
+test_that("fs_bayes(seed=) seeds the samplers and leaves the caller's RNG alone", {
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+  # REGRESSION: brm(seed = NA) made rstan draw a Stan seed from the caller's
+  # global stream once per fit, so seeded calls moved the caller's RNG and
+  # sampled differently every time.
+  seeds <- numeric(0)
+  local_mocked_bindings(
+    brm = function(..., seed = NA) {
+      seeds <<- c(seeds, seed)
+      if (is.na(seed)) invisible(sample.int(10L, 1L)) # rstan's check_seed()
+      stop("stop after recording the seed")
+    },
+    .package = "brms"
+  )
+  run <- function(...) {
+    seeds <<- numeric(0)
+    suppressWarnings(try(fs_bayes(bayes_test_data(), "y", c("a", "b"), ...),
+                         silent = TRUE))
+    seeds
+  }
+  set.seed(99)
+  s0 <- .Random.seed
+  s1 <- run(seed = 1)
+  expect_identical(.Random.seed, s0)
+  s2 <- run(seed = 1)
+  expect_length(s1, 3L)
+  expect_false(anyNA(s1))
+  expect_identical(s1, s2)
+  expect_length(unique(s1), 3L)
+  expect_false(identical(run(seed = 2), s1))
+  # An explicit brm_args$seed still wins, for every model.
+  expect_identical(run(seed = 1, brm_args = list(seed = 7)), rep(7, 3))
+  # No seed: unchanged behaviour (brms default NA).
+  expect_true(all(is.na(run())))
+})
+
+test_that("fitted models whose loo() fails are reported, not dropped silently", {
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+  local_mocked_bindings(
+    brm = function(formula, ...) {
+      structure(list(f = deparse(formula)), class = "fake")
+    },
+    .package = "brms"
+  )
+  local_mocked_bindings(
+    loo = function(x, ...) {
+      if (grepl("a + b", x$f, fixed = TRUE)) stop("loo boom")
+      fake_loo(if (grepl("a", x$f)) -10 else -50)
+    },
+    loo_compare = function(x, ...) stop("compare boom"),
+    .package = "loo"
+  )
+  local_mocked_bindings(
+    bayes_add_metrics_to_data = function(data, model, verbose = FALSE) data,
+    .package = "featR"
+  )
+  out <- collect_warnings(fs_bayes(bayes_test_data(), "y", c("a", "b")))
+  res <- out$value
+  expect_identical(res$selected, "a")
+  expect_identical(res$details$n_loo_failed, 1L)
+  expect_identical(res$details$n_compared, 2L)
+  expect_identical(res$details$n_failed_fits, 0L)
+  expect_true(any(grepl(
+    "1 of 3 fitted model\\(s\\) have no finite elpd_loo because loo\\(\\) failed.*a \\+ b.*loo boom",
+    out$warnings)))
+  # D6: a failing loo_compare() is announced rather than silently turning
+  # rule = "1se" into "best".
+  expect_true(any(grepl("loo_compare\\(\\) failed \\(compare boom\\).*1se",
+                        out$warnings)))
+})
+
+test_that("brm() error messages are quoted in the failure warning and error", {
+  skip_if_not_installed("brms")
+  skip_if_not_installed("loo")
+  skip_on_cran()
+  local_mocked_bindings(
+    brm = function(...) stop("Stan model failed: invalid prior"),
+    .package = "brms"
+  )
+  w <- character(0)
+  err <- tryCatch(
+    withCallingHandlers(
+      fs_bayes(bayes_test_data(), "y", c("a", "b")),
+      warning = function(cond) {
+        w <<- c(w, conditionMessage(cond))
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = function(e) conditionMessage(e)
+  )
+  expect_match(err, "No valid models were fitted")
+  expect_match(err, "invalid prior", fixed = TRUE)
+  expect_true(any(grepl("3 of 3 model fits failed.*First error .*invalid prior",
+                        w)))
+
+  fit <- featR:::bayes_fit_model(bayes_test_data(), "y ~ a", stats::gaussian(),
+                                 NULL, list())
+  expect_null(fit$model)
+  expect_identical(fit$error, "Stan model failed: invalid prior")
+})
+
+test_that("bayes_loo_comparison warns when loo_compare() fails (helper-level)", {
+  skip_if_not_installed("loo")
+  local_mocked_bindings(loo_compare = function(x, ...) stop("compare boom"),
+                        .package = "loo")
+  results <- list(list(loo = fake_loo(-10)), list(loo = fake_loo(-11)))
+  expect_warning(
+    out <- featR:::bayes_loo_comparison(results, 1:2),
+    "loo_compare\\(\\) failed \\(compare boom\\)"
+  )
+  expect_null(out)
+})

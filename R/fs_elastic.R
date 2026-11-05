@@ -107,7 +107,14 @@ elastic_drop_missing <- function(x, y) {
 
 #' Names of zero-variance (constant) columns
 #'
-#' Computed without densifying sparse input.
+#' A column counts as constant when its range is negligible relative to its
+#' magnitude (`is_numerically_constant()` with tolerance `1000 * eps`), so a
+#' column that differs only by floating-point round-off (e.g. `0.1 + 0.2`
+#' versus `0.3`) is caught, while a genuinely varying column on a tiny scale
+#' (sd 1e-5) or with a large offset (a timestamp near 1.7e9) is not. Dense and
+#' sparse input use the same rule; sparse columns are scanned through their
+#' stored values (plus an implicit 0 when the column is not full) without
+#' densifying. Non-finite values are ignored.
 #'
 #' @param x A dense or sparse numeric matrix.
 #' @return Character vector of offending column names (possibly empty).
@@ -116,15 +123,22 @@ elastic_zero_sd_cols <- function(x) {
   if (nrow(x) < 2L) {
     return(character(0L))
   }
+  tol <- 1000 * .Machine$double.eps
   if (inherits(x, "sparseMatrix")) {
     n <- nrow(x)
-    mu <- as.vector(Matrix::colMeans(x))
-    mu2 <- as.vector(Matrix::colMeans(x * x))
-    v <- (mu2 - mu * mu) * n / (n - 1)
-    zero <- !is.na(v) & v <= sqrt(.Machine$double.eps) * pmax(mu2, 1)
+    xc <- methods::as(x, "CsparseMatrix")
+    vals <- if (methods::.hasSlot(xc, "x")) xc@x else rep(1, length(xc@i))
+    p <- xc@p
+    zero <- vapply(seq_len(ncol(xc)), function(j) {
+      nnz <- p[j + 1L] - p[j]
+      v <- if (nnz > 0L) vals[(p[j] + 1L):p[j + 1L]] else numeric(0L)
+      if (nnz < n) v <- c(v, 0)
+      is_numerically_constant(v, tol = tol)
+    }, logical(1L))
   } else {
-    sds <- apply(x, 2L, stats::sd)
-    zero <- !is.na(sds) & sds == 0
+    zero <- vapply(seq_len(ncol(x)), function(j) {
+      is_numerically_constant(x[, j], tol = tol)
+    }, logical(1L))
   }
   nms <- colnames(x)
   if (is.null(nms)) {
@@ -412,6 +426,62 @@ elastic_scores <- function(coefs) {
   stats::setNames(abs(v[keep]), nms[keep])
 }
 
+#' Validate a user-supplied trControl
+#'
+#' Must be NULL or a full `caret::trainControl()` list: a string or a partial
+#' list such as `list(method = "cv")` otherwise fails deep inside caret with
+#' "argument is of length zero".
+#'
+#' @param trControl The `trControl` argument.
+#' @return Invisibly `NULL`.
+#' @noRd
+elastic_check_trcontrol <- function(trControl) {
+  if (is.null(trControl)) {
+    return(invisible(NULL))
+  }
+  core <- c("method", "number", "repeats", "summaryFunction",
+            "selectionFunction", "classProbs", "returnResamp")
+  missing_fields <- if (is.list(trControl)) {
+    core[!core %in% names(trControl) |
+           vapply(core, function(f) is.null(trControl[[f]]), logical(1L))]
+  } else {
+    core
+  }
+  if (length(missing_fields) > 0L) {
+    stop(sprintf(paste0(
+      "'trControl' must be NULL or a list built by caret::trainControl(); ",
+      "missing field(s): %s."), paste(missing_fields, collapse = ", ")),
+      call. = FALSE)
+  }
+  invisible(NULL)
+}
+
+#' Stop on categorical predictors with fewer than two distinct values
+#'
+#' `stats::model.matrix()` otherwise fails with the unhelpful "contrasts can
+#' be applied only to factors with 2 or more levels", without naming the
+#' column.
+#'
+#' @param data A data.frame.
+#' @param predictors Predictor column names.
+#' @return Invisibly `NULL`.
+#' @noRd
+elastic_check_categorical_levels <- function(data, predictors) {
+  bad <- predictors[vapply(predictors, function(nm) {
+    v <- data[[nm]]
+    (is.factor(v) || is.character(v)) &&
+      length(unique(as.character(v[!is.na(v)]))) < 2L
+  }, logical(1L))]
+  if (length(bad) > 0L) {
+    stop(sprintf(paste0(
+      "Categorical predictor(s) with fewer than 2 distinct values: %s%s. ",
+      "Remove them before calling fs_elastic()."),
+      paste0("'", utils::head(bad, 5L), "'", collapse = ", "),
+      if (length(bad) > 5L) ", ..." else ""), call. = FALSE)
+  }
+  invisible(NULL)
+}
+
 #' Elastic Net Feature Selection and Model Training
 #'
 #' Performs feature selection and model training using elastic net
@@ -437,11 +507,20 @@ elastic_scores <- function(coefs) {
 #' name design-matrix columns rather than the original columns. Non-syntactic
 #' names are reported as the caller wrote them, without the backticks
 #' `model.matrix()` adds. `glmnet` needs at least two design-matrix columns,
-#' so a single numeric predictor is an error.
+#' so a single numeric predictor is an error. A factor or character
+#' predictor with fewer than two distinct values is an error naming the
+#' column, and so is a dummy name that collides with another column (factor
+#' `g` with level `b` next to a column called `gb`).
 #'
 #' Rows with a missing response, or a missing value in any predictor, are
-#' dropped before fitting (an error if that leaves nothing), and a constant
-#' predictor column is a hard error rather than a silently degenerate fit. A
+#' dropped before fitting (an error if that leaves nothing). The task is
+#' inferred from the remaining rows: a class that occurred only in dropped
+#' rows is removed with a message, and a class with fewer than two complete
+#' rows is an error. Infinite values (`Inf`/`-Inf`) in the target or any
+#' predictor are an error. A predictor column that is constant, or constant
+#' up to floating-point round-off (range below `1000 * .Machine$double.eps`
+#' times its magnitude), is a hard error rather than a silently degenerate
+#' fit; dense and sparse input use the same rule. A
 #' logical response is converted to a two-level factor with a message; a
 #' numeric response with only two distinct values is still treated as
 #' regression, with a warning telling you to convert it to a factor if you
@@ -492,12 +571,17 @@ elastic_scores <- function(coefs) {
 #'   because it cannot zero a coefficient (see Details).
 #' @param lambda_seq Numeric vector of non-negative lambda values to tune
 #'   over, or `NULL` (default) to use glmnet's own path per alpha.
-#' @param trControl Optional `caret::trainControl()` object. If `NULL`
-#'   (default), 5-fold CV with an NA-safe summary function is used. When
-#'   `use_pca = TRUE`, `pcaComp = nPCs` is injected into its `preProcOptions`.
+#' @param trControl Optional `caret::trainControl()` object (a partial list
+#'   or a string is an error). If `NULL` (default), 5-fold CV with an NA-safe
+#'   summary function is used. When `use_pca = TRUE`, `pcaComp = nPCs` is
+#'   injected into its `preProcOptions`. If rows with missing values are
+#'   dropped, user-supplied `index`, `indexOut` or `indexFinal` are an error,
+#'   because their row numbers would no longer match.
 #' @param metric Optional character. Performance metric to optimize. If `NULL`
 #'   (default), `"RMSE"` is used for regression and `"Accuracy"` for
-#'   classification.
+#'   classification. A name caret does not find in the summary output makes
+#'   caret warn and fall back to its default; `details$metric_name` then
+#'   reports the metric actually used.
 #' @param use_pca Logical. Whether to project predictors onto principal
 #'   components inside each resample. Default `FALSE`.
 #' @param nPCs Integer >= 1. Number of principal components to retain when
@@ -524,7 +608,8 @@ elastic_scores <- function(coefs) {
 #'   \item{details}{List of `coef` (coefficients at the best lambda, intercept
 #'     included: a sparse matrix, or a list of them for multinomial fits),
 #'     `best_alpha` and `best_lambda` (the winning tuning pair), `metric_name`
-#'     (the metric optimized), `metric_value` (its resampled value for that
+#'     (the metric caret actually optimized, which differs from `metric` when
+#'     caret fell back to its default), `metric_value` (its resampled value for that
 #'     pair, `NA` when the metric is absent from caret's results table),
 #'     `use_pca`, and `n_features` (number of columns the model saw, i.e.
 #'     `nPCs` when `use_pca = TRUE`).}
@@ -580,6 +665,7 @@ fs_elastic <- function(data,
   if (!is.null(metric)) {
     assert_string(metric, "metric")
   }
+  elastic_check_trcontrol(trControl)
   assert_flag(use_pca, "use_pca")
   assert_flag(verbose, "verbose")
   if (!is.null(seed)) {
@@ -599,6 +685,11 @@ fs_elastic <- function(data,
                  target), call. = FALSE)
   }
 
+  # anyNA() does not catch Inf: an infinite predictor was silently zeroed out
+  # by glmnet and an infinite target failed with an opaque glmnet error.
+  assert_finite_columns(data, names(data), "fs_elastic")
+  elastic_check_categorical_levels(data, predictor_names)
+
   fs_require(c("caret", "glmnet", "Matrix"), "elastic net feature selection")
   if (n_cores > 1L) {
     fs_require(c("foreach", "doParallel"), "parallel model training")
@@ -616,6 +707,50 @@ fs_elastic <- function(data,
          "cannot fit a single-column x).", call. = FALSE)
   }
 
+  # A dummy named <factor><level> can equal another column's name; the
+  # selection would then report two indistinguishable entries.
+  assert_unique_encoded_names(colnames(x), NULL, "fs_elastic")
+
+  # Incomplete rows are removed BEFORE the task is inferred, so droplevels()
+  # and the class checks see only the rows that are actually fitted (a class
+  # whose rows all had a missing predictor used to survive as an empty level
+  # and crash glmnet).
+  elastic_message("Handling missing values...", verbose)
+  n_rows_in <- nrow(x)
+  y_levels_in <- if (is.factor(y)) {
+    levels(droplevels(y))
+  } else if (is.character(y) || is.logical(y)) {
+    sort(unique(as.character(y[!is.na(y)])))
+  } else {
+    NULL
+  }
+  cleaned <- elastic_drop_missing(x, y)
+  x <- cleaned$x
+  y <- cleaned$y
+  # A user-supplied trControl$index / indexOut / indexFinal numbers the rows
+  # of `data`. Once incomplete rows are dropped those numbers point at
+  # different observations (every row after a dropped one shifts up), so the
+  # resamples (or the final fit) would silently use the wrong rows.
+  if (nrow(x) < n_rows_in && !is.null(trControl) &&
+      (!is.null(trControl$index) || !is.null(trControl$indexOut) ||
+       !is.null(trControl$indexFinal))) {
+    stop(sprintf(paste0(
+      "%d row(s) with missing values were dropped, so the row numbers in ",
+      "'trControl$index'/'trControl$indexOut'/'trControl$indexFinal' no ",
+      "longer refer to the rows they were built for. Remove incomplete rows ",
+      "from 'data' before building the resampling indices."),
+      n_rows_in - nrow(x)),
+      call. = FALSE)
+  }
+  if (!is.null(y_levels_in)) {
+    lost <- setdiff(y_levels_in, unique(as.character(y)))
+    if (length(lost) > 0L) {
+      message(sprintf(
+        "Class(es) %s of '%s' occur only in rows with missing predictor values and were dropped.",
+        paste0("'", lost, "'", collapse = ", "), target))
+    }
+  }
+
   elastic_message("Inferring task type (regression vs classification)...", verbose)
   task_info <- elastic_infer_task(y)
   y <- task_info$y
@@ -623,30 +758,21 @@ fs_elastic <- function(data,
   if (is.null(metric)) {
     metric <- task_info$metric
   }
+  if (identical(task, "classification")) {
+    counts <- table(y)
+    small <- names(counts)[counts < 2L]
+    if (length(small) > 0L) {
+      stop(sprintf(paste0(
+        "Class(es) %s of '%s' have fewer than 2 complete rows; glmnet needs ",
+        "at least 2 observations per class. Drop or merge those classes."),
+        paste0("'", small, "'", collapse = ", "), target), call. = FALSE)
+    }
+  }
 
   elastic_message("Ensuring predictors are in sparse format (if large)...", verbose)
   # caret's preProcess cannot handle sparse input, so the PCA path stays dense.
   if (!use_pca && !inherits(x, "sparseMatrix") && prod(dim(x)) > 5e5) {
     x <- Matrix::Matrix(x, sparse = TRUE)
-  }
-
-  elastic_message("Handling missing values...", verbose)
-  n_rows_in <- nrow(x)
-  cleaned <- elastic_drop_missing(x, y)
-  x <- cleaned$x
-  y <- cleaned$y
-  # A user-supplied trControl$index / indexOut numbers the rows of `data`.
-  # Once incomplete rows are dropped those numbers point at different
-  # observations (every row after a dropped one shifts up), so the resamples
-  # would silently train and test on the wrong rows.
-  if (nrow(x) < n_rows_in && !is.null(trControl) &&
-      (!is.null(trControl$index) || !is.null(trControl$indexOut))) {
-    stop(sprintf(paste0(
-      "%d row(s) with missing values were dropped, so the row numbers in ",
-      "'trControl$index'/'trControl$indexOut' no longer refer to the rows ",
-      "they were built for. Remove incomplete rows from 'data' before ",
-      "building the resampling indices."), n_rows_in - nrow(x)),
-      call. = FALSE)
   }
 
   elastic_check_variance(x, if (use_pca) "PCA with scaling" else "model training")
@@ -697,7 +823,9 @@ fs_elastic <- function(data,
   )
 
   elastic_message("Selecting best model...", verbose)
-  best <- elastic_select_best(fit, metric = metric)
+  # caret falls back (with a warning) to RMSE/Accuracy when `metric` is not
+  # in the summary output; report the metric that was actually optimized.
+  best <- elastic_select_best(fit, metric = fit$metric %||% metric)
   if (isTRUE(best$alpha == 0)) {
     warning("The winning alpha is 0 (pure ridge), which never zeroes a ",
             "coefficient, so every column is reported as selected. Drop 0 ",

@@ -44,7 +44,13 @@ inflate the multiplier for the others. With \code{k} tested and \code{s} skipped
 features, "bonferroni" therefore multiplies by \code{k}, not by \code{k + s}.}
 
 \item{simulation_B}{Whole number >= 100: replicates for the simulation-based
-p-value used when any expected cell count is < 5 (default 2000).}
+p-value used when any expected cell count is < 5 (default 2000). A
+simulated p-value is never below \code{1 / (simulation_B + 1)}, so after a
+multiplicity adjustment it may be unable to reach \code{sig_level} at all
+(with Bonferroni, once the number of tested features reaches
+\code{sig_level * (simulation_B + 1)}, i.e. 101 at the defaults); a warning
+then names the affected features and the \code{simulation_B} that would be
+needed.}
 
 \item{seed}{Optional integer. Seeds the RNG locally (the previous RNG state
 is restored on exit), which makes simulation-based p-values reproducible

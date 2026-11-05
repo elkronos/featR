@@ -31,11 +31,12 @@ exist in \code{data} and suit \code{brm_family} (numeric for \code{stats::gaussi
 0/1 or logical for \code{brms::bernoulli()}).}
 
 \item{predictors}{Character vector. Names of the candidate predictor
-columns; at least one, all present in \code{data}.}
+columns; at least one, without duplicates, all present in \code{data}.}
 
 \item{date_col}{Character or NULL. Name of a date column. When provided, an
 \code{iso_week_id} feature (ISO year * 100 + ISO week) is added to the
-predictors. Note: \code{iso_week_id} enters the models as a continuous
+predictors, so neither the target, a predictor, nor the date column may
+itself be named \code{iso_week_id}. Note: \code{iso_week_id} enters the models as a continuous
 covariate, which is a rough encoding of seasonality; a categorical or
 cyclic encoding is deferred to a future version. Default NULL (no date
 feature; the date column itself is never used as a predictor).}
@@ -97,8 +98,10 @@ An object of class \code{fs_result} with:
 combination models. \code{details$n_features} records how many candidate
 predictors were offered.}
 \item{method}{"bayes".}
-\item{task}{"regression", or "classification" when \code{brm_family} is one of
-the categorical brms families.}
+\item{task}{"classification" when \code{brm_family} is a binary, categorical or
+ordinal family (\code{bernoulli}, \code{binomial}, \code{beta_binomial},
+\code{categorical}, \code{multinomial}, \code{cumulative}, \code{sratio}, \code{cratio},
+\code{acat}), otherwise "regression".}
 \item{model}{The selected \code{brmsfit}.}
 \item{details}{A list with \code{data} (the complete-case modeling data.table:
 \code{target}, \code{predictors}, \code{date_col} and \code{iso_week_id} where applicable,

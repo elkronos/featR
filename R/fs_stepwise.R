@@ -194,7 +194,8 @@ step_abs_t <- function(coefs) {
 #' differing row sets.
 #'
 #' @param data A data.frame (or data.table) with at least two columns: the
-#'   numeric target and at least one candidate predictor. Every column other
+#'   numeric target and at least one candidate predictor, with unique,
+#'   non-empty column names and no infinite values. Every column other
 #'   than `target` is offered to the search.
 #' @param target Single string naming the numeric target column of `data`.
 #'   Unquoted symbols and column indices are not accepted. Non-syntactic names
@@ -261,6 +262,7 @@ fs_stepwise <- function(data,
   direction <- match.arg(direction)
   assert_data_frame(data, "data")
   assert_target(data, target, arg = "target")
+  assert_column_names(data, "fs_stepwise")
   assert_flag(verbose, "verbose")
 
   dep_var <- target
@@ -289,6 +291,18 @@ fs_stepwise <- function(data,
     if (nrow(data) == 0L) {
       stop("No rows remain after removing missing values.", call. = FALSE)
     }
+  }
+  # na.omit() leaves Inf/-Inf in place, which lm() rejects as "NA/NaN/Inf in
+  # 'x'" (or 'y').
+  inf_cols <- names(data)[vapply(data, function(col) {
+    is.numeric(col) && any(is.infinite(col))
+  }, logical(1L))]
+  if (length(inf_cols) > 0L) {
+    stop("Columns contain infinite values (Inf/-Inf): ",
+         paste(utils::head(inf_cols, 5L), collapse = ", "),
+         if (length(inf_cols) > 5L) ", ..." else "",
+         ". Remove or replace them before calling fs_stepwise().",
+         call. = FALSE)
   }
 
   if (verbose) {

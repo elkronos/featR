@@ -320,6 +320,15 @@ ig_single <- function(df, target, numeric_bins = NULL, remove_na = TRUE) {
          paste(utils::head(dupes, 5L), collapse = ", "),
          if (length(dupes) > 5L) ", ..." else "", ".", call. = FALSE)
   }
+  # A list column cannot be discretized or tabulated; it failed deep in the
+  # entropy code with "unimplemented type 'list' in 'orderVector1'".
+  list_cols <- names(df)[vapply(df, is.list, logical(1L))]
+  if (length(list_cols) > 0L) {
+    stop("List columns are not supported: ",
+         paste(utils::head(list_cols, 5L), collapse = ", "),
+         if (length(list_cols) > 5L) ", ..." else "",
+         ". Convert or drop them before calling fs_infogain().", call. = FALSE)
+  }
 
   # Expand date-like predictors, but never touch the target column.
   # Work on a plain data.frame afterwards: only column extraction and base
@@ -511,7 +520,13 @@ ig_collisions <- function(tab, score_col) {
 #'   the ranking reaches it. When `NULL` (default), `selected` instead holds
 #'   every feature whose score is strictly greater than 0. A gain within
 #'   floating-point rounding of zero (as an exactly independent predictor
-#'   produces) is reported as exactly 0, so it is not selected.
+#'   produces) is reported as exactly 0, so it is not selected. That is not a
+#'   noise screen: the sample gain of a predictor unrelated to the target is
+#'   still positive in almost every data set (more so with more bins or
+#'   levels), so under the default essentially every non-constant predictor
+#'   is selected -- all 50 of 50 pure-noise columns in a 200-row example. Use
+#'   `top_n`, or compare against gains computed on a permuted target, to make
+#'   an actual cut.
 #' @param remove_na Logical. If `TRUE` (default), rows with NA in the target
 #'   are removed up front. See Details for its narrow practical effect.
 #' @param verbose Logical. If `TRUE`, report how many features were scored,

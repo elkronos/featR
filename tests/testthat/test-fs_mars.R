@@ -371,3 +371,65 @@ test_that("regression metrics and predictions are plain numerics, not matrices",
   expect_equal(m$R2, stats::cor(res$details$predictions,
                                 res$details$test_data$y)^2)
 })
+
+test_that("fs_mars drops unused target levels and rejects Inf and bad names clearly", {
+  # REGRESSION: an unused factor level in the target was counted as a class
+  # with zero rows ("Each class must have at least two samples"); a single
+  # observed class failed in caret with "dim(X) must have a positive length";
+  # Inf predictors failed as "Model training failed: Stopping"; duplicated
+  # names failed in earth's formula with "duplicated name ... using '.'".
+  skip_if_not_installed("caret")
+  skip_if_not_installed("earth")
+  set.seed(8)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- factor(ifelse(d$x1 + rnorm(n, sd = 0.3) > 0, "yes", "no"),
+                levels = c("no", "yes", "unused"))
+  res <- fs_mars(d, "y", degree = 1, nprune = c(2, 4), number = 2,
+                 repeats = 1, seed = 1)
+  expect_s3_class(res, "fs_result")
+  expect_true("x1" %in% selected(res))
+
+  d1 <- d
+  d1$y <- factor(rep("yes", n), levels = c("no", "yes"))
+  expect_error(fs_mars(d1, "y", degree = 1, nprune = 2, number = 2,
+                       repeats = 1), "at least two classes")
+
+  d2 <- data.frame(x1 = rnorm(n), x2 = rnorm(n), y = rnorm(n))
+  d2$x2[2] <- Inf
+  expect_error(fs_mars(d2, "y", degree = 1, nprune = 2, number = 2,
+                       repeats = 1), "infinite values.*x2")
+
+  names(d2)[2] <- "x1"
+  expect_error(fs_mars(d2, "y", degree = 1, nprune = 2, number = 2,
+                       repeats = 1), "duplicated: x1")
+})
+
+test_that("predictors in the final earth model are selected even with GCV importance <= 0", {
+  # Second-round statistical review: selection used `importance > 0`, but
+  # earth's GCV importance can be negative for a predictor that the final,
+  # pruned model still uses, so such predictors were silently dropped (and
+  # their score floored to 0). With this seed the final model uses v1, v5 and
+  # v8, and v8's GCV importance is negative.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("earth")
+  skip_on_cran()
+  set.seed(5)
+  n <- 80
+  x <- as.data.frame(matrix(rnorm(n * 8), n))
+  names(x) <- paste0("v", 1:8)
+  x$y <- x$v1 + 0.3 * x$v2 + rnorm(n)
+  res <- suppressWarnings(suppressMessages(
+    fs_mars(x, "y", degree = 1, nprune = 8, number = 2, repeats = 1,
+            seed = 5, corr_cut = 0, remove_nzv = FALSE)
+  ))
+  fm <- res$model$finalModel
+  dirs <- fm$dirs[fm$selected.terms, , drop = FALSE]
+  used <- colnames(dirs)[colSums(abs(dirs)) > 0]
+  expect_setequal(res$selected, used)
+  # the scenario this test exists for actually occurs
+  vi <- res$details$varimp$importance
+  expect_true(any(vi[intersect(used, rownames(vi)), "Overall"] <= 0))
+  # a used predictor keeps its signed importance; unused ones score 0
+  expect_true(all(res$scores[setdiff(names(res$scores), used)] == 0))
+})

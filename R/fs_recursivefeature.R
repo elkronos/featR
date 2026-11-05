@@ -38,6 +38,7 @@ rfe_validate_rfe_control <- function(control_params) {
   }
   assert_string(control_params$method, "rfe_control$method")
   assert_count(control_params$number, "rfe_control$number", lower = 1L)
+  rfe_reject_row_indices(control_params, "rfe_control")
 
   if (!is.null(control_params$functions) &&
       !is.list(control_params$functions)) {
@@ -56,6 +57,25 @@ rfe_validate_rfe_control <- function(control_params) {
   invisible(TRUE)
 }
 
+#' Refuse user-supplied resampling row indices
+#'
+#' Resampling runs on the training split, whose rows are drawn inside
+#' `fs_recursivefeature()`. Row numbers built for `data` would therefore point
+#' at different observations of that split, so the resamples would silently
+#' train and test on the wrong rows.
+#' @noRd
+rfe_reject_row_indices <- function(control_params, arg) {
+  given <- intersect(c("index", "indexOut"), names(control_params))
+  if (length(given) > 0L) {
+    stop(sprintf(paste0(
+      "'%s$%s' is not supported: resampling runs on the training split ",
+      "chosen inside fs_recursivefeature(), so row indices built for 'data' ",
+      "would refer to the wrong rows. Use 'method'/'number' instead."),
+      arg, given[1L]), call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
 #' Validate training control parameters
 #'
 #' `caret::trainControl()` returns a plain (unclassed) list, so only lists are
@@ -69,6 +89,7 @@ rfe_validate_train_control <- function(control_params) {
     stop("'train_control' must contain at least 'method'.", call. = FALSE)
   }
   assert_string(control_params$method, "train_control$method")
+  rfe_reject_row_indices(control_params, "train_control")
 
   if (!identical(control_params$method, "none")) {
     if (!("number" %in% names(control_params))) {
@@ -433,8 +454,10 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #' loses rows becomes an error rather than a silently misaligned metric.
 #'
 #' @param data A data.frame or data.table with at least one row and one column,
-#'   holding the target and the candidate predictors (every other column). It
-#'   is converted to a plain data.frame on entry.
+#'   holding the target and the candidate predictors (every other column), with
+#'   unique, non-empty column names and at least two candidate predictors
+#'   (after any one-hot encoding). It is converted to a plain data.frame on
+#'   entry.
 #' @param target Single string naming the target column of `data`; a column
 #'   index is not accepted. A factor, character, or logical target means
 #'   classification (unused factor levels are dropped), anything else
@@ -556,6 +579,7 @@ fs_recursivefeature <- function(data,
   # would otherwise dispatch to NSE-based [.data.table).
   data <- as.data.frame(data)
   assert_target(data, target, "target")
+  assert_column_names(data, "fs_recursivefeature")
   if (!is.null(sizes) &&
       (!is.numeric(sizes) || length(sizes) == 0L || anyNA(sizes) ||
        any(!is.finite(sizes)) || any(sizes != trunc(sizes)))) {
@@ -595,6 +619,14 @@ fs_recursivefeature <- function(data,
     # a class absent from the test rows, inflating the held-out accuracy.
     data[[target]] <- droplevels(as.factor(y_raw))
     y_raw <- data[[target]]
+    # Checked here, not left to caret, whose errors arrive wrapped by foreach
+    # ('task 1 failed - "Need at least two classes ..."', 'column name ""
+    # cannot match any column').
+    if (nlevels(y_raw) < 2L) {
+      stop("A classification target must have at least two observed classes.",
+           call. = FALSE)
+    }
+    assert_class_labels(y_raw, target)
   }
 
   # Seed applies to the split and to RFE resampling; restored on exit.
@@ -647,6 +679,13 @@ fs_recursivefeature <- function(data,
   }
 
   n_features <- length(setdiff(colnames(train_df), target))
+  # Elimination needs something to eliminate between; with a single predictor
+  # caret's rfFuncs also fails mid-resample on a classification target
+  # ('task 1 failed - "argument 1 is not a vector"').
+  if (n_features < 2L) {
+    stop("fs_recursivefeature() needs at least two candidate predictors ",
+         "(after any encoding); 'data' has ", n_features, ".", call. = FALSE)
+  }
 
   # caret's function sets (lmFuncs, caretFuncs, ...) rebuild data frames with
   # check.names = TRUE, so non-syntactic predictor names such as "a b" break
@@ -666,6 +705,14 @@ fs_recursivefeature <- function(data,
     # Teardown is scheduled before registration and restores the caller's
     # previous foreach backend on exit.
     local_parallel_cluster(resolve_cores(2L), seed = seed)
+    # Worker RNG streams alone do not make a seeded run reproducible: foreach
+    # hands resamples to whichever worker is free, so which stream fits which
+    # resample varies from run to run. rfeControl()'s default seeds = NA
+    # disables caret's per-resample seeding; seeds = NULL makes caret draw
+    # them from the (locally seeded) master RNG, after the resampling index.
+    if (!is.null(seed) && !"seeds" %in% names(rfe_control)) {
+      rfe_control["seeds"] <- list(NULL)
+    }
   }
 
   rfe_message("Running recursive feature elimination on the training rows...",

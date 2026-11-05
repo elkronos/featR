@@ -296,3 +296,29 @@ test_that("duplicated column names are rejected, not silently mis-tested", {
   d_chr[] <- lapply(d_chr, as.character)
   expect_error(fs_chi(d_chr, "t"), "unique column names; duplicated: a")
 })
+
+test_that("a simulated p-value that cannot reach significance is flagged", {
+  # REGRESSION: a Monte-Carlo p-value is never below 1 / (simulation_B + 1).
+  # With 121 tested features and Bonferroni the smallest attainable adjusted
+  # p-value was 121 / 2001 = 0.06, so a feature that separates the classes
+  # perfectly (but has a rare level, hence a simulated test) was silently
+  # never selected, whatever its association.
+  set.seed(5)
+  n <- 60
+  y <- factor(rep(c("a", "b"), each = n / 2))
+  sig <- as.character(y)
+  sig[1:2] <- "r"
+  noise <- as.data.frame(lapply(seq_len(120), function(i) {
+    factor(sample(c("u", "v"), n, TRUE))
+  }))
+  names(noise) <- paste0("n", seq_len(120))
+  d <- data.frame(sig = factor(sig), noise, y = y)
+  expect_warning(res <- fs_chi(d, "y", seed = 1),
+                 "cannot reach sig_level.*sig.*simulation_B")
+  expect_false("sig" %in% selected(res))
+  # The remedy the warning names works.
+  res2 <- fs_chi(d, "y", seed = 1, simulation_B = 5000)
+  expect_true("sig" %in% selected(res2))
+  # No warning when the floor is not binding.
+  expect_no_warning(fs_chi(d[c("sig", "n1", "y")], "y", seed = 1))
+})

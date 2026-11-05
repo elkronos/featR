@@ -35,7 +35,13 @@ is a rank cut, not a score floor: a zero-scoring feature is selected if
 the ranking reaches it. When \code{NULL} (default), \code{selected} instead holds
 every feature whose score is strictly greater than 0. A gain within
 floating-point rounding of zero (as an exactly independent predictor
-produces) is reported as exactly 0, so it is not selected.}
+produces) is reported as exactly 0, so it is not selected. That is not a
+noise screen: the sample gain of a predictor unrelated to the target is
+still positive in almost every data set (more so with more bins or
+levels), so under the default essentially every non-constant predictor
+is selected -- all 50 of 50 pure-noise columns in a 200-row example. Use
+\code{top_n}, or compare against gains computed on a permuted target, to make
+an actual cut.}
 
 \item{remove_na}{Logical. If \code{TRUE} (default), rows with NA in the target
 are removed up front. See Details for its narrow practical effect.}

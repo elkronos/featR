@@ -440,3 +440,91 @@ test_that("a single-column design matrix is a clear error", {
   d <- data.frame(x = sin(1:20), y = cos(1:20))
   expect_error(fs_elastic(d, "y"), "at least two design-matrix columns")
 })
+
+test_that("fs_elastic rejects duplicated column names instead of dropping a copy", {
+  # REGRESSION: the second copy of a duplicated name never reached the model,
+  # so a signal carried by it was silently lost (nothing was selected).
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  set.seed(13)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x1 = rnorm(n), x3 = rnorm(n),
+                  check.names = FALSE)
+  d$y <- 3 * d[[2]] + rnorm(n)
+  expect_error(fs_elastic(d, "y"), "duplicated: x1")
+})
+
+test_that("selected features are those non-zero at the chosen lambda, not the next knot", {
+  # REGRESSION: coef() was taken by linear interpolation along the final
+  # model's own lambda path (100 knots), whose knots do not coincide with the
+  # tuned lambda (a 50-value grid). Every predictor that only enters at the
+  # next-smaller knot then got a small interpolated coefficient and was
+  # reported as selected although its coefficient at the chosen lambda is 0.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  set.seed(4)
+  n <- 60
+  p <- 20
+  d <- as.data.frame(matrix(rnorm(n * p), n))
+  d$y <- rnorm(n) + d$V1
+  res <- fs_elastic(d, "y", alpha_seq = c(0.5, 1), seed = 1)
+  fm <- res$model$finalModel
+  x <- as.matrix(d[seq_len(p)])
+  exact <- glmnet::glmnet(
+    x, d$y, alpha = res$details$best_alpha,
+    lambda = unique(c(fm$lambda[fm$lambda > res$details$best_lambda],
+                      res$details$best_lambda))
+  )
+  b <- exact$beta[, ncol(exact$beta)]
+  expect_setequal(selected(res), names(b)[b != 0])
+})
+
+test_that("a tuned lambda one ulp below the path's start selects nothing", {
+  # REGRESSION: with selectionFunction = "oneSE" the null model (the largest
+  # lambda) wins on pure noise, but the tuned value came back one ulp below
+  # the final path's first knot and interpolation produced coefficients of
+  # ~1e-17, which were reported as selected features.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  set.seed(6)
+  n <- 60
+  p <- 20
+  d <- as.data.frame(matrix(rnorm(n * p), n))
+  d$y <- rnorm(n) + d$V1
+  d$V1 <- NULL
+  tc <- caret::trainControl(method = "cv", number = 5,
+                            selectionFunction = "oneSE")
+  res <- suppressWarnings(
+    fs_elastic(d, "y", alpha_seq = c(0.5, 1), seed = 1, trControl = tc)
+  )
+  cf <- as.vector(res$details$coef)[-1L]
+  expect_true(all(cf == 0 | abs(cf) > 1e-8))
+  expect_length(selected(res), 0L)
+})
+
+test_that("user resampling indices are not silently shifted by dropped NA rows", {
+  # Second-round statistical review: trControl$index numbers the rows of
+  # `data`, but incomplete rows were dropped first, so every index after a
+  # dropped row pointed at the next observation and the resamples trained and
+  # tested on the wrong rows without any signal.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  set.seed(17)
+  n <- 60
+  d <- data.frame(a = rnorm(n), b = rnorm(n), c = rnorm(n))
+  d$y <- d$a + rnorm(n)
+  d$b[c(5, 20)] <- NA
+  ctrl <- caret::trainControl(method = "cv",
+                              index = list(F1 = 1:29, F2 = 30:58))
+  expect_error(fs_elastic(d, "y", trControl = ctrl, seed = 1),
+               "no longer refer to the rows")
+  # complete data: the indices are honored as before
+  ok <- suppressWarnings(
+    fs_elastic(d[complete.cases(d), ], "y", trControl = ctrl, seed = 1)
+  )
+  expect_s3_class(ok, "fs_result")
+})

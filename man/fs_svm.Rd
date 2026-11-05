@@ -22,9 +22,11 @@ fs_svm(
 )
 }
 \arguments{
-\item{data}{A data frame containing predictors and the target.}
+\item{data}{A data frame containing predictors and the target, with
+unique, non-empty column names.}
 
-\item{target}{A string naming the target variable.}
+\item{target}{A string naming the target variable. For classification, no
+class label may be the empty string.}
 
 \item{task}{Either \code{"classification"} or \code{"regression"}.
 Required; there is no default, because guessing it from the target is

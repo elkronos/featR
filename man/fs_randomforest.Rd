@@ -16,8 +16,10 @@ fs_randomforest(
 }
 \arguments{
 \item{data}{A data.frame or data.table with at least one row and one column,
-holding the target and the candidate predictors (every other column).
-\code{Date} columns are converted to numeric before modeling.}
+holding the target and the candidate predictors (every other column),
+with unique, non-empty column names and no infinite predictor values.
+\code{Date} columns are converted to numeric before modeling. An ordered
+factor target is modeled as an unordered one.}
 
 \item{target}{Single string naming the target column of \code{data}; a column
 index is not accepted.}
@@ -150,8 +152,12 @@ the full training size when \code{replace = TRUE} and by
 \code{ceiling(0.632 * n)} otherwise.
 \item \code{classwt = NULL} -- class priors for classification, forwarded
 to \code{randomForest} unchanged and unvalidated.
-\item \code{strata = NULL} -- stratification variable for the per-tree
-sampling, forwarded to \code{randomForest} unchanged and unvalidated.
+\item \code{strata = NULL} -- name of a column of \code{data} used as the
+stratification variable for the per-tree sampling (with
+\code{sampsize}). Its values are read from the training rows, so they
+stay aligned with the rows the forest is grown on; a vector is an
+error, because the training rows are chosen inside the function. The
+column is still used as a predictor unless removed.
 \item \code{replace = TRUE} -- sample rows with replacement when growing
 each tree.
 \item \code{preprocess = NULL} -- function \code{dt -> dt}, applied to the
@@ -213,7 +219,9 @@ NAs survive into \code{predict()}, which \code{randomForest} cannot handle.
 \code{details$metrics$auc} is filled in only when the classification target
 has exactly two levels \emph{and} the suggested package 'pROC' is installed;
 it is \code{NA} otherwise, which includes every multi-class fit. Regression
-fits report RMSE, MAE, and R2 instead, and R2 is \code{NA} when the held-out
+fits report RMSE, MAE, and R2 instead. R2 is \code{1 - SSE/SST} on the
+held-out rows (so it can be negative), not the squared correlation that
+\code{\link{fs_mars}} reports, and it is \code{NA} when the held-out
 target has no variance.
 }
 \examples{

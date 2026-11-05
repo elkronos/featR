@@ -87,6 +87,18 @@ pca_compute <- function(data,
          call. = FALSE)
   }
 
+  # complete.cases() keeps Inf/-Inf. Such a column's sd is NaN, so the
+  # zero-variance filter below dropped it with a misleading "zero-variance"
+  # warning: a single infinite entry silently discarded the whole feature.
+  inf_cols <- names(Xdt)[vapply(Xdt, function(col) any(is.infinite(col)),
+                                logical(1L))]
+  if (length(inf_cols) > 0L) {
+    stop("Numeric columns contain infinite values (Inf/-Inf): ",
+         paste(utils::head(inf_cols, 5L), collapse = ", "),
+         if (length(inf_cols) > 5L) ", ..." else "",
+         ". Remove or replace them before calling fs_pca().", call. = FALSE)
+  }
+
   # Remove zero-variance numeric columns (avoids scaling errors). The test is
   # relative to each column's magnitude: a column that is constant up to
   # floating-point round-off (e.g. 0.3 next to 0.1 + 0.2) has a tiny non-zero

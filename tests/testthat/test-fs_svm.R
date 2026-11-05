@@ -724,3 +724,80 @@ test_that("fs_svm rejects a fractional seed before any work", {
     "'seed' must be a whole number"
   )
 })
+
+test_that("encoded names keep literal backticks and backslashes (svm_encode)", {
+  # REGRESSION: svm_encode() deleted every backtick from dummyVars()'s names,
+  # but backtick() escapes a literal backtick as \`, so column "a`b" was
+  # reported as "a\b" -- the name of a different column.
+  d <- data.frame(y = rnorm(20), `a\`b` = rnorm(20), `a\\b` = rnorm(20),
+                  `\`ab` = rnorm(20), check.names = FALSE)
+  dv <- svm_dummy_encoder(d, "y")
+  enc <- svm_encode(dv, d)
+  expect_identical(names(enc), c("a`b", "a\\b", "`ab"))
+})
+
+test_that("fs_svm rejects empty class labels and empty column names clearly", {
+  # REGRESSION: an empty-string class failed inside caret with "subscript out
+  # of bounds", and an empty column name with "undefined columns selected".
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  set.seed(41)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- factor(ifelse(d$x1 > 0, "", "b"))
+  expect_error(fs_svm(d, "y", task = "classification", nfolds = 2),
+               "empty-string class label")
+  d$y <- factor(ifelse(d$x1 > 0, "a", "b"))
+  names(d)[2] <- ""
+  expect_error(fs_svm(d, "y", task = "classification", nfolds = 2),
+               "empty or NA column names")
+})
+
+test_that("rf_rfe scores average each resample once, not once per surviving subset size", {
+  # Second-round statistical review: caret::rfe() records a variable's
+  # importance once for every subset size it survived to. Averaging all rows
+  # weighted each resample by how far the variable survived there, i.e. by
+  # how important it looked, inflating marginal predictors. "a" is worth 10
+  # in Fold1 (survives sizes 1-3) and 0 in Fold2 (only the full size): its
+  # mean importance across the two resamples is 5, not (3 * 10 + 0) / 4.
+  rfe_obj <- list(variables = data.frame(
+    Overall   = c(10, 10, 10, 1, 1, 0, 4),
+    var       = c("a", "a", "a", "b", "b", "a", "b"),
+    Variables = c(1L, 2L, 3L, 2L, 3L, 3L, 3L),
+    Resample  = c("Fold1", "Fold1", "Fold1", "Fold1", "Fold1", "Fold2", "Fold2"),
+    stringsAsFactors = FALSE
+  ))
+  out <- featR:::svm_rf_importance(rfe_obj, c("a", "b", "z"))
+  expect_equal(out[["a"]], 5)
+  expect_equal(out[["b"]], 2.5)
+  expect_true(is.na(out[["z"]]))
+})
+
+test_that("seeded runs with n_cores > 1 are reproducible", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("doParallel")
+  skip_if_not_installed("foreach")
+  skip_on_cran()
+  skip_if(parallel::detectCores() < 2L, "needs 2 cores")
+
+  # REGRESSION: caret's default seeds = NA left each resample on whatever
+  # worker stream it landed on (foreach load-balances), so the rf_rfe
+  # importances and the tuning results changed between identical seeded runs.
+  set.seed(1)
+  n <- 150
+  d <- data.frame(matrix(rnorm(n * 6), n))
+  d$y <- factor(ifelse(d$X1 + 0.5 * d$X2 + rnorm(n) > 0, "a", "b"))
+  run <- function() {
+    r <- fs_svm(d, "y", "classification", feature_select = TRUE,
+                select_method = "rf_rfe", seed = 7, n_cores = 2,
+                tune_grid = data.frame(C = c(0.1, 1)))
+    list(r$scores, r$model$results)
+  }
+  first <- run()
+  for (i in 1:3) {
+    expect_identical(run(), first)
+  }
+})

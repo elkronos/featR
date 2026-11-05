@@ -291,3 +291,22 @@ test_that("a user-supplied scope replaces the default instead of colliding", {
                      scope = list(lower = ~ noise1, upper = ~ x1 + x2 + noise1 + noise2))
   expect_true(all(c("x1", "x2", "noise1") %in% selected(res)))
 })
+
+test_that("fs_stepwise rejects duplicated column names clearly", {
+  # REGRESSION: failed inside terms.formula() with "duplicated name 'x1' in
+  # data frame using '.'".
+  set.seed(14)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x1 = rnorm(n), y = rnorm(n),
+                  check.names = FALSE)
+  expect_error(fs_stepwise(d, "y"), "duplicated: x1")
+})
+
+test_that("fs_stepwise reports infinite values by column", {
+  # REGRESSION: Inf survived na.omit() and lm() failed with "NA/NaN/Inf in 'x'".
+  set.seed(15)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), y = rnorm(n))
+  d$x2[3] <- Inf
+  expect_error(fs_stepwise(d, "y"), "infinite values.*x2")
+})

@@ -13,16 +13,16 @@ fs_lasso(
   custom_folds = NULL,
   impute = c("none", "mean"),
   return_model = FALSE,
+  lambda = c("min", "1se"),
   seed = NULL,
   verbose = FALSE,
   parallel = FALSE,
-  n_cores = 2L,
-  lambda = c("min", "1se")
+  n_cores = 2L
 )
 }
 \arguments{
 \item{data}{A data.frame or data.table holding the target and the candidate
-predictors. A numeric matrix with column names is also accepted;
+predictors, with unique, non-empty column names. A numeric matrix with column names is also accepted;
 non-numeric matrices are not (supply a data.frame so factors and
 characters can be expanded by \code{model.matrix()}).}
 
@@ -52,6 +52,9 @@ computed on the full data and warns about the leakage.}
 \item{return_model}{Logical; keep the fitted cv.glmnet object in the result
 (and pass \code{keep = TRUE} to \code{cv.glmnet()}); default FALSE.}
 
+\item{lambda}{Which cross-validated penalty to select at: \code{"min"}
+(default, \code{lambda.min}) or \code{"1se"} (\code{lambda.1se}, sparser). See Details.}
+
 \item{seed}{Optional whole number for reproducibility, applied locally and
 restored on exit; default NULL (never seeds by default).}
 
@@ -66,9 +69,6 @@ backend status and how many design-matrix columns were selected.}
 \item{n_cores}{Integer >= 1; number of workers used only when
 \code{parallel = TRUE}. Default 2. Values above the detected core count are
 capped.}
-
-\item{lambda}{Which cross-validated penalty to select at: \code{"min"}
-(default, \code{lambda.min}) or \code{"1se"} (\code{lambda.1se}, sparser). See Details.}
 }
 \value{
 An \code{fs_result} object with:

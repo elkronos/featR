@@ -181,8 +181,11 @@ unbacktick_names <- function(x) {
     if (length(m) == 0L) {
       return(nm)
     }
-    inner <- substr(m, 2L, nchar(m) - 1L)
-    inner <- gsub("\\\\(.)", "\\1", inner, perl = TRUE)
+    # Let the parser undo deparse()'s escaping, so "\\n" becomes a newline
+    # again rather than a literal "n".
+    inner <- tryCatch(as.character(str2lang(m)), error = function(e) {
+      gsub("\\\\(.)", "\\1", substr(m, 2L, nchar(m) - 1L), perl = TRUE)
+    })
     paste0(inner, substr(nm, nchar(m) + 1L, nchar(nm)))
   }, character(1L), USE.NAMES = FALSE)
   x
@@ -401,7 +404,7 @@ lasso_importance <- function(coefs) {
 #' that this leaks. Columns that are entirely NA are an error either way.
 #'
 #' @param data A data.frame or data.table holding the target and the candidate
-#'   predictors. A numeric matrix with column names is also accepted;
+#'   predictors, with unique, non-empty column names. A numeric matrix with column names is also accepted;
 #'   non-numeric matrices are not (supply a data.frame so factors and
 #'   characters can be expanded by `model.matrix()`).
 #' @param target Single string naming the outcome column in `data`. It must be
@@ -477,9 +480,9 @@ lasso_importance <- function(coefs) {
 #' @export
 fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
                      custom_folds = NULL, impute = c("none", "mean"),
-                     return_model = FALSE, seed = NULL, verbose = FALSE,
-                     parallel = FALSE, n_cores = 2L,
-                     lambda = c("min", "1se")) {
+                     return_model = FALSE, lambda = c("min", "1se"),
+                     seed = NULL, verbose = FALSE,
+                     parallel = FALSE, n_cores = 2L) {
 
   mc <- match.call()
 
@@ -493,6 +496,9 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
   data <- as.data.frame(data)
 
   assert_target(data, target)
+  # model.frame(~ .) keeps only one copy of a duplicated name, so the other
+  # copy silently vanished from the design matrix and from the scores.
+  assert_column_names(data, "fs_lasso")
   impute <- match.arg(impute)
   lambda <- match.arg(lambda)
   lambda_s <- paste0("lambda.", lambda)
@@ -521,8 +527,14 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
     stop("Internal error: prepared predictor matrix and the target have different numbers of rows.")
   }
 
-  # Convert to sparse for glmnet
-  x_sparse <- lasso_sparse(x_dense)
+  # Fit on the dense matrix. glmnet's sparse-input standardization computes
+  # the variance as E[x^2] - E[x]^2, which for a nonzero constant column (or
+  # one in units small enough that x^2 underflows) is rounding noise or 0:
+  # the lambda path becomes NaN and cv.glmnet() fails with "NA subscripts in
+  # x[i,j]" or "need at least two non-NA values to interpolate". The dense
+  # path handles such columns (their coefficient is simply 0), and x_dense is
+  # already in memory, so a sparse copy saved nothing.
+  x_sparse <- x_dense
 
   # Fit model
   lasso_model <- lasso_fit(x_sparse, y, alpha, nfolds, standardize,

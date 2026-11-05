@@ -23,8 +23,10 @@ fs_mars(
 )
 }
 \arguments{
-\item{data}{data.frame or data.table with predictors and the target. A
-data.table is copied, never modified in place.}
+\item{data}{data.frame or data.table with predictors and the target, with
+unique, non-empty column names and no infinite values. A data.table is
+copied, never modified in place. Unused levels of a factor target are
+dropped.}
 
 \item{target}{Character. Name of the target column in \code{data}. A factor or
 character target is treated as classification, a numeric one as
@@ -73,11 +75,12 @@ capped; requires 'doParallel' and 'foreach' when greater than 1.}
 An object of class \code{fs_result} with:
 \describe{
 \item{selected}{Character vector of the predictors earth retained
-(strictly positive \code{caret::varImp()} importance), ordered by
+(those appearing in a term of the final earth model), ordered by
 decreasing importance. Empty when no importance is available.}
 \item{scores}{Named numeric vector of unscaled variable importance, one
-entry per candidate predictor that entered training, floored at 0
-(predictors earth pruned away score 0). \code{NULL} when caret cannot
+entry per candidate predictor that entered training. Predictors
+earth pruned away score 0; a predictor in the final model keeps its
+importance even when that is zero or negative. \code{NULL} when caret cannot
 compute variable importance for the fitted model, in which case
 \code{selected} is empty.}
 \item{method}{"mars".}
@@ -122,9 +125,11 @@ rows only and dropped from both halves; then \code{caret::train()} fits earth
 under repeated cross-validation with \code{preProcess = c("center", "scale")}.
 
 Selection is read off the fitted model: \code{caret::varImp(model, scale = FALSE)}
-is computed on the caret \code{train} object and every predictor with a strictly
-positive importance is reported in \code{selected}. Predictors earth pruned away
-score 0 and are not selected. caret expands factors into dummy columns
+is computed on the caret \code{train} object, and every predictor that appears in
+a term of the final (pruned) earth model is reported in \code{selected}.
+Predictors earth pruned away score 0 and are not selected. earth's GCV
+importance can be zero or negative for a predictor the final model still
+uses; such a predictor is selected and keeps its signed importance. caret expands factors into dummy columns
 before fitting, so each importance row is attributed back to the source
 predictor by name (the longest candidate name it starts with) and a
 predictor keeps the largest importance of its encoded columns; that

@@ -349,17 +349,21 @@ mars_importance_vector <- function(vi) {
 #' varImp row can be named "grpb" for the predictor "grp". Every importance
 #' row is attributed to the longest candidate predictor name it starts with,
 #' and a predictor keeps the largest importance of its encoded columns.
-#' Predictors earth never used keep their 0; scores are floored at 0, so a
-#' negative importance also reads as "not retained".
+#' Predictors earth never used keep their 0. With `floor = TRUE` scores are
+#' floored at 0; with `floor = FALSE` a predictor whose encoded columns all
+#' have a negative importance keeps the largest (negative) value.
 #'
 #' @param importance Named numeric vector from `mars_importance_vector()`.
 #' @param predictors Character vector of candidate predictor names.
+#' @param floor Single flag; floor the scores at 0 (default `TRUE`).
 #' @return A named numeric vector, one entry per candidate predictor.
 #' @noRd
-mars_predictor_scores <- function(importance, predictors) {
-  scores <- stats::setNames(rep(0, length(predictors)), predictors)
+mars_predictor_scores <- function(importance, predictors, floor = TRUE) {
+  scores <- stats::setNames(rep(if (floor) 0 else -Inf, length(predictors)),
+                            predictors)
   if (is.null(importance) || length(importance) == 0L ||
       length(predictors) == 0L) {
+    scores[] <- 0
     return(scores)
   }
   # caret's formula interface backticks non-syntactic names ("`my var`",
@@ -378,7 +382,35 @@ mars_predictor_scores <- function(importance, predictors) {
     if (is.na(hit)) next
     scores[[hit]] <- max(scores[[hit]], val)
   }
+  scores[!is.finite(scores)] <- 0
   scores
+}
+
+#' Candidate predictors used by the final earth model
+#'
+#' Reads the terms earth kept after pruning (`selected.terms`) and the
+#' design-matrix columns those terms involve (non-zero entries of `dirs`), and
+#' attributes each column to its candidate predictor the same way
+#' `mars_predictor_scores()` does.
+#'
+#' @param model A fitted `caret::train` object wrapping an earth model.
+#' @param predictors Character vector of candidate predictor names.
+#' @return A named logical vector over `predictors`, or NULL when the final
+#'   model does not expose earth's term structure.
+#' @noRd
+mars_used_predictors <- function(model, predictors) {
+  fm <- tryCatch(model$finalModel, error = function(e) NULL)
+  dirs <- fm$dirs
+  terms <- fm$selected.terms
+  if (!is.matrix(dirs) || is.null(colnames(dirs)) || is.null(terms) ||
+      length(predictors) == 0L) {
+    return(NULL)
+  }
+  d <- dirs[terms, , drop = FALSE]
+  cols <- colnames(dirs)[colSums(abs(d)) > 0]
+  hits <- mars_predictor_scores(stats::setNames(rep(1, length(cols)), cols),
+                                predictors)
+  hits > 0
 }
 
 #' Evaluate a fitted model on the test set
@@ -514,9 +546,11 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' under repeated cross-validation with `preProcess = c("center", "scale")`.
 #'
 #' Selection is read off the fitted model: `caret::varImp(model, scale = FALSE)`
-#' is computed on the caret `train` object and every predictor with a strictly
-#' positive importance is reported in `selected`. Predictors earth pruned away
-#' score 0 and are not selected. caret expands factors into dummy columns
+#' is computed on the caret `train` object, and every predictor that appears in
+#' a term of the final (pruned) earth model is reported in `selected`.
+#' Predictors earth pruned away score 0 and are not selected. earth's GCV
+#' importance can be zero or negative for a predictor the final model still
+#' uses; such a predictor is selected and keeps its signed importance. caret expands factors into dummy columns
 #' before fitting, so each importance row is attributed back to the source
 #' predictor by name (the longest candidate name it starts with) and a
 #' predictor keeps the largest importance of its encoded columns; that
@@ -546,8 +580,10 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' `search = "random"` ignores that grid and evaluates `tuneLength` random
 #' hyperparameter combinations instead.
 #'
-#' @param data data.frame or data.table with predictors and the target. A
-#'   data.table is copied, never modified in place.
+#' @param data data.frame or data.table with predictors and the target, with
+#'   unique, non-empty column names and no infinite values. A data.table is
+#'   copied, never modified in place. Unused levels of a factor target are
+#'   dropped.
 #' @param target Character. Name of the target column in `data`. A factor or
 #'   character target is treated as classification, a numeric one as
 #'   regression.
@@ -581,11 +617,12 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' @return An object of class `fs_result` with:
 #' \describe{
 #'   \item{selected}{Character vector of the predictors earth retained
-#'         (strictly positive `caret::varImp()` importance), ordered by
+#'         (those appearing in a term of the final earth model), ordered by
 #'         decreasing importance. Empty when no importance is available.}
 #'   \item{scores}{Named numeric vector of unscaled variable importance, one
-#'         entry per candidate predictor that entered training, floored at 0
-#'         (predictors earth pruned away score 0). `NULL` when caret cannot
+#'         entry per candidate predictor that entered training. Predictors
+#'         earth pruned away score 0; a predictor in the final model keeps its
+#'         importance even when that is zero or negative. `NULL` when caret cannot
 #'         compute variable importance for the fitted model, in which case
 #'         `selected` is empty.}
 #'   \item{method}{"mars".}
@@ -646,6 +683,7 @@ fs_mars <- function(data,
   # ---- Input validation -----------------------------------------------------
   assert_data_frame(data)
   assert_target(data, target, "target")
+  assert_column_names(data, "fs_mars")
   assert_number(train_ratio, "train_ratio")
   if (train_ratio <= 0 || train_ratio >= 1) {
     stop("'train_ratio' must be strictly between 0 and 1.")
@@ -697,6 +735,32 @@ fs_mars <- function(data,
 
   # Optional down-sampling BEFORE class-balance checks and splitting
   data <- mars_sample_rows(data, sample_size, seed, verbose = verbose)
+
+  # Classes absent from the remaining rows (unused factor levels, or levels
+  # emptied by the NA removal or sampling above) are not classes to model:
+  # left in, they failed the class-balance check with a misleading "Each class
+  # must have at least two samples", and a single remaining class failed
+  # inside caret with "dim(X) must have a positive length".
+  if (is.factor(data[[target]])) {
+    data.table::set(data, j = target, value = droplevels(data[[target]]))
+    if (nlevels(data[[target]]) < 2L) {
+      stop("A classification target must have at least two classes with ",
+           "observations (after removing rows with missing values).",
+           call. = FALSE)
+    }
+  }
+
+  # na.omit() above removes NA/NaN but not Inf, which earth cannot fit
+  # (caret reported only "Model training failed: Stopping").
+  inf_cols <- names(data)[vapply(data, function(col) {
+    is.numeric(col) && any(is.infinite(col))
+  }, logical(1L))]
+  if (length(inf_cols) > 0L) {
+    stop("Columns contain infinite values (Inf/-Inf): ",
+         paste(utils::head(inf_cols, 5L), collapse = ", "),
+         if (length(inf_cols) > 5L) ", ..." else "",
+         ". Remove or replace them before calling fs_mars().", call. = FALSE)
+  }
 
   # Check global class balance after sampling
   mars_check_class_balance(data, target, warn = verbose)
@@ -784,7 +848,20 @@ fs_mars <- function(data,
     mars_message("Variable importance is unavailable for this model; no features reported as selected.", verbose)
   } else {
     scores <- mars_predictor_scores(imp_vec, candidate_predictors)
-    keep <- scores > 0
+    # Select what the final earth model actually uses. earth's GCV importance
+    # can be zero or negative for a predictor that sits in the final model
+    # (adding its terms raised the GCV at some pruning step), so "importance
+    # > 0" silently dropped predictors the model retained. Such a predictor
+    # keeps its signed importance; predictors outside the model score 0.
+    used <- mars_used_predictors(model, candidate_predictors)
+    if (is.null(used)) {
+      keep <- scores > 0
+    } else {
+      raw <- mars_predictor_scores(imp_vec, candidate_predictors,
+                                   floor = FALSE)
+      scores <- ifelse(used, raw, 0)
+      keep <- used
+    }
     selected_features <- names(scores)[keep]
     if (length(selected_features) > 1L) {
       v <- unname(scores[keep])

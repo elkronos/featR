@@ -441,3 +441,13 @@ test_that("the bigstatsr branch reports variance against TOTAL variance", {
   # of the same total, not of whatever was retained.
   expect_equal(ve4[1:2], ve2, tolerance = 1e-6)
 })
+
+test_that("fs_pca reports infinite values instead of dropping the column", {
+  # REGRESSION: complete.cases() keeps Inf, the column's sd became NaN, and
+  # the column was removed with the warning "Removed 1 zero-variance
+  # column(s)" -- one infinite entry silently discarded a whole feature.
+  set.seed(21)
+  d <- data.frame(a = rnorm(20), b = rnorm(20), c = rnorm(20))
+  d$c[4] <- Inf
+  expect_error(fs_pca(d), "infinite values.*c")
+})

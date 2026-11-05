@@ -508,3 +508,80 @@ test_that("parallel = TRUE restores the previously registered backend", {
   )
   expect_identical(res$selected, seq_res$selected)
 })
+
+test_that("degenerate targets, names and single predictors fail clearly", {
+  # REGRESSION: these surfaced as caret errors wrapped by foreach:
+  # 'task 1 failed - "Need at least two classes to do classification."',
+  # 'column name "" cannot match any column' (an empty-string class),
+  # 'task 1 failed - "argument 1 is not a vector"' (one predictor,
+  # classification), and "undefined columns selected" (an empty name).
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  set.seed(31)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  ctl <- list(method = "cv", number = 2)
+
+  d$y <- factor(rep("a", n), levels = c("a", "b"))
+  expect_error(fs_recursivefeature(d, "y", rfe_control = ctl),
+               "at least two observed classes")
+
+  d$y <- factor(ifelse(d$x1 > 0, "", "b"))
+  expect_error(fs_recursivefeature(d, "y", rfe_control = ctl),
+               "empty-string class label")
+
+  d$y <- factor(ifelse(d$x1 > 0, "a", "b"))
+  expect_error(fs_recursivefeature(d[c("x1", "y")], "y", rfe_control = ctl),
+               "at least two candidate predictors")
+
+  names(d)[2] <- ""
+  expect_error(fs_recursivefeature(d, "y", rfe_control = ctl),
+               "empty or NA column names")
+})
+
+test_that("seeded parallel runs are reproducible", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("foreach")
+  skip_if_not_installed("doParallel")
+  skip_on_cran()
+  cores <- tryCatch(parallel::detectCores(), error = function(e) NA_integer_)
+  skip_if(is.na(cores) || cores < 2L, "fewer than two cores available")
+
+  # REGRESSION: only the worker RNG streams were seeded, but foreach hands
+  # resamples to whichever worker is free, so the stream used for a given
+  # resample (and hence its random forest) changed from run to run; about
+  # half of all repeat runs disagreed.
+  set.seed(1)
+  n <- 120
+  d <- data.frame(matrix(rnorm(n * 6), n))
+  d$y <- d$X1 + 0.5 * d$X2 + rnorm(n)
+  run <- function() {
+    fs_recursivefeature(d, "y", seed = 7, parallel = TRUE,
+                        rfe_control = list(method = "cv", number = 6),
+                        verbose = FALSE)$details$resampling_results
+  }
+  first <- run()
+  for (i in 1:4) {
+    expect_identical(run(), first)
+  }
+})
+
+test_that("row indices in rfe_control are refused rather than misapplied", {
+  # Second-round statistical review: rfe() runs on the training split drawn
+  # inside fs_recursivefeature(), so rfe_control$index (row numbers of
+  # `data`) pointed at different observations of that split and the
+  # resamples silently trained and tested on the wrong rows.
+  skip_if_not_installed("caret")
+  set.seed(3)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- d$x1 + rnorm(n)
+  ctl <- list(method = "cv", number = 2, functions = caret::lmFuncs,
+              index = list(F1 = 1:25, F2 = 26:45))
+  expect_error(fs_recursivefeature(d, "y", rfe_control = ctl, seed = 1),
+               "rfe_control\\$index")
+  expect_error(featR:::rfe_validate_train_control(
+    list(method = "cv", number = 2, indexOut = list(1:3))
+  ), "train_control\\$indexOut")
+})

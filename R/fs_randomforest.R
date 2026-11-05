@@ -141,8 +141,10 @@ rf_pool_importance_sd <- function(forests) {
 #' credit between correlated predictors, so treat close scores as ties.
 #'
 #' @param data A data.frame or data.table with at least one row and one column,
-#'   holding the target and the candidate predictors (every other column).
-#'   `Date` columns are converted to numeric before modeling.
+#'   holding the target and the candidate predictors (every other column),
+#'   with unique, non-empty column names and no infinite predictor values.
+#'   `Date` columns are converted to numeric before modeling. An ordered
+#'   factor target is modeled as an unordered one.
 #' @param target Single string naming the target column of `data`; a column
 #'   index is not accepted.
 #' @param task One of `"classification"` (the default) or `"regression"`,
@@ -212,8 +214,12 @@ rf_pool_importance_sd <- function(forests) {
 #'     \code{ceiling(0.632 * n)} otherwise.
 #'   \item \code{classwt = NULL} -- class priors for classification, forwarded
 #'     to \code{randomForest} unchanged and unvalidated.
-#'   \item \code{strata = NULL} -- stratification variable for the per-tree
-#'     sampling, forwarded to \code{randomForest} unchanged and unvalidated.
+#'   \item \code{strata = NULL} -- name of a column of `data` used as the
+#'     stratification variable for the per-tree sampling (with
+#'     \code{sampsize}). Its values are read from the training rows, so they
+#'     stay aligned with the rows the forest is grown on; a vector is an
+#'     error, because the training rows are chosen inside the function. The
+#'     column is still used as a predictor unless removed.
 #'   \item \code{replace = TRUE} -- sample rows with replacement when growing
 #'     each tree.
 #'   \item \code{preprocess = NULL} -- function \code{dt -> dt}, applied to the
@@ -275,7 +281,9 @@ rf_pool_importance_sd <- function(forests) {
 #' \code{details$metrics$auc} is filled in only when the classification target
 #' has exactly two levels \emph{and} the suggested package 'pROC' is installed;
 #' it is \code{NA} otherwise, which includes every multi-class fit. Regression
-#' fits report RMSE, MAE, and R2 instead, and R2 is \code{NA} when the held-out
+#' fits report RMSE, MAE, and R2 instead. R2 is \code{1 - SSE/SST} on the
+#' held-out rows (so it can be negative), not the squared correlation that
+#' \code{\link{fs_mars}} reports, and it is \code{NA} when the held-out
 #' target has no variance.
 #'
 #' @return An object of class `fs_result` with:
@@ -346,6 +354,7 @@ fs_randomforest <- function(data,
   task <- match.arg(task)
   assert_data_frame(data, "data")
   assert_target(data, target, arg = "target")
+  assert_column_names(data, "fs_randomforest")
   if (task_defaulted && is.numeric(data[[target]])) {
     warning(sprintf(paste(
       "Target '%s' is numeric but 'task' defaulted to \"classification\",",
@@ -426,6 +435,18 @@ fs_randomforest <- function(data,
   if (!is.null(ctrl$positive_class)) {
     assert_string(ctrl$positive_class, "control$positive_class")
   }
+  # randomForest() reads `strata` positionally against the rows it is given
+  # and does not check its length. Those rows are the training split (after
+  # NA removal and downsampling), which the caller cannot know in advance, so
+  # a vector supplied for `data` would be silently misaligned. Take a column
+  # name instead and read it from the training rows.
+  if (!is.null(ctrl$strata) &&
+      !(is.character(ctrl$strata) && length(ctrl$strata) == 1L &&
+        !is.na(ctrl$strata))) {
+    stop("'control$strata' must be the name of a column of 'data' (a single ",
+         "string). A vector cannot be aligned with the training rows, which ",
+         "are only chosen inside fs_randomforest().", call. = FALSE)
+  }
 
   # ---- Worker count (sequential by default; capped at cores and ntree) -------
   n_cores <- resolve_cores(n_cores, arg = "n_cores")
@@ -465,7 +486,11 @@ fs_randomforest <- function(data,
 
   # ---- Target type and NA handling -------------------------------------------
   if (task == "classification") {
-    dt[[target]] <- as.factor(dt[[target]])
+    # Unordered: predict() returns a plain factor, and comparing it with an
+    # ordered test target fails ("comparison of these types is not
+    # implemented").
+    dt[[target]] <- factor(dt[[target]], ordered = FALSE)
+    assert_class_labels(dt[[target]], target)
 
     if (anyNA(dt[[target]])) {
       warning("Rows with NA in the classification target were removed before training.",
@@ -526,6 +551,19 @@ fs_randomforest <- function(data,
   df_all <- as.data.frame(dt)
   train_df <- df_all[index, , drop = FALSE]
   test_df <- df_all[-index, , drop = FALSE]
+
+  # Per-tree sampling strata, read from the training rows themselves (before
+  # any hook or filter can drop the column).
+  strata_train <- NULL
+  if (!is.null(ctrl$strata)) {
+    if (!ctrl$strata %in% names(train_df)) {
+      stop(sprintf("'control$strata' names column '%s', which is not in the data%s.",
+                   ctrl$strata,
+                   if (is.null(ctrl$preprocess)) "" else " after control$preprocess"),
+           call. = FALSE)
+    }
+    strata_train <- as.factor(train_df[[ctrl$strata]])
+  }
 
   if (nrow(test_df) == 0L) {
     stop("Test split is empty; adjust 'control$train_ratio'.", call. = FALSE)
@@ -634,6 +672,20 @@ fs_randomforest <- function(data,
     }
   }
 
+  # ---- Infinite values (imputation only replaces NA/NaN) ----------------------
+  inf_cols <- names(train_df)[vapply(names(train_df), function(nm) {
+    nm != target && is.numeric(train_df[[nm]]) &&
+      (any(is.infinite(train_df[[nm]])) ||
+         (nm %in% names(test_df) && any(is.infinite(test_df[[nm]]))))
+  }, logical(1L))]
+  if (length(inf_cols) > 0L) {
+    stop("Predictors contain infinite values (Inf/-Inf) in: ",
+         paste(utils::head(inf_cols, 5L), collapse = ", "),
+         if (length(inf_cols) > 5L) ", ..." else "",
+         ". Remove or replace them before calling fs_randomforest().",
+         call. = FALSE)
+  }
+
   # ---- Prepare X/Y for training ----------------------------------------------
   if (!target %in% names(train_df)) {
     stop("Target column missing from training data after preprocessing.",
@@ -721,7 +773,7 @@ fs_randomforest <- function(data,
     nodesize = ctrl$nodesize,
     maxnodes = ctrl$maxnodes,
     sampsize = sampsize_eff,
-    strata = ctrl$strata,
+    strata = strata_train,
     classwt = ctrl$classwt,
     replace = isTRUE(ctrl$replace),
     do.trace = FALSE,

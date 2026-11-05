@@ -61,7 +61,13 @@
 #'   inflate the multiplier for the others. With `k` tested and `s` skipped
 #'   features, "bonferroni" therefore multiplies by `k`, not by `k + s`.
 #' @param simulation_B Whole number >= 100: replicates for the simulation-based
-#'   p-value used when any expected cell count is < 5 (default 2000).
+#'   p-value used when any expected cell count is < 5 (default 2000). A
+#'   simulated p-value is never below `1 / (simulation_B + 1)`, so after a
+#'   multiplicity adjustment it may be unable to reach `sig_level` at all
+#'   (with Bonferroni, once the number of tested features reaches
+#'   `sig_level * (simulation_B + 1)`, i.e. 101 at the defaults); a warning
+#'   then names the affected features and the `simulation_B` that would be
+#'   needed.
 #' @param seed Optional integer. Seeds the RNG locally (the previous RNG state
 #'   is restored on exit), which makes simulation-based p-values reproducible
 #'   in the sequential path. The parallel path draws from furrr's own
@@ -218,6 +224,33 @@ fs_chi <- function(
   # ---- 5) Adjust p-values & finalize ----
   res$adj_p_value <- .fs_adjust_pvalues(res$p_value, method = p_adjust_method)
   res$significant <- !is.na(res$adj_p_value) & (res$adj_p_value < sig_level)
+
+  # A Monte-Carlo p-value is never below 1 / (simulation_B + 1). After the
+  # multiplicity adjustment that floor can sit at or above sig_level (with
+  # Bonferroni, once the number of tests reaches sig_level * (B + 1)), and
+  # then a simulated feature is never selected however strong its
+  # association. Say so instead of returning a silent false negative.
+  sim <- !is.na(res$method) & res$method == "simulation"
+  if (any(sim)) {
+    p_floor <- res$p_value
+    p_floor[sim] <- 1 / (simulation_B + 1)
+    adj_floor <- .fs_adjust_pvalues(p_floor, method = p_adjust_method)
+    stuck <- sim & !is.na(adj_floor) & adj_floor >= sig_level
+    if (any(stuck)) {
+      k <- sum(!is.na(res$p_value))
+      shown <- utils::head(res$feature[stuck], 5L)
+      warning(sprintf(paste(
+        "%d feature(s) tested by simulation cannot reach sig_level = %g:",
+        "a simulated p-value is never below 1/(simulation_B + 1) = %.3g, and",
+        "after '%s' adjustment over %d tests even the smallest attainable",
+        "value is not significant, so they are never selected however strong",
+        "their association: %s%s. Increase simulation_B (for Bonferroni, to",
+        "at least %d) or use a less conservative p_adjust_method."
+      ), sum(stuck), sig_level, 1 / (simulation_B + 1), p_adjust_method, k,
+      paste(shown, collapse = ", "), if (sum(stuck) > 5L) ", ..." else "",
+      as.integer(floor(k / sig_level))), call. = FALSE)
+    }
+  }
 
   # stable ordering: by adjusted p-value then raw
   ord <- order(res$adj_p_value, res$p_value, na.last = TRUE)

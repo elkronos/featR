@@ -16,8 +16,8 @@ test_that("fs_lasso signature and defaults are stable", {
   expect_identical(
     names(fx),
     c("data", "target", "alpha", "nfolds", "standardize", "custom_folds",
-      "impute", "return_model", "seed", "verbose", "parallel", "n_cores",
-      "lambda")
+      "impute", "return_model", "lambda", "seed", "verbose", "parallel",
+      "n_cores")
   )
   # lambda.min stays the default; "1se" is opt-in
   expect_identical(eval(fx$lambda), c("min", "1se"))
@@ -397,4 +397,55 @@ test_that("lambda = '1se' selects at lambda.1se and matches cv.glmnet", {
   expect_identical(res_min$details$lambda_used, "lambda.min")
   expect_true(all(selected(res) %in% selected(res_min)))
   expect_error(fs_lasso(d, "y", lambda = "max"), "should be one of")
+})
+
+test_that("unbacktick_names restores escaped control characters", {
+  # REGRESSION: deparse() writes a newline in a name as "\n"; the unescape
+  # dropped the backslash and reported "anb" instead of the column "a\nb".
+  nms <- c("a\nb", "a\tb", "a`b", "a\\b", "`ab")
+  d <- as.data.frame(stats::setNames(replicate(5, rnorm(4), simplify = FALSE),
+                                     nms), check.names = FALSE)
+  mm <- stats::model.matrix(~ . - 1, d)
+  expect_identical(featR:::unbacktick_names(colnames(mm)), nms)
+})
+
+test_that("fs_lasso handles a nonzero constant or tiny-unit predictor", {
+  # REGRESSION: the design matrix was handed to glmnet as a sparse matrix,
+  # whose standardization turns a constant column (or one whose squares
+  # underflow) into a NaN lambda path; cv.glmnet() then failed with
+  # "NA subscripts in x[i,j]" / "need at least two non-NA values to
+  # interpolate".
+  set.seed(11)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- 2 * d$x1 + rnorm(n)
+  d$xk <- 5
+  res <- fs_lasso(d, "y", nfolds = 3, seed = 1)
+  expect_s3_class(res, "fs_result")
+  expect_false("xk" %in% selected(res))
+  expect_true("x1" %in% selected(res))
+
+  d$xk <- rnorm(n) * 1e-300
+  expect_s3_class(fs_lasso(d, "y", nfolds = 3, seed = 1), "fs_result")
+})
+
+test_that("fs_lasso keeps its housekeeping arguments last", {
+  # REGRESSION: `lambda`, a method option, was appended after `n_cores`,
+  # contradicting the documented convention that seed, verbose, parallel and
+  # n_cores come last.
+  fx <- names(formals(fs_lasso))
+  expect_identical(utils::tail(fx, 4L),
+                   c("seed", "verbose", "parallel", "n_cores"))
+})
+
+test_that("fs_lasso rejects duplicated column names instead of dropping a copy", {
+  # REGRESSION: model.frame(~ .) kept one copy of a duplicated name, so the
+  # other (here the only informative column) silently vanished from the fit
+  # and the scores, and "x1" was reported with the noise copy's coefficient.
+  set.seed(12)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x1 = rnorm(n), x3 = rnorm(n),
+                  check.names = FALSE)
+  d$y <- 3 * d[[2]] + rnorm(n)
+  expect_error(fs_lasso(d, "y", nfolds = 3), "duplicated: x1")
 })

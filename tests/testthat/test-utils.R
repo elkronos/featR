@@ -418,3 +418,44 @@ test_that("summary() ranks lasso's signed coefficients by magnitude", {
                 function(f) grep(paste0("^ *", f, " "), out)[1L], integer(1L))
   expect_true(all(diff(pos) > 0))
 })
+
+test_that("local_parallel_cluster leaves a never-registered session unregistered", {
+  skip_if_not_installed("foreach")
+  skip_if_not_installed("doParallel")
+  skip_on_cran()
+
+  # REGRESSION: restoring "nothing registered" called registerDoSEQ(), which
+  # flipped getDoParRegistered() to TRUE, so user code of the form
+  # `if (!getDoParRegistered()) registerDoParallel(...)` silently stayed
+  # sequential after any parallel featR call.
+  prev <- foreach_backend_snapshot()
+  withr::defer(foreach_backend_restore(prev))
+  foreach_backend_restore(NULL)
+  expect_false(foreach::getDoParRegistered())
+
+  f <- function() {
+    local_parallel_cluster(2L)
+    foreach::getDoParRegistered()
+  }
+  expect_true(f())
+  expect_false(foreach::getDoParRegistered())
+  expect_error((function() {
+    local_parallel_cluster(2L)
+    stop("boom")
+  })(), "boom")
+  expect_false(foreach::getDoParRegistered())
+})
+
+test_that("fs_split_index explains a one-row split in featR terms", {
+  # REGRESSION: one-row data reached caret, whose "y must have at least 2
+  # data points" surfaced from fs_randomforest(), fs_mars() and
+  # fs_recursivefeature().
+  skip_if_not_installed("caret")
+  expect_error(featR:::fs_split_index(1), "At least 2 rows are needed")
+  skip_if_not_installed("randomForest")
+  expect_error(
+    fs_randomforest(data.frame(x1 = 1, x2 = 2, y = 3), "y",
+                    task = "regression", control = list(ntree = 5)),
+    "At least 2 rows are needed"
+  )
+})

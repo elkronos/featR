@@ -14,7 +14,8 @@ fs_stepwise(
 }
 \arguments{
 \item{data}{A data.frame (or data.table) with at least two columns: the
-numeric target and at least one candidate predictor. Every column other
+numeric target and at least one candidate predictor, with unique,
+non-empty column names and no infinite values. Every column other
 than \code{target} is offered to the search.}
 
 \item{target}{Single string naming the numeric target column of \code{data}.

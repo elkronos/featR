@@ -21,8 +21,10 @@ fs_recursivefeature(
 }
 \arguments{
 \item{data}{A data.frame or data.table with at least one row and one column,
-holding the target and the candidate predictors (every other column). It
-is converted to a plain data.frame on entry.}
+holding the target and the candidate predictors (every other column), with
+unique, non-empty column names and at least two candidate predictors
+(after any one-hot encoding). It is converted to a plain data.frame on
+entry.}
 
 \item{target}{Single string naming the target column of \code{data}; a column
 index is not accepted. A factor, character, or logical target means

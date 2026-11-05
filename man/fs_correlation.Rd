@@ -20,8 +20,8 @@ fs_correlation(
 )
 }
 \arguments{
-\item{data}{A data frame or matrix with at least 2 columns and unique
-column names (a correlation matrix with duplicated dimnames is ambiguous,
+\item{data}{A data frame or matrix with at least 2 columns and unique,
+non-empty column names (a correlation matrix with duplicated dimnames is ambiguous,
 so duplicates are rejected rather than silently resolved to the first
 match). For \code{"pearson"}, \code{"spearman"},
 \code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:

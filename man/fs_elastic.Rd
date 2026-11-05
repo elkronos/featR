@@ -20,7 +20,7 @@ fs_elastic(
 }
 \arguments{
 \item{data}{A data frame (or data.table) containing the target and the
-candidate predictors.}
+candidate predictors, with unique, non-empty column names.}
 
 \item{target}{Single string naming the outcome column in \code{data}.}
 
@@ -135,6 +135,18 @@ wins is still decided by resampling. With \code{use_pca = TRUE} that path is
 computed on the original predictors, so it is only an approximation of the
 scale the components live on; pass \code{lambda_seq} explicitly if you need to
 control it.
+
+The winning pair is the one with the best resampled metric (caret's
+default \code{selectionFunction = "best"}). With hundreds of alpha/lambda
+candidates that choice is noisy and leans towards too little penalty: on
+pure-noise data (100 rows, 50 predictors) it selected 8.5 predictors on
+average and at least one in every run. A \code{trControl} with
+\code{selectionFunction = "oneSE"} picks the most penalized pair within one
+standard error of the best and is much sparser (1.8 on average in the same
+simulation). For the same reason \code{details$metric_value}, the best value
+over the whole grid, is an optimistic estimate of performance. Coefficients
+are taken at exactly the winning lambda (refitting the path if it is not
+one of the final model's knots), not interpolated between knots.
 }
 \examples{
 \donttest{

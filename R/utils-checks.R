@@ -131,3 +131,46 @@ backtick <- function(x) {
   x[needs] <- paste0("`", esc, "`")
   x
 }
+
+#' Assert that column names are usable as unique lookup keys
+#'
+#' Rejects duplicated, empty and `NA` column names, naming the offenders.
+#' Methods that look columns up by name (or hand them to a modeling engine
+#' that does) otherwise resolve every duplicate to its first copy, or fail
+#' deep inside the engine ("undefined columns selected", "subscript out of
+#' bounds", "duplicated name ... using '.'").
+#'
+#' @param data A data.frame (or matrix with column names).
+#' @param fn Name of the calling function, for the message.
+#' @return Invisibly `data`.
+#' @noRd
+assert_column_names <- function(data, fn) {
+  nms <- colnames(data)
+  if (is.null(nms) || anyNA(nms) || any(!nzchar(nms))) {
+    stop(sprintf("'data' must not have empty or NA column names; name every column before calling %s().",
+                 fn), call. = FALSE)
+  }
+  dupes <- unique(nms[duplicated(nms)])
+  if (length(dupes) > 0L) {
+    stop(sprintf("'data' must have unique column names; duplicated: %s%s. Rename the duplicates before calling %s().",
+                 paste(utils::head(dupes, 5L), collapse = ", "),
+                 if (length(dupes) > 5L) ", ..." else "", fn),
+         call. = FALSE)
+  }
+  invisible(data)
+}
+
+#' Assert that no class label of a classification target is an empty string
+#'
+#' A factor level `""` cannot be used as a dimname lookup key, so caret and
+#' randomForest fail on it with "subscript out of bounds" or 'column name ""
+#' cannot match any column'.
+#' @noRd
+assert_class_labels <- function(y, target) {
+  lv <- if (is.factor(y)) levels(y) else unique(as.character(y[!is.na(y)]))
+  if (any(!nzchar(lv))) {
+    stop(sprintf("Target '%s' has an empty-string class label; recode it (e.g. to \"none\") first.",
+                 target), call. = FALSE)
+  }
+  invisible(y)
+}

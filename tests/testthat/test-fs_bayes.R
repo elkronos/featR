@@ -506,3 +506,33 @@ test_that("fs_bayes surfaces diagnostics of the muffled fits", {
   expect_true(any(grepl("sampling warnings for 2 of 3", w)))
   expect_true(any(grepl("2 of 3 fitted model\\(s\\), INCLUDING the selected model have observations with Pareto k", w)))
 })
+
+test_that("bayes_validate_data guards iso_week_id, duplicates and bad dates (helper-level)", {
+  # REGRESSION: with date_col, a column named "iso_week_id" -- even the
+  # target -- was overwritten by reference with the week ids, so the search
+  # regressed the target on its own replacement. Repeated predictors produced
+  # duplicate candidate models ("x1 + x1"); a duplicated column name silently
+  # used its first copy; an unparseable date column failed with as.Date()'s
+  # bare "character string is not in a standard unambiguous format".
+  d <- data.frame(iso_week_id = c(1, 2, 3), x1 = c(1, 2, 3),
+                  when = as.Date("2024-01-01") + c(0, 7, 14))
+  expect_error(featR:::bayes_validate_data(d, "iso_week_id", "x1",
+                                           date_col = "when"),
+               "adds a predictor named 'iso_week_id'")
+  d$y <- c(3, 1, 2)
+  expect_error(featR:::bayes_validate_data(d, "y", c("x1", "iso_week_id"),
+                                           date_col = "when"),
+               "adds a predictor named 'iso_week_id'")
+  expect_true(featR:::bayes_validate_data(d, "y", c("x1", "iso_week_id")))
+
+  expect_error(featR:::bayes_validate_data(d, "y", c("x1", "x1")),
+               "must not contain duplicates; repeated: x1")
+  d2 <- d
+  names(d2)[names(d2) == "iso_week_id"] <- "x1"
+  expect_error(featR:::bayes_validate_data(d2, "y", "x1"),
+               "duplicated column names among the columns used: x1")
+
+  dt <- data.table::data.table(y = 1:2, x = 3:4, when = c("soon", "later"))
+  expect_error(featR:::bayes_add_week_feature(dt, "when", "x"),
+               "Date column 'when' could not be converted to Date")
+})

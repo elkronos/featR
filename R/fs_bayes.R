@@ -39,6 +39,31 @@ bayes_validate_data <- function(data,
   if (!is.null(date_col) && !date_col %in% names(data)) {
     stop("Date column '", date_col, "' not found in data.")
   }
+  # A repeated predictor produced duplicate candidate models (and an
+  # "x1 + x1" formula), counted twice towards the search.
+  if (anyDuplicated(predictors) > 0L) {
+    stop("'predictors' must not contain duplicates; repeated: ",
+         paste(unique(predictors[duplicated(predictors)]), collapse = ", "),
+         ".", call. = FALSE)
+  }
+  # Columns are looked up by name, so a duplicated name silently used the
+  # first copy only.
+  used <- c(target, predictors, date_col)
+  dup_used <- intersect(used, names(data)[duplicated(names(data))])
+  if (length(dup_used) > 0L) {
+    stop("'data' has duplicated column names among the columns used: ",
+         paste(dup_used, collapse = ", "), ". Rename the duplicates first.",
+         call. = FALSE)
+  }
+  # date_col adds a column named "iso_week_id" by reference, which silently
+  # overwrote a user column of that name -- including the target, which the
+  # search then regressed on its own replacement.
+  if (!is.null(date_col) && "iso_week_id" %in% used) {
+    stop("With 'date_col', fs_bayes() adds a predictor named 'iso_week_id', ",
+         "which would overwrite the column of that name used as the target, ",
+         "a predictor, or the date column. Rename that column first.",
+         call. = FALSE)
+  }
 
   # A family object is a list carrying a single character `family`. Passing the
   # generator without parentheses (brms::bernoulli rather than
@@ -112,7 +137,14 @@ bayes_task_from_family <- function(brm_family) {
 #' @noRd
 bayes_add_week_feature <- function(data, date_col, predictors) {
   if (!inherits(data[[date_col]], "Date")) {
-    data.table::set(data, j = date_col, value = as.Date(data[[date_col]]))
+    as_date <- tryCatch(
+      as.Date(data[[date_col]]),
+      error = function(e) {
+        stop(sprintf("Date column '%s' could not be converted to Date: %s",
+                     date_col, conditionMessage(e)), call. = FALSE)
+      }
+    )
+    data.table::set(data, j = date_col, value = as_date)
   }
 
   iso_year <- as.integer(strftime(data[[date_col]], "%G"))
@@ -674,10 +706,11 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'   exist in `data` and suit `brm_family` (numeric for `stats::gaussian()`,
 #'   0/1 or logical for `brms::bernoulli()`).
 #' @param predictors Character vector. Names of the candidate predictor
-#'   columns; at least one, all present in `data`.
+#'   columns; at least one, without duplicates, all present in `data`.
 #' @param date_col Character or NULL. Name of a date column. When provided, an
 #'   `iso_week_id` feature (ISO year * 100 + ISO week) is added to the
-#'   predictors. Note: `iso_week_id` enters the models as a continuous
+#'   predictors, so neither the target, a predictor, nor the date column may
+#'   itself be named `iso_week_id`. Note: `iso_week_id` enters the models as a continuous
 #'   covariate, which is a rough encoding of seasonality; a categorical or
 #'   cyclic encoding is deferred to a future version. Default NULL (no date
 #'   feature; the date column itself is never used as a predictor).
@@ -728,8 +761,10 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'     combination models. `details$n_features` records how many candidate
 #'     predictors were offered.}
 #'   \item{method}{"bayes".}
-#'   \item{task}{"regression", or "classification" when `brm_family` is one of
-#'     the categorical brms families.}
+#'   \item{task}{"classification" when `brm_family` is a binary, categorical or
+#'     ordinal family (`bernoulli`, `binomial`, `beta_binomial`,
+#'     `categorical`, `multinomial`, `cumulative`, `sratio`, `cratio`,
+#'     `acat`), otherwise "regression".}
 #'   \item{model}{The selected `brmsfit`.}
 #'   \item{details}{A list with `data` (the complete-case modeling data.table:
 #'     `target`, `predictors`, `date_col` and `iso_week_id` where applicable,

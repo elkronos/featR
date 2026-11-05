@@ -523,3 +523,11 @@ test_that("duplicated column names are rejected", {
                                 bad = d), "t"),
                "unique column names")
 })
+
+test_that("fs_infogain rejects list columns clearly", {
+  # REGRESSION: failed in the entropy code with "unimplemented type 'list' in
+  # 'orderVector1'".
+  d <- data.frame(x = rnorm(10), y = rep(c("a", "b"), 5))
+  d$l <- as.list(1:10)
+  expect_error(fs_infogain(d, "y"), "List columns are not supported: l")
+})

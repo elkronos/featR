@@ -320,6 +320,52 @@ elastic_select_best <- function(fit, metric) {
   )
 }
 
+#' Coefficients of a glmnet fit at exactly the tuned lambda
+#'
+#' `coef(fit, s = lambda)` linearly interpolates between the two knots of the
+#' fit's own lambda path that bracket `lambda`. caret's final glmnet model
+#' uses glmnet's default 100-knot path while the tuning grid holds other
+#' values (a 50-value path, or `lambda_seq`), so the tuned lambda almost never
+#' sits on a knot, and interpolation gives every predictor that enters only at
+#' the next-smaller knot a small non-zero coefficient: it would be reported as
+#' selected although its coefficient at the chosen lambda is exactly 0. A tuned
+#' value within rounding of a knot (it can come back one ulp below the path's
+#' first knot, the null model) is snapped to that knot; otherwise the model is
+#' refitted at `s` (`exact = TRUE`) from the data recorded in its call, falling
+#' back to interpolation only if that refit fails.
+#'
+#' @param model A glmnet fit (caret's `finalModel`).
+#' @param s The tuned lambda.
+#' @return What `stats::coef()` returns for the fit at `s`.
+#' @noRd
+elastic_coef_at <- function(model, s) {
+  lam <- model$lambda
+  if (is.numeric(lam) && length(lam) > 0L && length(s) == 1L &&
+      is.finite(s)) {
+    j <- which.min(abs(lam - s))
+    if (abs(lam[j] - s) <= sqrt(.Machine$double.eps) * max(abs(s), abs(lam[j]))) {
+      return(stats::coef(model, s = lam[j]))
+    }
+    # caret hands glmnet the data itself (do.call), so the call carries the
+    # values; evaluating in emptyenv() refuses anything that is not a value.
+    cl <- model$call
+    if (!is.null(cl$x) && !is.null(cl$y)) {
+      exact <- tryCatch({
+        xv <- eval(cl$x, envir = emptyenv())
+        yv <- eval(cl$y, envir = emptyenv())
+        if (length(dim(xv)) != 2L || ncol(xv) != model$dim[1L]) {
+          stop("design matrix not recoverable")
+        }
+        stats::coef(model, s = s, exact = TRUE, x = xv, y = yv)
+      }, error = function(e) NULL)
+      if (!is.null(exact)) {
+        return(exact)
+      }
+    }
+  }
+  stats::coef(model, s = s)
+}
+
 #' Names of predictors with a non-zero coefficient
 #'
 #' Multinomial fits give one coefficient matrix per class, so the union across
@@ -426,8 +472,20 @@ elastic_scores <- function(coefs) {
 #' scale the components live on; pass `lambda_seq` explicitly if you need to
 #' control it.
 #'
+#' The winning pair is the one with the best resampled metric (caret's
+#' default `selectionFunction = "best"`). With hundreds of alpha/lambda
+#' candidates that choice is noisy and leans towards too little penalty: on
+#' pure-noise data (100 rows, 50 predictors) it selected 8.5 predictors on
+#' average and at least one in every run. A `trControl` with
+#' `selectionFunction = "oneSE"` picks the most penalized pair within one
+#' standard error of the best and is much sparser (1.8 on average in the same
+#' simulation). For the same reason `details$metric_value`, the best value
+#' over the whole grid, is an optimistic estimate of performance. Coefficients
+#' are taken at exactly the winning lambda (refitting the path if it is not
+#' one of the final model's knots), not interpolated between knots.
+#'
 #' @param data A data frame (or data.table) containing the target and the
-#'   candidate predictors.
+#'   candidate predictors, with unique, non-empty column names.
 #' @param target Single string naming the outcome column in `data`.
 #' @param alpha_seq Numeric vector of alpha values to tune over, each in
 #'   `[0, 1]`. Default `seq(0.1, 1, by = 0.1)`; 0 (ridge) is left out
@@ -505,6 +563,9 @@ fs_elastic <- function(data,
 
   assert_data_frame(data)
   assert_target(data, target)
+  # A duplicated name kept only one copy in the model frame, so the other
+  # silently vanished from the scores.
+  assert_column_names(data, "fs_elastic")
   if (!is.numeric(alpha_seq) || length(alpha_seq) == 0L || anyNA(alpha_seq) ||
       any(alpha_seq < 0) || any(alpha_seq > 1)) {
     stop("'alpha_seq' must be a numeric vector with values in [0, 1].", call. = FALSE)
@@ -570,9 +631,23 @@ fs_elastic <- function(data,
   }
 
   elastic_message("Handling missing values...", verbose)
+  n_rows_in <- nrow(x)
   cleaned <- elastic_drop_missing(x, y)
   x <- cleaned$x
   y <- cleaned$y
+  # A user-supplied trControl$index / indexOut numbers the rows of `data`.
+  # Once incomplete rows are dropped those numbers point at different
+  # observations (every row after a dropped one shifts up), so the resamples
+  # would silently train and test on the wrong rows.
+  if (nrow(x) < n_rows_in && !is.null(trControl) &&
+      (!is.null(trControl$index) || !is.null(trControl$indexOut))) {
+    stop(sprintf(paste0(
+      "%d row(s) with missing values were dropped, so the row numbers in ",
+      "'trControl$index'/'trControl$indexOut' no longer refer to the rows ",
+      "they were built for. Remove incomplete rows from 'data' before ",
+      "building the resampling indices."), n_rows_in - nrow(x)),
+      call. = FALSE)
+  }
 
   elastic_check_variance(x, if (use_pca) "PCA with scaling" else "model training")
 
@@ -630,7 +705,9 @@ fs_elastic <- function(data,
   }
 
   elastic_message("Extracting coefficients at best lambda...", verbose)
-  coefficients <- stats::coef(best$model, s = best$lambda)
+  # Exactly at the tuned lambda, not interpolated between path knots (which
+  # reported predictors that only enter at the next knot as selected).
+  coefficients <- elastic_coef_at(best$model, best$lambda)
 
   selected_features <- elastic_nonzero_names(coefficients)
   scores <- elastic_scores(coefficients)

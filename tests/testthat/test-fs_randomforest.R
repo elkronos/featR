@@ -655,3 +655,74 @@ test_that("a numeric target with a defaulted task warns", {
                     control = list(ntree = 5), seed = 1)
   )
 })
+
+test_that("fs_randomforest handles hostile targets and names with clear outcomes", {
+  # REGRESSION: an ordered target failed after training with "comparison of
+  # these types is not implemented"; an empty-string class failed inside
+  # randomForest with "subscript out of bounds"; Inf predictors surfaced as
+  # "NA/NaN/Inf in foreign function call"; a duplicated column name was
+  # scored under a name ("x1.1") that is not a column of 'data'; an empty
+  # column name gave "undefined columns selected".
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(5)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- factor(ifelse(d$x1 > 0, "hi", "lo"), ordered = TRUE)
+  res <- fs_randomforest(d, "y", control = list(ntree = 20), seed = 1)
+  expect_s3_class(res, "fs_result")
+  expect_true(all(selected(res) %in% c("x1", "x2")))
+
+  d2 <- d
+  d2$y <- factor(ifelse(d$x1 > 0, "", "lo"))
+  expect_error(fs_randomforest(d2, "y", control = list(ntree = 20), seed = 1),
+               "empty-string class label")
+
+  d3 <- data.frame(x1 = rnorm(n), x2 = rnorm(n), y = rnorm(n))
+  d3$x2[1:3] <- c(Inf, -Inf, 1)
+  expect_error(fs_randomforest(d3, "y", task = "regression",
+                               control = list(ntree = 20), seed = 1),
+               "infinite values.*x2")
+
+  d4 <- data.frame(x1 = rnorm(n), x1 = rnorm(n), y = rnorm(n),
+                   check.names = FALSE)
+  expect_error(fs_randomforest(d4, "y", task = "regression",
+                               control = list(ntree = 20)),
+               "unique column names; duplicated: x1")
+  names(d4)[2] <- ""
+  expect_error(fs_randomforest(d4, "y", task = "regression",
+                               control = list(ntree = 20)),
+               "empty or NA column names")
+})
+
+test_that("control$strata is read from the training rows, never misaligned", {
+  # Second-round statistical review: `strata` was forwarded unchanged to
+  # randomForest(), which uses it positionally against the training rows and
+  # does not check its length, so a vector built for `data` silently
+  # stratified the wrong rows. It is now a column name read from the training
+  # split. Stratum "b" holds few training rows, so with sampsize = c(5, 5)
+  # each of them is in-bag in most trees: their out-of-bag counts must be far
+  # below those of stratum "a" rows -- which only holds if the strata line up
+  # with the rows the forest was grown on.
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  n <- 200
+  d <- data.frame(x = rnorm(n), g = factor(rep(c("a", "b"), c(190, 10))))
+  d$y <- factor(ifelse(d$x + rnorm(n) > 0, "p", "q"))
+
+  expect_error(
+    fs_randomforest(d, "y", control = list(ntree = 20, strata = d$g)),
+    "must be the name of a column"
+  )
+
+  res <- fs_randomforest(d, "y",
+                         control = list(ntree = 300, strata = "g",
+                                        sampsize = c(5, 5)),
+                         seed = 1)
+  g_train <- d$g[res$details$train_index]
+  oob <- res$model$oob.times
+  expect_length(oob, length(g_train))
+  # expected ratio about (1 - 1/9)^5 / (1 - 1/142)^5 = 0.57; misaligned ~ 1
+  expect_lt(mean(oob[g_train == "b"]), 0.75 * mean(oob[g_train == "a"]))
+})

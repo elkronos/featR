@@ -17,6 +17,7 @@
 svm_validate <- function(data, target, task, train_ratio, nfolds) {
   assert_data_frame(data, arg = "data")
   assert_target(data, target)
+  assert_column_names(data, "fs_svm")
   assert_number(train_ratio, "train_ratio")
   if (train_ratio <= 0 || train_ratio >= 1) {
     stop("'train_ratio' must be a single numeric value in (0, 1).",
@@ -49,6 +50,9 @@ svm_validate <- function(data, target, task, train_ratio, nfolds) {
   if (task == "classification" && length(unique(data[[target]])) < 2L) {
     stop("For classification, the target must have at least two classes.",
          call. = FALSE)
+  }
+  if (task == "classification") {
+    assert_class_labels(data[[target]], target)
   }
 
   invisible(TRUE)
@@ -174,9 +178,10 @@ svm_encode <- function(dv, data) {
   out <- as.data.frame(stats::predict(dv, newdata = data))
   # svm_dummy_encoder() backticks non-syntactic names so the formula parses,
   # and dummyVars() copies those backticks into its column names ("`a b`",
-  # "`f g`v"). Strip them so encoded names match the user's column names.
-  # A literal backtick cannot occur in a name that survived the formula.
-  names(out) <- gsub("`", "", names(out), fixed = TRUE)
+  # "`f g`v"). Unquote them so encoded names match the user's column names.
+  # backtick() escapes literal backticks and backslashes, so deleting every
+  # backtick would misname "a`b" as "a\b" (the name of a different column).
+  names(out) <- unbacktick_names(names(out))
   out
 }
 
@@ -624,7 +629,11 @@ svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
 #' Mean random-forest importance recorded by caret::rfe()
 #'
 #' `rfe()` stores the per-resample importance of every variable it considered
-#' in `$variables`; averaging over resamples and subset sizes gives one
+#' in `$variables`, once per subset size the variable survived to. Averaging
+#' all of those rows would weight each resample by how far the variable
+#' survived there -- that is, by how important it looked in that resample --
+#' which inflates the scores of marginal predictors. Only the full-size rows
+#' (every predictor present, once per resample) are averaged, giving one
 #' comparable score per encoded predictor.
 #'
 #' @param rfe_obj An object returned by `caret::rfe()`.
@@ -635,6 +644,9 @@ svm_rf_importance <- function(rfe_obj, features) {
   out <- stats::setNames(rep(NA_real_, length(features)), features)
   vars <- rfe_obj$variables
   if (is.data.frame(vars) && all(c("Overall", "var") %in% names(vars))) {
+    if ("Variables" %in% names(vars) && nrow(vars) > 0L) {
+      vars <- vars[vars$Variables == max(vars$Variables), , drop = FALSE]
+    }
     agg <- tapply(vars$Overall, as.character(vars$var), mean, na.rm = TRUE)
     common <- intersect(features, names(agg))
     if (length(common) > 0L) {
@@ -687,7 +699,11 @@ svm_feature_selection <- function(x_enc,
     method = "cv",
     number = rfe_folds,
     verbose = FALSE,
-    allowParallel = allow_parallel
+    allowParallel = allow_parallel,
+    # In parallel, resamples go to whichever worker is free, so per-worker RNG
+    # streams alone are not reproducible; seeds = NULL (not the default NA)
+    # makes caret draw a seed per resample from the master RNG.
+    seeds = if (allow_parallel) NULL else NA
   )
 
   rfe_obj <- tryCatch(
@@ -889,8 +905,10 @@ svm_performance <- function(predictions, actuals, task) {
 #' \code{feature_select = TRUE} and \code{select_method = "rf_rfe"}, and
 #' \pkg{doParallel}/\pkg{foreach} when \code{n_cores > 1}.
 #'
-#' @param data A data frame containing predictors and the target.
-#' @param target A string naming the target variable.
+#' @param data A data frame containing predictors and the target, with
+#'   unique, non-empty column names.
+#' @param target A string naming the target variable. For classification, no
+#'   class label may be the empty string.
 #' @param task Either \code{"classification"} or \code{"regression"}.
 #'   Required; there is no default, because guessing it from the target is
 #'   exactly the mistake this argument exists to prevent.
@@ -1228,7 +1246,10 @@ fs_svm <- function(data,
     method = "cv",
     number = nfolds,
     allowParallel = use_parallel,
-    sampling = sampling
+    sampling = sampling,
+    # See svm_feature_selection(): per-resample seeds from the master RNG
+    # make a seeded parallel run reproducible.
+    seeds = if (use_parallel) NULL else NA
   )
 
   svm_fit <- caret::train(

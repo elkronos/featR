@@ -1043,3 +1043,19 @@ test_that("a factor left with one level in the training rows is a clear error (C
     "fewer than two levels in the training rows: 'k'"
   )
 })
+
+test_that("rf_rfe does not hang on a predictor constant inside one CV fold", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+  set.seed(1)
+  n <- 60
+  d <- data.frame(y = factor(sample(c("a", "b"), n, TRUE)), x1 = rnorm(n),
+                  x2 = rnorm(n), k = c(1, rep(0, n - 1)))
+  res <- suppressWarnings(fs_svm(d, "y", "classification",
+                                 feature_select = TRUE,
+                                 select_method = "rf_rfe",
+                                 tune_grid = data.frame(C = 1), seed = 1))
+  expect_s3_class(res, "fs_result")
+})

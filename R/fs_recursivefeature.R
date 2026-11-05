@@ -22,6 +22,91 @@ rfe_task_type <- function(y) {
   "regression"
 }
 
+#' Guard a random-forest RFE function set against constant resample columns
+#'
+#' `randomForest()` never returns on a classification fit in which no
+#' predictor can be split. featR removes predictors that are constant on the
+#' whole training split, but a rare indicator can still be constant inside one
+#' cross-validation resample, and caret's size-1 fit on it then hangs. The
+#' wrapped `fit` drops columns with fewer than two distinct values in that
+#' resample (falling back to a majority-class / mean model when none is
+#' left), `pred` handles that fallback, and `rank` appends the dropped
+#' columns at the bottom with importance 0 so every candidate is still ranked.
+#'
+#' Applied only when `funcs$fit` is caret's `rfFuncs$fit`. The wrappers use
+#' base R only and a minimal enclosing environment, because caret serialises
+#' them to parallel workers that may not have featR loaded.
+#' @noRd
+rfe_guard_rf_funcs <- function(funcs) {
+  if (!identical(funcs$fit, caret::rfFuncs$fit)) return(funcs)
+  env <- new.env(parent = baseenv())
+  env$fit0 <- funcs$fit
+  env$pred0 <- funcs$pred
+  env$rank0 <- funcs$rank
+  env$varies <- function(x) {
+    if (is.matrix(x)) {
+      apply(x, 2L, function(v) length(unique(v[!is.na(v)])) > 1L)
+    } else {
+      vapply(x, function(v) length(unique(v[!is.na(v)])) > 1L, logical(1L))
+    }
+  }
+  fit <- function(x, y, first, last, ...) {
+    keep <- varies(x)
+    if (!any(keep)) {
+      return(structure(list(y = y, vars = colnames(x)),
+                       class = "featr_constant_fit"))
+    }
+    obj <- fit0(x[, keep, drop = FALSE], y, first, last, ...)
+    obj$featr_vars <- colnames(x)[keep]
+    obj
+  }
+  pred <- function(object, x) {
+    if (inherits(object, "featr_constant_fit")) {
+      y <- object$y
+      n <- nrow(x)
+      if (is.factor(y)) {
+        p <- as.numeric(table(y)) / length(y)
+        names(p) <- levels(y)
+        cls <- factor(rep(levels(y)[which.max(p)], n), levels = levels(y))
+        probs <- as.data.frame(matrix(rep(p, each = n), nrow = n,
+                                      dimnames = list(NULL, levels(y))))
+        return(cbind(data.frame(pred = cls), probs))
+      }
+      return(rep(mean(y), n))
+    }
+    if (!is.null(object$featr_vars)) {
+      x <- x[, object$featr_vars, drop = FALSE]
+    }
+    pred0(object, x)
+  }
+  rank <- function(object, x, y) {
+    all_vars <- colnames(x)
+    if (inherits(object, "featr_constant_fit")) {
+      return(data.frame(Overall = rep(0, length(all_vars)), var = all_vars,
+                        row.names = all_vars, stringsAsFactors = FALSE))
+    }
+    used <- if (is.null(object$featr_vars)) all_vars else object$featr_vars
+    r <- rank0(object, x[, used, drop = FALSE], y)
+    miss <- setdiff(all_vars, r$var)
+    if (length(miss) > 0L) {
+      add <- r[rep(1L, length(miss)), , drop = FALSE]
+      num <- vapply(add, is.numeric, logical(1L))
+      add[num] <- 0
+      add$var <- miss
+      rownames(add) <- miss
+      r <- rbind(r, add)
+    }
+    r
+  }
+  environment(fit) <- env
+  environment(pred) <- env
+  environment(rank) <- env
+  funcs$fit <- fit
+  funcs$pred <- pred
+  funcs$rank <- rank
+  funcs
+}
+
 #' Validate RFE resampling control parameters
 #'
 #' `caret::rfeControl()` returns a plain list, so only lists are accepted.
@@ -341,6 +426,9 @@ rfe_perform <- function(train_df, target, sizes, rfe_control_params,
   if (is.null(feature_funcs)) {
     feature_funcs <- caret::rfFuncs
   }
+  # A predictor can be constant inside one resample even when it varies on
+  # the training split; randomForest would then hang on that fit.
+  feature_funcs <- rfe_guard_rf_funcs(feature_funcs)
   rfe_control_params$functions <- NULL
 
   # rfeControl() cannot receive allowParallel twice; the 'parallel' argument

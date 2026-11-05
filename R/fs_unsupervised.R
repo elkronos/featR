@@ -122,7 +122,11 @@ unsup_scores <- function(dt,
 #'
 #' Supported methods:
 #' \itemize{
-#'   \item \code{"variance"}: Sample variance (denominator n - 1).
+#'   \item \code{"variance"}: Sample variance (denominator n - 1), in
+#'     squared units. For values below about \code{1e-162} in magnitude the
+#'     variance is smaller than the smallest double and is reported as 0, so
+#'     to screen for constant columns on data in extreme units use
+#'     \code{"range"} (threshold 0) or \code{"n_unique"} (threshold 1).
 #'   \item \code{"mad"}: Median absolute deviation, computed with
 #'     \code{stats::mad()}'s default consistency constant 1.4826
 #'     (normal-consistent). Scores are therefore on the standard-deviation
@@ -152,7 +156,9 @@ unsup_scores <- function(dt,
 #' reports how many such features were excluded.
 #'
 #' Columns are subset by integer index, never by name, so duplicated column
-#' names cannot select the wrong columns.
+#' names cannot select the wrong columns. Every column must have a non-empty,
+#' non-NA name; a matrix keeps its own column names (`V1`, `V2`, ... are used
+#' only when it has none).
 #'
 #' @param data A data.frame, data.table, or matrix; all columns must be
 #'   numeric. Every column is a candidate feature. The input is copied, never
@@ -287,6 +293,7 @@ fs_unsupervised <- function(data,
   }
 
   dt <- as_dt(data, arg = "data")
+  assert_nonempty_names(names(dt), "fs_unsupervised")
   if (!all(vapply(dt, is.numeric, logical(1L)))) {
     stop("All columns of 'data' must be numeric.", call. = FALSE)
   }

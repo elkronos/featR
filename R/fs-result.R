@@ -120,6 +120,11 @@ fs_result_lower_is_better <- function(x) {
   if (identical(x$method, "chi")) {
     return(TRUE)
   }
+  # fs_correlation(prune = TRUE) keeps the LEAST redundant variables (a
+  # smaller max |r|), so smaller is the kept side there too.
+  if (fs_result_correlation_pruned(x)) {
+    return(TRUE)
+  }
   direction <- x$details$direction
   action <- x$details$action
   if (is.character(direction) && length(direction) == 1L &&
@@ -130,14 +135,78 @@ fs_result_lower_is_better <- function(x) {
   FALSE
 }
 
+#' Is this an fs_correlation() result with prune = TRUE?
+#'
+#' `fs_correlation()` records `redundant` (every variable in a flagged pair).
+#' With `prune = FALSE` that is exactly `selected`; with `prune = TRUE` the
+#' selection is every variable not in `dropped`, which never equals the
+#' redundant set (a flagged pair always drops one member). An explicit
+#' `details$prune` flag, if present, wins.
+#'
+#' @param x An `fs_result` object.
+#' @return `TRUE` for a pruned correlation result.
+#' @noRd
+fs_result_correlation_pruned <- function(x) {
+  if (!is.character(x$method) || length(x$method) != 1L ||
+      !startsWith(x$method, "correlation_")) {
+    return(FALSE)
+  }
+  if (is.logical(x$details$prune) && length(x$details$prune) == 1L) {
+    return(isTRUE(x$details$prune))
+  }
+  red <- x$details$redundant
+  is.character(red) && !setequal(as.character(x$selected), red)
+}
+
+#' Should the summary table list selected features ahead of the rest?
+#'
+#' For most methods the selection is a cut on the score, so ranking by score
+#' already puts the kept features first. Two are not:
+#' `fs_mars()` selects every predictor used by the final earth model, which
+#' can carry a zero or negative GCV importance while pruned predictors score
+#' 0; and `fs_correlation(prune = TRUE)` keeps one member of each redundant
+#' pair, whose score equals that of the dropped partner. Ranking by score
+#' alone would then list a selected feature below unselected ones, or
+#' truncate it out of the table.
+#'
+#' @param x An `fs_result` object.
+#' @return `TRUE` when selected features should be ranked first.
+#' @noRd
+fs_result_selected_first <- function(x) {
+  identical(x$method, "mars") || fs_result_correlation_pruned(x)
+}
+
+#' Which scored features were selected, aligned with the score vector?
+#'
+#' Matches by position when the result carries a logical keep-mask aligned
+#' with the scores (the threshold filters do, as `details$mask`), so that
+#' duplicated feature names -- which `fs_supervised()` and
+#' `fs_unsupervised()` keep and resolve by index -- are marked correctly.
+#' Otherwise falls back to matching by name.
+#'
+#' @param x An `fs_result` object.
+#' @param sv The (unordered) score vector from `fs_result_score_vector()`.
+#' @return Logical vector, one element per element of `sv`.
+#' @noRd
+fs_result_selected_mask <- function(x, sv) {
+  mask <- x$details$mask
+  if (is.logical(mask) && length(mask) == length(sv) &&
+      (is.null(names(mask)) || identical(unname(names(mask)), unname(names(sv))))) {
+    return(unname(mask) %in% TRUE)
+  }
+  names(sv) %in% x$selected
+}
+
 #' Are this method's scores signed, with magnitude carrying the strength?
 #'
 #' Only `fs_lasso()` reports signed scores (standardized coefficients, whose
 #' sign is the direction of the effect), so only there is the ranking by
-#' absolute value. Everywhere else a negative score is genuinely weaker than
-#' a positive one: permutation importance and Boruta importance go negative
-#' when a feature does worse than its permuted copy, and ranking those by
-#' `abs()` would list a worse-than-noise feature above a useful one.
+#' absolute value. Elsewhere a negative score ranks below a positive one:
+#' permutation importance and Boruta importance go negative when a feature
+#' does worse than its permuted copy, and ranking those by `abs()` would list
+#' a worse-than-noise feature above a useful one. (`fs_mars()` can select a
+#' predictor with a negative GCV importance; `summary()` handles that by
+#' listing selected predictors first, see `fs_result_selected_first()`.)
 #'
 #' @param x An `fs_result` object.
 #' @return `TRUE` when scores should be ranked by magnitude.
@@ -287,6 +356,22 @@ print.fs_result <- function(x, n = 10L, ...) {
 #' \code{action = "keep"}, or \code{"above"} with \code{"remove"}), so the
 #' kept features come first.
 #'
+#' Two methods select features by something other than a cut on the score,
+#' and for them the selected features are listed first (each group ordered
+#' by score), so a kept feature is never ranked below, or truncated out
+#' behind, a dropped one. \code{\link{fs_mars}} selects every predictor the
+#' final model uses, which can have a zero or negative GCV importance while
+#' pruned predictors score 0. \code{\link{fs_correlation}} with
+#' \code{prune = TRUE} scores each variable by its largest absolute
+#' correlation with any other (larger = more redundant) and keeps one member
+#' of each redundant pair; its rows are ordered ascending within each group,
+#' least redundant first. With \code{prune = FALSE} the selection is the
+#' redundant set, ordered by decreasing score.
+#'
+#' The `selected` marks are matched by position when the result records a
+#' per-feature keep-mask (\code{details$mask}, as the threshold filters do),
+#' so features sharing a name are marked individually; otherwise by name.
+#'
 #' @param object An `fs_result` object.
 #' @param n Maximum number of scored features to show (default 20).
 #' @param ... Unused, for consistency with the generic.
@@ -308,18 +393,26 @@ summary.fs_result <- function(object, n = 20L, ...) {
 
   sv <- fs_result_score_vector(object)
   if (!is.null(sv) && length(sv) > 0L) {
-    ord <- if (fs_result_lower_is_better(object)) {
-      order(sv, decreasing = FALSE, na.last = TRUE)
+    sel <- fs_result_selected_mask(object, sv)
+    # Ascending sort key for the score: smallest key = strongest.
+    key <- if (fs_result_lower_is_better(object)) {
+      sv
     } else if (fs_result_signed_scores(object)) {
-      order(abs(sv), decreasing = TRUE, na.last = TRUE)
+      -abs(sv)
     } else {
-      order(sv, decreasing = TRUE, na.last = TRUE)
+      -sv
+    }
+    ord <- if (fs_result_selected_first(object)) {
+      order(!sel, key, na.last = TRUE)
+    } else {
+      order(key, na.last = TRUE)
     }
     sv <- sv[ord]
+    sel <- sel[ord]
     shown <- utils::head(sv, n)
     cat("\nScores (", length(sv), " feature",
         if (length(sv) == 1L) "" else "s", ", ranked):\n", sep = "")
-    marks <- ifelse(names(shown) %in% object$selected, "*", " ")
+    marks <- ifelse(utils::head(sel, n), "*", " ")
     out <- data.frame(
       feature = names(shown),
       score = unname(signif(shown, 4)),

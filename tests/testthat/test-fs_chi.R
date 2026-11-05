@@ -322,3 +322,87 @@ test_that("a simulated p-value that cannot reach significance is flagged", {
   # No warning when the floor is not binding.
   expect_no_warning(fs_chi(d[c("sig", "n1", "y")], "y", seed = 1))
 })
+
+test_that("empty or NA column names are rejected, not silently skipped", {
+  # REGRESSION: dt[[""]] / dt[[NA]] is NULL, so such a factor column failed
+  # the is.factor() filter and was left out of testing without a word.
+  set.seed(1)
+  n <- 60
+  d <- data.frame(t = factor(sample(c("a", "b"), n, TRUE)),
+                  f = factor(sample(c("u", "v"), n, TRUE)),
+                  g = factor(sample(c("u", "v"), n, TRUE)))
+  names(d)[3] <- ""
+  expect_error(fs_chi(d, "t"), "empty or NA column names")
+  names(d)[3] <- NA
+  expect_error(fs_chi(d, "t"), "empty or NA column names")
+})
+
+test_that("an invalid p_adjust_method fails before testing, even with no features", {
+  # REGRESSION: the method was only checked inside the p-value adjustment,
+  # after every test had run, and never when there was nothing to test (the
+  # bad name was then stored in details).
+  d0 <- data.frame(y = rep(c("a", "b"), 10), z = rnorm(20))
+  expect_error(fs_chi(d0, "y", p_adjust_method = "nonsense"),
+               "Invalid p_adjust_method 'nonsense'")
+  d1 <- data.frame(y = factor(rep(c("a", "b"), 10)),
+                   f = factor(rep(c("u", "v", "w", "x"), 5)))
+  testthat::local_mocked_bindings(
+    .fs_test_feature = function(...) stop("feature was tested")
+  )
+  expect_error(fs_chi(d1, "y", p_adjust_method = "nonsense"),
+               "Invalid p_adjust_method 'nonsense'")
+  # Valid names are still matched case-insensitively and stored as supplied.
+  expect_identical(fs_chi(d0, "y", p_adjust_method = "bh")$details$p_adjust_method,
+                   "bh")
+})
+
+test_that("parallel = TRUE never leaks its plan or replaces the caller's plan", {
+  # REGRESSION: the restore was registered only after plan(multisession)
+  # returned, so a failed worker start-up left featR's plan installed; and a
+  # caller's own plan was replaced and then rebuilt, killing its workers.
+  skip_if_not_installed("future")
+  skip_if_not_installed("furrr")
+  d <- data.frame(y = factor(rep(c("a", "b"), 20)),
+                  f = factor(rep(c("u", "v"), 20)))
+  real_plan <- future::plan
+  old <- real_plan("list")
+  on.exit(real_plan(old, substitute = FALSE), add = TRUE)
+
+  # (1) Worker start-up fails: the sequential plan must survive.
+  real_plan(future::sequential, substitute = FALSE)
+  testthat::local_mocked_bindings(
+    plan = function(strategy = NULL, ...) {
+      if (identical(strategy, future::multisession)) {
+        # what future does before launching workers: install, then fail
+        real_plan(future::multisession, workers = 1L, substitute = FALSE,
+                  .init = FALSE)
+        stop("2 of 2 workers failed to connect")
+      }
+      real_plan(strategy, ..., substitute = FALSE)
+    },
+    .package = "future"
+  )
+  expect_error(fs_chi(d, "y", parallel = TRUE, n_cores = 2L),
+               "workers failed")
+  expect_true(inherits(real_plan(), "sequential"))
+
+  # (2) A caller's non-sequential plan is used as is, never re-set.
+  set_calls <- 0L
+  testthat::local_mocked_bindings(
+    plan = function(strategy = NULL, ...) {
+      if (is.function(strategy) || is.list(strategy)) {
+        set_calls <<- set_calls + 1L
+      }
+      real_plan(strategy, ..., substitute = FALSE)
+    },
+    .package = "future"
+  )
+  real_plan(future::sequential, substitute = FALSE)
+  set_calls <- 0L
+  real_plan(future::multicore, workers = 2L, substitute = FALSE)
+  before <- real_plan()
+  res <- fs_chi(d, "y", parallel = TRUE, n_cores = 2L)
+  expect_identical(set_calls, 0L)
+  expect_identical(real_plan(), before)
+  expect_true("f" %in% selected(res))
+})

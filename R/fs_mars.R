@@ -230,7 +230,17 @@ mars_train_control <- function(number, repeats, search, train, target,
     returnResamp = "all",
     summaryFunction = summary_fun,
     verboseIter = isTRUE(verbose),
-    sampling = if (is_class) "up" else NULL,
+    # caret's built-in "up" sampler calls upSample() by bare name, which
+    # fails on parallel workers that do not have caret attached ("could not
+    # find function \"upSample\""); this spec is the same sampler with the
+    # namespace spelled out.
+    sampling = if (is_class) {
+      list(name = "up",
+           func = function(x, y) caret::upSample(x, y, list = TRUE),
+           first = TRUE)
+    } else {
+      NULL
+    },
     seeds = seeds
   )
 }
@@ -276,7 +286,7 @@ mars_train_model <- function(train, target, ctrl, hyperParameters,
     }
   }
 
-  fmla <- stats::as.formula(sprintf("`%s` ~ .", target))
+  fmla <- stats::as.formula(paste(backtick(target), "~ ."))
 
   train_args <- list(
     fmla,
@@ -293,9 +303,21 @@ mars_train_model <- function(train, target, ctrl, hyperParameters,
     # session fails with "object 'contr.earth.response' ... not found".
     # caret's earth fit code attaches earth a moment later anyway; attaching
     # it here, scoped to this call, only moves that forward so the grid can
-    # be built. withr detaches it again on exit if it was not attached before.
+    # be built. library(earth) also attaches earth's Depends (Formula,
+    # plotmo, plotrix, TeachingDemos); withr detaches only earth itself, so
+    # every other entry this attach added is detached too (after earth), and
+    # the search path is left exactly as it was.
     if (is.factor(train[[target]]) && !"package:earth" %in% search()) {
+      search_before <- search()
       suppressPackageStartupMessages(withr::local_package("earth"))
+      added <- setdiff(search(), c(search_before, "package:earth"))
+      withr::defer({
+        for (p in added) {
+          if (p %in% search()) {
+            try(detach(p, character.only = TRUE), silent = TRUE)
+          }
+        }
+      }, priority = "last")
     }
     train_args$tuneLength <- tune_length
   } else {
@@ -368,7 +390,21 @@ mars_predictor_scores <- function(importance, predictors, floor = TRUE) {
   }
   # caret's formula interface backticks non-syntactic names ("`my var`",
   # "`my grp`b"); strip those quotes so they can match the raw column names.
-  imp_names <- unbacktick_names(names(importance))
+  # On the classification path the names can carry two layers of quoting
+  # ("`\\`x 1\\``"), so peel layers until the name matches a candidate (or
+  # stops changing); a real column name that starts with a backtick is
+  # therefore never over-stripped.
+  resolve <- function(nm) {
+    repeat {
+      if (nm %in% predictors || any(startsWith(nm, predictors))) return(nm)
+      nxt <- unbacktick_names(nm)
+      if (identical(nxt, nm)) return(nm)
+      nm <- nxt
+    }
+  }
+  imp_names <- vapply(names(importance), function(nm) {
+    if (is.na(nm)) NA_character_ else resolve(nm)
+  }, character(1L), USE.NAMES = FALSE)
   for (i in seq_along(importance)) {
     nm <- imp_names[i]
     val <- importance[[i]]
@@ -475,7 +511,11 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
         neg_level <- levels(test[[target]])[2L]
 
         if (pos_level %in% colnames(probs)) {
-          if (requireNamespace("pROC", quietly = TRUE)) {
+          both_classes <- all(c(pos_level, neg_level) %in% test[[target]])
+          if (!both_classes) {
+            out$metrics$ROC_AUC <- NA_real_
+            mars_message("Test set lacks one of the two classes; test-set ROC AUC is NA.", verbose)
+          } else if (requireNamespace("pROC", quietly = TRUE)) {
             roc_obj <- pROC::roc(
               response = test[[target]],
               predictor = probs[[pos_level]],
@@ -516,8 +556,15 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
   # Variable importance, unscaled: caret's scale = TRUE shifts the smallest
   # importance to 0, which would hide the weakest predictor earth actually
   # kept. Unused predictors are already reported as 0 by caret.
-  out$varimp <- tryCatch(caret::varImp(model, scale = FALSE),
-                         error = function(e) NULL)
+  out$varimp <- tryCatch(
+    caret::varImp(model, scale = FALSE),
+    error = function(e) {
+      warning("caret::varImp() failed: ", conditionMessage(e),
+              "; selection falls back to the predictors used by the final ",
+              "earth model and 'scores' is NULL.", call. = FALSE)
+      NULL
+    }
+  )
 
   out
 }
@@ -565,7 +612,9 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' duplicated rows across folds). The FIRST factor level is treated as the
 #' positive class for ROC/PR AUC, and the test-set ROC AUC is computed with a
 #' fixed direction, so a worse-than-chance model scores below 0.5 rather than
-#' being silently flipped. Factor levels are sanitized with
+#' being silently flipped. Classification requires the 'e1071' package
+#' (used by `caret::confusionMatrix()` and caret's resampling summaries),
+#' which is checked before any training. Factor levels are sanitized with
 #' `make.names(unique = TRUE)`, so distinct labels can never be merged.
 #'
 #' For regression, the reported `R2` comes from `caret::R2()`, which is the
@@ -612,19 +661,22 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' @param n_cores Integer >= 1. Number of parallel workers for model training
 #'   (default 1 = sequential; no cluster is created and caret's
 #'   `allowParallel` stays FALSE). Values above the detected core count are
-#'   capped; requires 'doParallel' and 'foreach' when greater than 1.
+#'   capped; requires 'doParallel' and 'foreach' when greater than 1. The
+#'   workers need 'caret' and 'earth' installed, not attached.
 #'
 #' @return An object of class `fs_result` with:
 #' \describe{
 #'   \item{selected}{Character vector of the predictors earth retained
 #'         (those appearing in a term of the final earth model), ordered by
-#'         decreasing importance. Empty when no importance is available.}
+#'         decreasing importance. If `caret::varImp()` fails (with a
+#'         warning), the predictors in the final earth model are still
+#'         reported, in model order.}
 #'   \item{scores}{Named numeric vector of unscaled variable importance, one
 #'         entry per candidate predictor that entered training. Predictors
 #'         earth pruned away score 0; a predictor in the final model keeps its
 #'         importance even when that is zero or negative. `NULL` when caret cannot
-#'         compute variable importance for the fitted model, in which case
-#'         `selected` is empty.}
+#'         compute variable importance for the fitted model (a warning carrying
+#'         caret's error message is raised).}
 #'   \item{method}{"mars".}
 #'   \item{task}{"classification" for a factor or character target (characters
 #'         are coerced to factor), "regression" for a numeric one.}
@@ -633,7 +685,8 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #'         carrying the training levels for classification), `metrics`
 #'         (RMSE/MAE/R2 for regression; Accuracy/Kappa plus ROC_AUC/PR_AUC when
 #'         the optional 'pROC'/'PRROC' packages are installed for binary
-#'         classification), `confusion_matrix` (classification only, else
+#'         classification; `ROC_AUC` is `NA` and `PR_AUC` absent when the
+#'         held-out rows contain only one class), `confusion_matrix` (classification only, else
 #'         NULL), `varimp` (the `caret::varImp()` object, or NULL when
 #'         unsupported), `removed_predictors` (a list with `nzv` and `corr`
 #'         naming the dropped predictors), `train_index` (integer row indices
@@ -716,6 +769,11 @@ fs_mars <- function(data,
   n_cores <- resolve_cores(n_cores, "n_cores")
 
   fs_require(c("caret", "earth"), "MARS feature selection")
+  # caret::confusionMatrix() (test-set metrics) and caret's classification
+  # resampling summaries call e1071; check before the whole tuning run.
+  if (is.factor(data[[target]]) || is.character(data[[target]])) {
+    fs_require("e1071", "MARS classification (caret::confusionMatrix)")
+  }
   if (n_cores > 1L) {
     fs_require(c("doParallel", "foreach"), "parallel model training")
   }
@@ -770,8 +828,12 @@ fs_mars <- function(data,
   mars_message("Splitting data into training and test sets...", verbose)
   .mars_train_idx <- fs_split_index(data[[target]], p = train_ratio,
                                     seed = seed)
+  # The complement is computed outside data.table's `i`: a call such as
+  # `data[-.mars_train_idx]` is evaluated with the columns in scope, so a
+  # column of that name would silently replace the split index.
+  .mars_test_idx <- setdiff(seq_len(nrow(data)), .mars_train_idx)
   train <- data[.mars_train_idx]
-  test <- data[-.mars_train_idx]
+  test <- data[.mars_test_idx]
   if (nrow(test) == 0L) {
     stop("Test set is empty after splitting; decrease 'train_ratio' or supply more data.")
   }
@@ -798,6 +860,14 @@ fs_mars <- function(data,
   }
 
   candidate_predictors <- setdiff(colnames(train), target)
+  if (length(candidate_predictors) == 0L) {
+    stop("No predictors remain after preprocessing (near-zero-variance ",
+         "removal dropped: ",
+         paste(utils::head(pp$removed$nzv, 5L), collapse = ", "),
+         if (length(pp$removed$nzv) > 5L) ", ..." else "",
+         "). Set remove_nzv = FALSE or supply informative predictors.",
+         call. = FALSE)
+  }
 
   # ---- Tuning setup ---------------------------------------------------------
   hyperParameters <- mars_hyper_grid(degree, nprune)
@@ -844,8 +914,13 @@ fs_mars <- function(data,
   imp_vec <- mars_importance_vector(ev$varimp)
   if (is.null(imp_vec)) {
     scores <- NULL
-    selected_features <- character(0)
-    mars_message("Variable importance is unavailable for this model; no features reported as selected.", verbose)
+    used <- mars_used_predictors(model, candidate_predictors)
+    selected_features <- if (is.null(used)) character(0) else names(used)[used]
+    if (is.null(used)) {
+      warning("Variable importance and the final earth model's terms are ",
+              "both unavailable; no features reported as selected.",
+              call. = FALSE)
+    }
   } else {
     scores <- mars_predictor_scores(imp_vec, candidate_predictors)
     # Select what the final earth model actually uses. earth's GCV importance

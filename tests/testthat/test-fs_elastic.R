@@ -528,3 +528,131 @@ test_that("user resampling indices are not silently shifted by dropped NA rows",
   )
   expect_s3_class(ok, "fs_result")
 })
+
+test_that("zero-variance check is scale-relative and agrees for dense and sparse input", {
+  # Review finding C17/C20: the sparse branch flagged tiny-scale and
+  # large-offset columns as constant, the dense branch (sds == 0) let a
+  # round-off-constant column through.
+  skip_if_not_installed("Matrix")
+  set.seed(1)
+  n <- 50
+  m <- cbind(small = rnorm(n) * 1e-5, big = 1e4 + rnorm(n), ok = rnorm(n),
+             ts = 1.7e9 + round(rnorm(n) * 10), one_nz = c(rep(0, n - 1), 2),
+             cst = rep(3, n),
+             roff = rep(c(0.1 + 0.2, 0.3), length.out = n))
+  sp <- Matrix::Matrix(m, sparse = TRUE)
+  expect_identical(featR:::elastic_zero_sd_cols(m), c("cst", "roff"))
+  expect_identical(featR:::elastic_zero_sd_cols(sp), c("cst", "roff"))
+  expect_identical(featR:::elastic_zero_sd_cols(Matrix::Matrix(0, 3, 2,
+                     dimnames = list(NULL, c("p", "q")))), c("p", "q"))
+})
+
+test_that("a round-off-constant predictor is rejected through the public API", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  set.seed(1)
+  n <- 100
+  d <- data.frame(a = rnorm(n), b = rnorm(n))
+  d$y <- d$a + rnorm(n)
+  d$roff <- ifelse(d$y > 0, 0.1 + 0.2, 0.3)
+  expect_error(fs_elastic(d, "y", alpha_seq = 1, seed = 1),
+               "Zero-variance predictor column detected before model training: 'roff'")
+})
+
+test_that("infinite target or predictor values are a clear error", {
+  # Review finding C21: an Inf predictor was silently zeroed out.
+  set.seed(1)
+  n <- 30
+  d <- data.frame(a = rnorm(n), b = rnorm(n))
+  d$y <- d$a + rnorm(n)
+  d1 <- d; d1$b[3] <- Inf
+  expect_error(fs_elastic(d1, "y", alpha_seq = 1), "Inf/-Inf: b")
+  d2 <- d; d2$y[3] <- -Inf
+  expect_error(fs_elastic(d2, "y", alpha_seq = 1), "Inf/-Inf: y")
+})
+
+test_that("classes emptied by NA-row removal are dropped before task inference", {
+  # Review findings C33/C41: the empty level survived and crashed glmnet.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  set.seed(1)
+  n <- 90
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n))
+  d$y <- factor(ifelse(d$x1 > 0, "hi", "lo"), levels = c("hi", "lo", "rare"))
+  d$y[1:3] <- "rare"
+  d$x2[1:3] <- NA
+  expect_message(res <- fs_elastic(d, "y", alpha_seq = 1, seed = 1),
+                 "'rare' of 'y' occur only in rows with missing")
+  expect_s3_class(res, "fs_result")
+  expect_identical(res$model$finalModel$classnames, c("hi", "lo"))
+
+  d3 <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n),
+                   y = factor(rep(c("a", "b", "c"), each = 30)))
+  d3$x1[31:90] <- NA
+  expect_error(suppressMessages(fs_elastic(d3, "y", alpha_seq = 1)),
+               "at least 2 levels")
+  d4 <- d3[1:61, ]
+  d4$x1 <- rnorm(61)
+  expect_error(fs_elastic(d4, "y", alpha_seq = 1),
+               "Class\\(es\\) 'c' of 'y' have fewer than 2 complete rows")
+})
+
+test_that("trControl$indexFinal is refused when NA rows were dropped", {
+  # Review finding C38.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  set.seed(1)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n))
+  d$y <- d$x1 + rnorm(n, sd = 0.1)
+  d$x2[1:10] <- NA
+  tc <- caret::trainControl(method = "cv", number = 3, indexFinal = 41:50)
+  expect_error(fs_elastic(d, "y", alpha_seq = 1, trControl = tc, seed = 1),
+               "trControl\\$indexFinal")
+})
+
+test_that("a malformed trControl is rejected and the used metric is reported", {
+  # Review finding C72.
+  d <- data.frame(y = rnorm(30), a = rnorm(30), b = rnorm(30))
+  expect_error(fs_elastic(d, "y", trControl = list(method = "cv")),
+               "caret::trainControl\\(\\); missing field\\(s\\): number")
+  expect_error(fs_elastic(d, "y", trControl = "cv"),
+               "must be NULL or a list built by caret::trainControl")
+
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  skip_on_cran()
+  expect_warning(res <- fs_elastic(d, "y", alpha_seq = 1, metric = "MAE2",
+                                   seed = 1),
+                 "RMSE will be used instead")
+  expect_identical(res$details$metric_name, "RMSE")
+  expect_true(is.finite(res$details$metric_value))
+})
+
+test_that("a one-level categorical predictor is a clear error naming it", {
+  # Review finding C69 (fs_elastic part).
+  d <- data.frame(y = rnorm(30), a = rnorm(30), b = rnorm(30), f = "u")
+  expect_error(fs_elastic(d, "y", alpha_seq = 1),
+               "fewer than 2 distinct values: 'f'")
+  d$f <- factor("u")
+  expect_error(fs_elastic(d, "y", alpha_seq = 1),
+               "fewer than 2 distinct values: 'f'")
+})
+
+test_that("a dummy name colliding with another column is an error", {
+  # Review finding C81 (fs_elastic part).
+  skip_if_not_installed("caret")
+  skip_if_not_installed("glmnet")
+  skip_if_not_installed("Matrix")
+  set.seed(4)
+  n <- 40
+  d <- data.frame(g = factor(sample(c("a", "b"), n, TRUE)), gb = rnorm(n),
+                  z = rnorm(n))
+  d$y <- d$z + rnorm(n)
+  expect_error(fs_elastic(d, "y", alpha_seq = 1), "collide with existing columns: gb")
+})

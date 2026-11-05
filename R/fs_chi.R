@@ -41,7 +41,7 @@
 #' with enough rows a negligible association still clears any `sig_level`.
 #'
 #' @param data A data.frame or data.table with features and target, with
-#'   unique column names. Character columns are coerced to factor. The input
+#'   unique, non-empty, non-NA column names. Character columns are coerced to factor. The input
 #'   object is never modified.
 #' @param target Character scalar: name of the target column. It is coerced to
 #'   a factor if necessary and must have at least 2 non-NA levels.
@@ -54,7 +54,8 @@
 #'   corrected.
 #' @param p_adjust_method Character: one of `stats::p.adjust.methods`
 #'   (default "bonferroni"). Set to "none" to disable multiple-testing
-#'   correction. Matching is case-insensitive. The correction counts only the
+#'   correction. Matching is case-insensitive, and an invalid name is an
+#'   error before any feature is tested. The correction counts only the
 #'   features that were actually tested: a skipped feature has an `NA` p-value,
 #'   and `stats::p.adjust()` drops NAs before its default `n = length(p)` is
 #'   evaluated, so skipped features keep an `NA` adjusted p-value and do not
@@ -79,9 +80,13 @@
 #' @param parallel Logical; if TRUE, run features in parallel using the
 #'   suggested furrr and future packages. Default FALSE (sequential).
 #' @param n_cores Whole number >= 1. Number of workers used when
-#'   `parallel = TRUE`; requests are capped at the detected core count. A
-#'   `future::multisession` plan is set for the duration of the call and the
-#'   previous plan is restored on exit. Default 2.
+#'   `parallel = TRUE`; requests are capped at the detected core count. If
+#'   the current future plan is sequential (the default), a
+#'   `future::multisession` plan with that many workers is set for the
+#'   duration of the call and the previous plan is restored on exit, even if
+#'   worker start-up fails. If you have already set a non-sequential plan
+#'   (e.g. `future::plan(future::multisession, workers = 4)`), it is used as
+#'   is, its workers are left running, and `n_cores` is ignored. Default 2.
 #'
 #' @return An object of class `fs_result` with:
 #' \describe{
@@ -143,6 +148,9 @@ fs_chi <- function(
     assert_flag(continuity_correction, "continuity_correction")
   }
   assert_string(p_adjust_method, "p_adjust_method")
+  # Check the method before any (possibly Monte-Carlo) testing runs, and also
+  # when there is nothing to test, so an invalid name is never stored.
+  .fs_match_p_adjust(p_adjust_method)
   simulation_B <- assert_count(simulation_B, "simulation_B", lower = 100L)
   assert_flag(verbose, "verbose")
   assert_flag(parallel, "parallel")
@@ -202,10 +210,18 @@ fs_chi <- function(
       message(sprintf("Testing %d feature(s) on %d worker(s).",
                       length(feature_cols), workers))
     }
-    # plan() invisibly returns the previous plan when setting a new one;
-    # restore it no matter how we exit.
-    old_plan <- future::plan(future::multisession, workers = workers)
-    on.exit(try(future::plan(old_plan), silent = TRUE), add = TRUE)
+    # A plan the caller already set (anything but sequential) is used as is:
+    # replacing it and then "restoring" it by calling plan() again would shut
+    # down the caller's workers and start fresh ones. Otherwise install a
+    # temporary multisession plan, registering the restore BEFORE the new
+    # plan is set, so a failed worker start-up cannot leak featR's plan.
+    if (inherits(future::plan(), "sequential")) {
+      old_plan <- future::plan("list")
+      on.exit(try(future::plan(old_plan), silent = TRUE), add = TRUE)
+      future::plan(future::multisession, workers = workers)
+    } else if (verbose) {
+      message("Using the future plan already set; 'n_cores' is ignored.")
+    }
   }
 
   # ---- 4) Execute tests ----
@@ -288,13 +304,9 @@ fs_chi <- function(
   assert_target(data, target, "target")
   # Columns are looked up by name, so a duplicated name would test its first
   # copy twice and never the second (or fail inside data.table when the
-  # copies are character). Reject rather than silently mis-test.
-  dupes <- unique(names(data)[duplicated(names(data))])
-  if (length(dupes) > 0L) {
-    stop("'data' must have unique column names; duplicated: ",
-         paste(utils::head(dupes, 5L), collapse = ", "),
-         if (length(dupes) > 5L) ", ..." else "", ".", call. = FALSE)
-  }
+  # copies are character), and an empty or NA name looks up NULL, so that
+  # column would be silently left out. Reject rather than silently mis-test.
+  assert_column_names(data, "fs_chi")
 
   dt <- as_dt(data)
 
@@ -460,14 +472,21 @@ fs_chi <- function(
 #' features should ever count towards the correction.
 #' @noRd
 .fs_adjust_pvalues <- function(pvals, method = "bonferroni") {
+  stats::p.adjust(pvals, method = .fs_match_p_adjust(method))
+}
+
+#' Canonical spelling of a p.adjust() method, matched case-insensitively
+#'
+#' Errors on anything that is not one of stats::p.adjust.methods.
+#' @noRd
+.fs_match_p_adjust <- function(method) {
   choices <- stats::p.adjust.methods
   idx <- match(tolower(method), tolower(choices))
   if (is.na(idx)) {
     stop(sprintf(
       "Invalid p_adjust_method '%s'. Must be one of: %s",
       method, paste(choices, collapse = ", ")
-    ))
+    ), call. = FALSE)
   }
-  method <- choices[idx]
-  stats::p.adjust(pvals, method = method)
+  choices[idx]
 }

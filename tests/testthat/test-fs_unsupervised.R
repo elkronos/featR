@@ -486,3 +486,12 @@ test_that("fs_unsupervised's formals match the unified API", {
   expect_identical(fu$na_rm, TRUE)
   expect_identical(fu$verbose, FALSE)
 })
+
+test_that("matrix input with an empty column name is an error, not renamed V<j>", {
+  set.seed(1)
+  m <- cbind(V3 = rnorm(30), rnorm(30))
+  colnames(m)[2] <- ""
+  expect_error(fs_unsupervised(m), "must not have empty or NA column names")
+  # A matrix with no colnames at all still gets generated names.
+  expect_identical(names(fs_unsupervised(unname(m))$scores), c("V1", "V2"))
+})

@@ -177,13 +177,14 @@ test_that("regression smoke: fs_result with the documented snake_case details", 
   expect_length(res$details$optimal_size, 1L)
   expect_identical(res$details$n_features, 4L)
 
-  # scores come from caret::varImp() on the rfe object
+  # scores: full-size importance averaged over every resample, one entry per
+  # candidate; caret's varImp() table (optimal-size survivors) is a subset
   expect_true(is.numeric(res$scores))
   expect_false(anyNA(res$scores))
-  expect_true(all(names(res$scores) %in% c("x1", "x2", "x3", "x4")))
+  expect_setequal(names(res$scores), c("x1", "x2", "x3", "x4"))
   expect_true(all(res$selected %in% names(res$scores)))
-  expect_setequal(names(res$scores),
-                  rownames(res$details$variable_importance))
+  expect_true(all(rownames(res$details$variable_importance) %in%
+                    names(res$scores)))
 
   # test_metrics is caret::postResample() on the held-out rows
   expect_true(is.numeric(res$details$test_metrics))
@@ -584,4 +585,258 @@ test_that("row indices in rfe_control are refused rather than misapplied", {
   expect_error(featR:::rfe_validate_train_control(
     list(method = "cv", number = 2, indexOut = list(1:3))
   ), "train_control\\$indexOut")
+})
+
+# ---- Round-three regression tests ------------------------------------------
+
+lm_ctl <- function(number = 3) {
+  list(method = "cv", number = number, functions = caret::lmFuncs)
+}
+
+test_that("a dummy name colliding with another column is an error (C0)", {
+  # REGRESSION: factor g (level "1") encodes to "g1", next to a numeric
+  # "g1"; setdiff() collapsed the two and caret resolved "g1" to the noise
+  # dummy, so the real predictor was silently lost (held-out R2 ~ 0).
+  skip_if_not_installed("caret")
+  set.seed(1)
+  n <- 60
+  d <- data.frame(g = factor(sample(c("0", "1"), n, TRUE)), g1 = rnorm(n),
+                  w = rnorm(n))
+  d$y <- 3 * d$g1 + rnorm(n)
+  expect_error(
+    fs_recursivefeature(d, "y", sizes = 1:2, handle_categorical = TRUE,
+                        rfe_control = lm_ctl(), seed = 1),
+    "collide with existing columns: g1"
+  )
+})
+
+test_that("handle_categorical = TRUE reports names without backticks (C1, C79)", {
+  skip_if_not_installed("caret")
+  skip_on_cran()
+  set.seed(1)
+  n <- 100
+  d <- data.frame(`x 1` = rnorm(n), `b-2` = rnorm(n), c3 = rnorm(n),
+                  check.names = FALSE)
+  d$`my grp` <- factor(sample(c("a", "b", "c"), n, TRUE))
+  d$y <- 2 * d$`x 1` + d$`b-2` + 3 * (d$`my grp` == "b") + rnorm(n, sd = 0.3)
+  res <- fs_recursivefeature(d, "y", handle_categorical = TRUE,
+                             rfe_control = lm_ctl(), seed = 1)
+  reported <- c(res$selected, names(res$scores),
+                rownames(res$details$variable_importance))
+  expect_false(any(grepl("`", reported, fixed = TRUE)))
+  expect_true(all(c("x 1", "b-2", "my grpb") %in% res$selected))
+  num_sel <- intersect(res$selected, names(d))
+  expect_true(all(c("x 1", "b-2") %in% num_sel))
+  expect_silent(d[num_sel])
+})
+
+test_that("factor predictors with lmFuncs and no encoding fail clearly (C16)", {
+  # REGRESSION: lmFuncs ranks dummy names ("gb"), which caret then used to
+  # subset x: 'task 1 failed - "undefined columns selected"'.
+  skip_if_not_installed("caret")
+  skip_on_cran()
+  set.seed(1)
+  n <- 90
+  d <- data.frame(a = rnorm(n), b = rnorm(n),
+                  g = factor(sample(letters[1:3], n, TRUE)))
+  d$y <- 2 * d$a + rnorm(n)
+  expect_error(
+    fs_recursivefeature(d, "y", sizes = 1:3, rfe_control = lm_ctl(), seed = 1),
+    "set handle_categorical = TRUE"
+  )
+})
+
+test_that("infinite values in a predictor or the target are rejected (C23)", {
+  # No skips: the check runs before fs_require("caret").
+  set.seed(1)
+  n <- 40
+  d <- data.frame(a = rnorm(n), b = rnorm(n), c = rnorm(n))
+  d$y <- d$a + rnorm(n)
+  d1 <- d
+  d1$b[3] <- Inf
+  expect_error(fs_recursivefeature(d1, "y", seed = 1),
+               "finite values; column\\(s\\) with Inf/-Inf: b")
+  d2 <- d
+  d2$y[3] <- -Inf
+  expect_error(fs_recursivefeature(d2, "y", seed = 1),
+               "finite values; column\\(s\\) with Inf/-Inf: y")
+})
+
+test_that("factor levels absent from the training rows are not encoded (C35)", {
+  # REGRESSION: unused and test-only levels became all-zero candidate dummies.
+  skip_if_not_installed("caret")
+  skip_on_cran()
+  set.seed(1)
+  n <- 80
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), x3 = rnorm(n))
+  d$y <- d$x1 + rnorm(n)
+  d$g <- factor(sample(c("p", "q"), n, TRUE),
+                levels = c("p", "q", "r", "never"))
+  res <- suppressWarnings(fs_recursivefeature(
+    d, "y", handle_categorical = TRUE, rfe_control = lm_ctl(), seed = 3
+  ))
+  expect_identical(res$details$preprocessor$lvls$g, c("p", "q"))
+  expect_identical(res$details$n_features, 4L)
+
+  # A held-out row whose level the training rows never saw is reported.
+  test_row <- setdiff(seq_len(n), res$details$train_index)[1L]
+  d$g[test_row] <- "r"
+  expect_warning(
+    fs_recursivefeature(d, "y", handle_categorical = TRUE,
+                        rfe_control = lm_ctl(), seed = 3),
+    "1 held-out value\\(s\\) have a factor level not seen"
+  )
+})
+
+test_that("indexFinal is refused like index/indexOut (C37)", {
+  skip_if_not_installed("caret")
+  expect_error(featR:::rfe_validate_train_control(
+    list(method = "cv", number = 3, indexFinal = 1:10)
+  ), "train_control\\$indexFinal")
+  d <- data.frame(y = rnorm(30), x1 = rnorm(30), x2 = rnorm(30))
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = lm_ctl(),
+                        train_control = list(method = "cv", number = 3,
+                                             indexFinal = 1:10),
+                        model_method = "lm", return_final_model = TRUE),
+    "train_control\\$indexFinal"
+  )
+})
+
+test_that("scores average full-size importance over every resample (C42)", {
+  # REGRESSION: scores came from caret::varImp(rfe), which averages only the
+  # resamples where a variable survived to the optimal size, so noise
+  # variables that survived once outranked selected ones and candidates that
+  # never survived had no score at all.
+  skip_if_not_installed("caret")
+  skip_on_cran()
+  set.seed(5)
+  n <- 100
+  p <- 20
+  df <- as.data.frame(matrix(rnorm(n * p), n))
+  df$y <- df$V1 + rnorm(n)
+  res <- fs_recursivefeature(df, "y", sizes = 5,
+                             rfe_control = lm_ctl(5), seed = 1)
+  expect_setequal(names(res$scores), paste0("V", 1:p))
+  expect_false(anyNA(res$scores))
+  v <- res$details$rfe$variables
+  full <- v[v$Variables == max(v$Variables), ]
+  expected <- tapply(full$Overall, full$var, mean)
+  expect_equal(res$scores[names(expected)], c(expected), ignore_attr = TRUE)
+  expect_identical(names(sort(res$scores, decreasing = TRUE))[1L], "V1")
+})
+
+test_that("a sequential call does not use a caller's foreach backend for the final model (C53)", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("foreach")
+  skip_on_cran()
+  prev <- featR:::foreach_backend_snapshot()
+  withr::defer(featR:::foreach_backend_restore(prev))
+  calls <- 0L
+  spy <- function(obj, expr, envir, data) {
+    calls <<- calls + 1L
+    foreach:::doSEQ(obj, expr, envir, data)
+  }
+  foreach::setDoPar(spy, NULL, function(data, item) {
+    switch(item, workers = 4L, name = "spy", version = "1", NULL)
+  })
+  set.seed(1)
+  d <- data.frame(y = rnorm(60), x1 = rnorm(60), x2 = rnorm(60),
+                  x3 = rnorm(60))
+  res <- fs_recursivefeature(d, "y", sizes = 1:2, rfe_control = lm_ctl(),
+                             train_control = list(method = "cv", number = 3),
+                             model_method = "lm", return_final_model = TRUE,
+                             seed = 1)
+  expect_identical(calls, 0L)
+  expect_false(res$model$control$allowParallel)
+})
+
+test_that("constant predictors are removed before RFE with a warning (C58)", {
+  # REGRESSION: a constant column reached randomForest, which never returns
+  # for a classification forest on one constant predictor (subset size 1).
+  # lmFuncs keeps this fast; the removal happens before any function set runs.
+  skip_if_not_installed("caret")
+  skip_on_cran()
+  set.seed(2)
+  n <- 60
+  d <- data.frame(y = rnorm(n), x1 = rnorm(n), x2 = rnorm(n), k = 0,
+                  f = factor("u"))
+  expect_warning(
+    res <- fs_recursivefeature(d, "y", rfe_control = lm_ctl(), seed = 1),
+    "constant on the training rows before RFE: k, f"
+  )
+  expect_identical(res$details$n_features, 2L)
+  expect_false(any(c("k", "f") %in% names(res$scores)))
+})
+
+test_that("e1071 is checked before any resampling for classification (C61)", {
+  skip_if_not_installed("caret")
+  local_mocked_bindings(
+    fs_require = function(pkgs, purpose = NULL) {
+      if ("e1071" %in% pkgs) stop("e1071 missing (mocked)", call. = FALSE)
+      invisible(TRUE)
+    },
+    rfe_perform = function(...) stop("rfe_perform was reached", call. = FALSE)
+  )
+  d <- data.frame(y = factor(rep(c("a", "b"), 20)), x1 = rnorm(40),
+                  x2 = rnorm(40))
+  expect_error(fs_recursivefeature(d, "y", seed = 1), "e1071 missing")
+})
+
+test_that("rfe_control method, number and functions are validated (C70)", {
+  skip_if_not_installed("caret")
+  d <- data.frame(y = rnorm(30), x1 = rnorm(30), x2 = rnorm(30))
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = list(method = "cv", number = 1)),
+    "'rfe_control\\$number' must be at least 2 for method = 'cv'"
+  )
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = list(method = "foo", number = 3)),
+    "'rfe_control\\$method' must be one of"
+  )
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = list(method = "cv", number = 3,
+                                                   functions = list(a = 1))),
+    "missing or not a function: summary, fit, pred, rank, selectSize, selectVar"
+  )
+  bad_set <- caret::lmFuncs
+  bad_set$rank <- NULL
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = list(method = "cv", number = 3,
+                                                   functions = bad_set)),
+    "missing or not a function: rank"
+  )
+  expect_error(featR:::rfe_validate_train_control(
+    list(method = "cv", number = 1)
+  ), "'train_control\\$number' must be at least 2")
+  # LOOCV / boot with number = 1 stay valid
+  expect_silent(featR:::rfe_validate_rfe_control(
+    list(method = "boot", number = 1)
+  ))
+})
+
+test_that("train_control and model_method are validated before the search (C71)", {
+  skip_if_not_installed("caret")
+  local_mocked_bindings(
+    rfe_perform = function(...) stop("rfe_perform was reached", call. = FALSE)
+  )
+  d <- data.frame(y = rnorm(30), x1 = rnorm(30), x2 = rnorm(30))
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = lm_ctl(),
+                        train_control = list(method = "cv"),
+                        return_final_model = TRUE, model_method = "lm"),
+    "provide 'train_control\\$number'"
+  )
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = lm_ctl(),
+                        model_method = "nonexistent",
+                        return_final_model = TRUE),
+    "'model_method' = 'nonexistent' is not in caret's built-in model library"
+  )
+  # ignored (and so not validated) without a final model
+  expect_error(
+    fs_recursivefeature(d, "y", rfe_control = lm_ctl(),
+                        model_method = "nonexistent"),
+    "rfe_perform was reached"
+  )
 })

@@ -459,3 +459,21 @@ test_that("fs_split_index explains a one-row split in featR terms", {
     "At least 2 rows are needed"
   )
 })
+
+test_that("as_dt keeps a matrix's own column names", {
+  m <- cbind(y = 1:3, V3 = 4:6, 7:9)
+  colnames(m)[3] <- ""
+  expect_identical(names(as_dt(m)), c("y", "V3", ""))
+  expect_identical(names(as_dt(unname(m))), c("V1", "V2", "V3"))
+})
+
+test_that("safe_col_spread is immune to sd() over- and underflow", {
+  set.seed(1)
+  x <- rnorm(20)
+  for (k in c(1e-170, 1, 1e170)) {
+    sp <- safe_col_spread(x * k)
+    expect_equal(sp$rel, sd(x) / max(abs(x)))
+    expect_identical(sp$representable, k == 1)
+  }
+  expect_identical(safe_col_spread(rep(0, 5))$rel, 0)
+})

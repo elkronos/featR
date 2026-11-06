@@ -2,7 +2,7 @@
 % Please edit documentation in R/fs_infogain.R
 \name{fs_infogain}
 \alias{fs_infogain}
-\title{Feature Selection via Information Gain}
+\title{Rank features by information gain}
 \usage{
 fs_infogain(
   data,
@@ -15,121 +15,142 @@ fs_infogain(
 )
 }
 \arguments{
-\item{data}{A data.frame (a data.table is accepted and is copied, never
-modified in place), or a list of data.frames each containing \code{target}.
-Column names must be unique, non-empty and non-NA within each
-data.frame.}
+\item{data}{A data frame, or a list of data frames that each contain
+\code{target}. A data.table is copied, never modified in place. Column names
+must be unique, non-empty, and not \code{NA} within each data frame, and
+list columns are not supported.}
 
-\item{target}{Character. Name of the target column.}
+\item{target}{Name of the target column.}
 
-\item{numeric_bins}{Optional whole number >= 1 (values below 2 are clamped
-to 2) overriding the automatic bin count for numeric predictors and for a
-numeric target. Default \code{NULL} (bins chosen per column).}
+\item{numeric_bins}{Optional whole number of bins for numeric predictors
+and a numeric target, replacing the automatic count. Values below 2 are
+raised to 2. Default \code{NULL} (bins chosen per column).}
 
-\item{normalize}{One of \code{"none"} (default, raw information gain in bits)
-or \code{"gain_ratio"} (gain divided by the predictor's split entropy). See
-the section on cardinality bias.}
+\item{normalize}{\code{"none"} (default) for raw information gain in bits, or
+\code{"gain_ratio"} for gain divided by the predictor's split entropy. See
+"Cardinality bias and the gain ratio".}
 
-\item{top_n}{Optional whole number >= 1. When supplied, \code{selected} holds
-the \code{top_n} highest-scoring features (fewer if fewer were scored). This
-is a rank cut, not a score floor: a zero-scoring feature is selected if
-the ranking reaches it. When \code{NULL} (default), \code{selected} instead holds
-every feature whose score is strictly greater than 0. A gain within
-floating-point rounding of zero (as an exactly independent predictor
-produces) is reported as exactly 0, so it is not selected. That is not a
-noise screen: the sample gain of a predictor unrelated to the target is
-still positive in almost every data set (more so with more bins or
-levels), so under the default essentially every non-constant predictor
-is selected -- all 50 of 50 pure-noise columns in a 200-row example. Use
-\code{top_n}, or compare against gains computed on a permuted target, to make
-an actual cut.}
+\item{top_n}{Optional whole number of at least 1. When supplied,
+\code{selected} holds the \code{top_n} highest-scoring features (fewer if fewer
+were scored). This is a rank cut, not a score floor, so a feature
+scoring 0 is selected if the ranking reaches it. When \code{NULL} (default),
+\code{selected} holds every feature with a score strictly greater than 0. A
+gain within floating-point rounding of zero, as an exactly independent
+predictor produces, is reported as exactly 0 and is not selected.}
 
-\item{remove_na}{Logical. If \code{TRUE} (default), rows with NA in the target
-are removed up front. See Details for its narrow practical effect.}
+\item{remove_na}{If \code{TRUE} (default), rows with a missing target are
+removed first. See "Missing values" for why this rarely changes the
+result.}
 
-\item{verbose}{Logical. If \code{TRUE}, report how many features were scored,
-how many names collided across data.frames, and how many were selected.
+\item{verbose}{If \code{TRUE}, report how many features were scored, how many
+names occurred in more than one data frame, and how many were selected.
 Default \code{FALSE}.}
 }
 \value{
-An object of class \code{fs_result} with elements:
+An \code{fs_result} object with:
+\describe{
+\item{\code{selected}}{Selected feature names in decreasing order of score.
+A feature with an \code{NA} score is never selected.}
+\item{\code{scores}}{Named numeric vector of the score (gain or gain ratio)
+for every candidate feature, in decreasing order with \code{NA} last. For
+list input it covers the union of features across data frames, and a
+name found in several data frames keeps its highest score.}
+\item{\code{method}}{\code{"infogain"}.}
+\item{\code{task}}{\code{"classification"}, because the target is always treated
+as categorical.}
+\item{\code{model}}{\code{NULL}; no model is fitted.}
+\item{\code{details}}{A list with:
 \itemize{
-\item \code{selected}: character vector of selected feature names, ordered by
-decreasing score. Features with an undefined (\code{NA}) score are never
-selected.
-\item \code{scores}: named numeric vector of the (possibly normalized) score for
-every candidate feature, ranked in decreasing order with \code{NA} scores
-last. For list input this is the union of features across data.frames;
-a name occurring in several data.frames keeps its highest score.
-\item \code{method}: \code{"infogain"}.
-\item \code{task}: \code{"classification"} (the target is always discretized).
-\item \code{model}: \code{NULL} (this is a filter; nothing is fitted).
-\item \code{details}: a list holding \code{table} (the full scored table, one row per
-scored column of each input: \code{Variable}, \code{InfoGain}, plus \code{SplitEntropy}
-and \code{GainRatio} when \code{normalize = "gain_ratio"}, plus \code{Origin} for list
-input), \code{normalize} (as resolved), \code{numeric_bins} (the requested bin
-count as an integer, \code{NULL} when automatic), \code{n_features} (the number of
-distinct scored features, i.e. \code{length(scores)}), and, for list input,
-\code{collisions} (a table of the feature names found in more than one
-data.frame, with \code{Kept} marking the row whose score won; zero rows when
-there are none).
-\item \code{call}: the matched call.
+\item \code{table}: the full scored table, one row per scored column of
+each input, with columns \code{Variable} and \code{InfoGain}, plus
+\code{SplitEntropy} and \code{GainRatio} when
+\code{normalize = "gain_ratio"}, plus \code{Origin} for list input.
+\item \code{normalize}: the value used.
+\item \code{numeric_bins}: the requested bin count as an integer, or
+\code{NULL} when automatic.
+\item \code{n_features}: the number of distinct scored features, equal
+to \code{length(scores)}.
+\item \code{collisions} (list input only): the feature names found in
+more than one data frame, with \code{Kept} marking the row whose score
+was used. It has zero rows when no name repeats.
+}}
+\item{\code{call}}{The matched call.}
 }
 }
 \description{
-Accepts either a single data.frame or a list of data.frames and scores
-every predictor by its information gain (in bits) with respect to the
-target, optionally normalized to a gain ratio.
+Scores every predictor by its information gain about the target, in bits,
+optionally divided by the predictor's own entropy to give a gain ratio.
+Accepts a single data frame or a list of data frames.
 }
 \details{
-Use this to rank candidate predictors cheaply, before any model is fitted:
-it answers "how many bits of uncertainty about the target does knowing this
-one predictor remove?". It needs no distributional assumptions and handles
-mixed column types, but it is a univariate filter -- each predictor is
-scored on its own, so two redundant copies of the same information both
-score highly, and a predictor that only matters in combination with another
-scores low. Treat the ranking as a shortlist, not a final feature set.
+Information gain is the drop in the entropy of the target once you know
+the value of one predictor: how many bits of uncertainty about the target
+that predictor removes. It makes no distributional assumptions and handles
+mixed column types, which makes it a cheap way to rank candidates before
+fitting any model.
+
+It is a univariate filter. Each predictor is scored on its own, so two
+copies of the same information both score highly, and a predictor that
+matters only in combination with another scores low. Treat the ranking as
+a shortlist rather than a final feature set.
+
+The default selection rule keeps every feature with a score above 0,
+which screens out almost nothing. On a finite sample, a predictor
+unrelated to the target still has a positive gain in almost every data
+set, and more so with more bins or levels. In a 200-row example with 50
+pure-noise columns, all 50 are selected. Use \code{top_n}, or compare against
+gains computed on a permuted target, to make a real cut.
+}
+\section{How columns are prepared}{
+
 \itemize{
-\item Numeric predictors are discretized into \code{max(Freedman-Diaconis, Sturges)}
-equal-width bins (never fewer than 2), unless \code{numeric_bins} overrides
-the count. Under the automatic rule, a column with a zero range or a zero
-interquartile range falls back to 2 bins; a column with a single distinct
-value becomes a single-level factor either way and scores 0.
-\item The target is always treated categorically, so \code{task} is always
-\code{"classification"}. Numeric targets are discretized the same way, ONCE
-on all rows with a non-NA target, so bin breaks are shared and scores
-are comparable across predictors.
-\item Date-like predictors are expanded into \verb{*_year}, \verb{*_month}, \verb{*_day}
-columns (base R; the originals are dropped). Date-like targets are
-treated as categorical days.
-\item NAs are handled per predictor/target pair; rows are never dropped
-globally for other predictors. A predictor whose score is undefined
-(\code{NA}) is never selected.
-\item \code{remove_na} has a deliberately narrow effect: rows with NA in the target
-are excluded per pair anyway, so the observable difference is only when
-the target is entirely NA -- \code{remove_na = TRUE} stops with an error,
-while \code{remove_na = FALSE} returns \code{NA} information gain for every
-predictor.
+\item Numeric predictors are cut into equal-width bins. The number of
+bins is the larger of the Freedman-Diaconis and Sturges counts, at
+least 2, unless \code{numeric_bins} sets it. Under the automatic rule, a
+column with zero range or zero interquartile range gets 2 bins. A
+column with a single distinct value is one level either way and
+scores 0.
+\item Character and logical predictors become factors.
+\item Date and date-time predictors are replaced by three numeric
+columns, \verb{<name>_year}, \verb{<name>_month}, and \verb{<name>_day}, which are
+then binned like any numeric column. If one of those names already
+exists in \code{data}, the call stops.
+\item The target is always treated as categorical, so \code{task} is always
+\code{"classification"}. A numeric target is binned by the same rule, once,
+on all rows where it is observed, so every predictor is scored against
+the same bins. A date target is treated as one class per day.
 }
 }
+
+\section{Missing values}{
+
+Missing values are handled for each predictor-target pair separately: a
+missing value in one predictor does not remove that row for the others.
+A predictor with no complete pairs scores \code{NA} and is never selected.
+
+\code{remove_na} has a narrow effect. Rows with a missing target are excluded
+pair by pair anyway, so the only difference shows when the target is
+entirely missing: \code{remove_na = TRUE} stops with an error, and
+\code{remove_na = FALSE} returns an \code{NA} score for every predictor.
+}
+
 \section{Cardinality bias and the gain ratio}{
 
-Raw information gain systematically favors predictors with many distinct
-levels. In the limit, a near-unique identifier column splits the data into
-near-singleton groups, drives the conditional entropy H(Y | X) to zero and
-therefore attains the largest gain any predictor can attain, H(Y) -- while
-carrying no generalizable signal whatsoever. Comparing raw gains across
-predictors of different cardinality is therefore comparing unlike things.
+Raw information gain favors predictors with many distinct levels. A
+near-unique identifier column splits the data into groups of about one
+row, which drives the conditional entropy H(Y | X) to zero and gives it
+the largest gain any predictor can reach, H(Y), while carrying no signal
+that generalizes. Raw gains of predictors with different numbers of levels
+are therefore not comparable.
 
 \code{normalize = "gain_ratio"} applies Quinlan's correction: each predictor's
-gain is divided by that predictor's own split entropy H(X), the entropy of
-its (discretized) level distribution. H(X) grows with cardinality -- it is
-\code{log2(k)} for a predictor with \code{k} equally frequent levels -- so dividing
-by it charges a predictor for the fineness of the split it makes. A
-constant predictor has \code{H(X) = 0} and, rather than dividing by zero, is
-assigned a gain ratio of 0 (its gain is zero too). Because gain ratios are
-scaled gains, do not compare them against thresholds calibrated for raw
-gains in bits.
+gain is divided by its split entropy H(X), the entropy of its (binned)
+level distribution. H(X) grows with the number of levels (it is
+\code{log2(k)} for \code{k} equally frequent levels), so the division penalizes a
+predictor for how finely it splits the data. A constant predictor has
+H(X) = 0 and gets a gain ratio of 0 instead of a division by zero. Gain
+ratios are on a different scale from raw gains, so do not reuse a
+threshold chosen for gains in bits.
 }
 
 \examples{

@@ -9,25 +9,29 @@
 \arguments{
 \item{x}{An \code{fs_result} object.}
 
-\item{n}{Maximum number of features to list (default 10).}
+\item{n}{Maximum number of selected names to list. Default 10.}
 
 \item{...}{Unused, for consistency with the generic.}
 }
 \value{
-\code{x}, invisibly. Called for its printed output.
+\code{x}, invisibly. Called for the printed output.
 }
 \description{
-Prints a compact summary of what a selection run kept.
+Prints the method, how many features were kept, and their names.
 }
 \details{
-The output is at most five lines: a \verb{<fs_result>} header naming the method,
-followed by the task in parentheses when one is known; a count, either
-"Selected k of N features" or, when the number of candidates cannot be
-recovered, "Selected k features"; the selected names, truncated to the
-first \code{n} with a "... (m more)" tail; a "Model:" line giving the class of
-\code{x$model} when the method fitted one; and a "Details:" line naming the
-elements of \code{x$details}. Nothing is printed for the names when the
-selection is empty.
+The output has at most five lines:
+\enumerate{
+\item A \verb{<fs_result>} header naming the method, followed by the task in
+parentheses when one is known.
+\item "Selected k of N features", or "Selected k features" when the number
+of candidates cannot be recovered from the result.
+\item The selected names, truncated to the first \code{n} with a "... (m more)"
+tail. This line is left out when the selection is empty.
+\item A "Model:" line giving the class of \code{x$model}, when the method fitted
+one.
+\item A "Details:" line naming the elements of \code{x$details}.
+}
 }
 \examples{
 fs_unsupervised(

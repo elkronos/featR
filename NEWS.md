@@ -2,14 +2,14 @@
 
 A correctness release. Two adversarial reviews of every function and every
 documentation page found and fixed silent wrong answers, hangs, crashes, and
-inaccurate claims. Several fixes change behaviour; they are listed first under
-each review. Where a result changed, the old result was wrong.
+inaccurate claims. Fixes that change behavior are listed first under each
+review. Where a result changed, the old result was wrong.
 
 ## First adversarial review
 
-A full statistical, methodological, and programmatic review, with every
-finding reproduced in R before it was fixed and a regression test added for
-each. This round also added the pkgdown site's guides and articles.
+A full statistical, methodological, and programmatic review. Every finding
+was reproduced in R before it was fixed, and each fix has a regression test.
+This round also added the pkgdown site's guides and articles.
 
 ### Behavior changes
 
@@ -46,9 +46,8 @@ each. This round also added the pkgdown site's guides and articles.
 * `fs_bayes()` no longer discards sampler and loo warnings. Convergence
   problems and high Pareto *k* values are collected and summarized after the
   search, saying whether the selected model is affected.
-
 * `fs_randomforest()` pooled per-forest importance standard errors with
-  `randomForest::combine()` when run in parallel, which inflates them by about
+  `randomForest::combine()` when run in parallel. That inflated them by about
   `sqrt(n_cores)` and shrank scaled importance by the same factor. They are
   now pooled exactly across trees.
 * `fs_recursivefeature()` over-reported held-out accuracy for character and
@@ -57,7 +56,7 @@ each. This round also added the pkgdown site's guides and articles.
   them.
 * `fs_supervised()` computes the ANOVA *F* in closed form. Perfect separation
   scores `Inf` instead of a rounding-noise value near 1e31, only observed
-  groups count towards the degrees of freedom, and the "essentially perfect
+  groups count toward the degrees of freedom, and the "essentially perfect
   fit" warning is gone. The constant-column check for correlation scores is
   relative to the data's scale, so features measured in very small units are
   no longer scored `NA`.
@@ -69,18 +68,18 @@ each. This round also added the pkgdown site's guides and articles.
   share of a component: `fs_pca()` drops them with a warning, and `fs_svd()`
   rejects them with an error naming them when it is asked to scale. Columns
   in very small units are kept.
-  `fs_svd()` falls back to the exact solver when RSpectra fails to converge.
+* `fs_svd()` falls back to the exact solver when RSpectra fails to converge.
 * `fs_mars()` returns regression predictions and `R2` as plain numbers rather
   than 1 x 1 matrices.
 
 ### Bug fixes
 
-* Non-syntactic column names: `fs_mars()` never selected such predictors, and
-  `fs_lasso()`, `fs_elastic()`, and `fs_stepwise()` returned them backticked,
-  so `data[selected(res)]` failed. `fs_svm()` carried the same backticks into
-  its encoded feature names. `fs_recursivefeature()` crashed on them
-  with `caret::lmFuncs`. Formula construction now escapes backslashes and
-  backticks inside names.
+* Non-syntactic column names now work. `fs_mars()` never selected such
+  predictors, and `fs_lasso()`, `fs_elastic()`, and `fs_stepwise()` returned
+  them backticked, so `data[selected(res)]` failed. `fs_svm()` carried the
+  same backticks into its encoded feature names. `fs_recursivefeature()`
+  crashed on them with `caret::lmFuncs`. Formula construction now escapes
+  backslashes and backticks inside names.
 * `fs_chi()` and `fs_infogain()` reject duplicated column names. The second
   copy was previously never tested.
 * `fs_lasso()` and `fs_elastic()` give a clear error for a single
@@ -121,7 +120,7 @@ second before it was fixed, and each fix has a regression test.
   indefinitely on classification targets. A predictor that is constant only
   inside one cross-validation resample (a rare indicator) is now set aside
   for that resample's fits, with importance 0.
-* Encoding: when a dummy name such as `g1` (factor `g`, level `1`) collides
+* When a dummy-variable name such as `g1` (factor `g`, level `1`) collides
   with another column or the target, `fs_recursivefeature()`, `fs_svm()`,
   `fs_lasso()`, `fs_elastic()` and `fs_stepwise()` now stop with an error. The
   real predictor was otherwise silently replaced by the dummy.
@@ -171,12 +170,14 @@ second before it was fixed, and each fix has a regression test.
   now computed exactly.
 * `fs_mars()` dropped predictors that are in the final earth model when their
   GCV importance was <= 0. Selection now reads the model's terms.
-* `fs_svm(rf_rfe)` weighted resamples by survivorship when averaging
-  importance.
-* Seeded parallel `fs_recursivefeature()` and `fs_svm()` runs were not
-  reproducible (caret's per-resample seeds); fixed.
-* `fs_chi()` warns when its Monte Carlo p-value floor, `1/(B+1)`, means a
-  feature cannot reach `sig_level` after multiplicity adjustment.
+* `fs_svm(select_method = "rf_rfe")` weighted resamples by survivorship when
+  averaging importance. It now averages each predictor's full-size importance
+  once per resample.
+* Seeded parallel `fs_recursivefeature()` and `fs_svm()` runs are now
+  reproducible. caret's per-resample seeds made two such runs differ.
+* `fs_chi()` warns when its Monte Carlo p-value floor,
+  `1/(simulation_B + 1)`, means a feature cannot reach `sig_level` after
+  multiplicity adjustment.
 * Constant-column tests across `fs_elastic()`, `fs_svm()`, `fs_lasso()`,
   `fs_infogain()`, `fs_pca()`, `fs_svd()` and `fs_supervised()` are relative
   to the data's scale. Round-off-constant columns are no longer scaled to full
@@ -267,7 +268,7 @@ their own decomposition structure.
 
 * `fs_svm()` gained a real SVM-RFE implementation (linear-kernel weight-vector
   ranking with a refit at each elimination step, plus cross-validated size
-  selection). The previous behavior — random-forest RFE — is still available
+  selection). The previous behavior, random-forest RFE, is still available
   via `select_method = "rf_rfe"`.
 * `fs_correlation()` gained `prune` (default `TRUE`): `selected` is now the
   reduced non-redundant set rather than both members of every correlated pair.
@@ -343,7 +344,7 @@ their own decomposition structure.
 * `fs_bayes()` supports families whose `fitted()` is a 3-D array (categorical,
   multinomial, multivariate). Selection proceeds; the in-sample MAE and RMSE,
   which are undefined for those responses, are reported as `NA` rather than
-  causing an error that was previously mislabelled as a sampling failure.
+  causing an error that was previously mislabeled as a sampling failure.
 * `fs_svm()` errors rather than ranking features from a partially recovered
   weight vector, and reports a degenerate elimination-step fit as a featR
   error naming the likely cause instead of surfacing kernlab's.
@@ -376,7 +377,6 @@ their own decomposition structure.
   fallback keeps every predictor with positive impurity importance, and only
   falls back to the top `n_features` (1 when `n_features = NULL`) if fewer
   qualify. It previously returned exactly one predictor.
-
 * `fs_mars()` no longer fails on every call (a data.table was indexed with the
   matrix returned by `caret::createDataPartition()`).
 * `fs_mars()` sanitizes factor levels with `make.names(unique = TRUE)`, so
@@ -397,7 +397,7 @@ their own decomposition structure.
 
 * Modeling engines are Suggests; each function checks for what it needs.
 * Functions never seed the RNG unless `seed` is supplied, and restore the
-  previous RNG state afterwards.
+  previous RNG state afterward.
 * Execution is sequential by default; worker counts are opt-in and capped.
 * No `library()`, `install.packages()`, `.GlobalEnv` writes, or log files in
   package code.

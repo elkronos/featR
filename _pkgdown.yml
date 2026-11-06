@@ -13,16 +13,14 @@ home:
 
 navbar:
   structure:
-    left: [intro, reference, guides, honesty, news]
+    left: [intro, reference, methods, results, news]
     right: [search, github]
   components:
-    # Every entry in these menus is a clickable page; there are no
-    # non-clickable section headings in the navbar.
-    guides:
-      text: Guides
+    # Every menu entry is a clickable page; there are no non-clickable
+    # section headings in the navbar.
+    methods:
+      text: Methods
       menu:
-        - text: The fs_result object
-          href: articles/fs-result.html
         - text: Choosing a method
           href: articles/choosing-a-method.html
         - text: Filter methods
@@ -33,53 +31,57 @@ navbar:
           href: articles/wrappers.html
         - text: Dimensionality reduction
           href: articles/dimensionality-reduction.html
-        - text: All articles
-          href: articles/index.html
-    honesty:
-      text: Doing it honestly
+    results:
+      text: Using results
       menu:
-        - text: Overview
-          href: articles/doing-it-honestly.html
+        - text: The fs_result object
+          href: articles/fs-result.html
         - text: Validation and leakage
           href: articles/validation-and-leakage.html
-        - text: Reproducibility, randomness, and parallelism
+        - text: Reproducibility and parallelism
           href: articles/reproducibility.html
+        - text: All articles
+          href: articles/index.html
 
 articles:
   - title: Start here
     navbar: ~
     contents:
       - featR
-      - articles/fs-result
       - articles/choosing-a-method
-  - title: Method guides
+  - title: Methods
     navbar: ~
     contents:
       - articles/filters
       - articles/regularization
       - articles/wrappers
       - articles/dimensionality-reduction
-  - title: Doing it honestly
+  - title: Using results
     navbar: ~
     contents:
-      - articles/doing-it-honestly
+      - articles/fs-result
       - articles/validation-and-leakage
       - articles/reproducibility
+
+# The "Doing it honestly" page was merged into "Validation and leakage".
+redirects:
+  - ["articles/doing-it-honestly.html", "articles/validation-and-leakage.html"]
 
 reference:
   - title: Working with results
     desc: >
-      Every selection function returns an `fs_result`. These are its
-      accessor and display methods.
+      Every selection function except `fs_pca()` and `fs_svd()` returns an
+      `fs_result`. These functions print it, summarize it, and extract the
+      selected names.
     contents:
       - selected
       - print.fs_result
       - summary.fs_result
   - title: Filters
     desc: >
-      Score each feature without fitting a predictive model. Cheap, and
-      suitable for a first cut on wide data, but they judge features one at a
-      time.
+      Score each feature without fitting a predictive model. They are fast
+      and work on wide data, but they judge one feature at a time, so they
+      miss features that only help in combination.
     contents:
       - fs_supervised
       - fs_unsupervised
@@ -88,7 +90,9 @@ reference:
       - fs_correlation
   - title: Regularization and embedded importance
     desc: >
-      One model fit whose own structure names the survivors.
+      Fit one model and keep the features it uses: nonzero coefficients for
+      the lasso and elastic net, variable importance for random forests, and
+      the terms of the final MARS model.
     contents:
       - fs_lasso
       - fs_elastic
@@ -96,8 +100,8 @@ reference:
       - fs_mars
   - title: Wrappers
     desc: >
-      Refit a model over candidate subsets. The most expensive family, and the
-      one most closely tied to the model you intend to use.
+      Refit a model on many candidate subsets and keep the best one. They are
+      the slowest family, and their choice is tied to the model they refit.
     contents:
       - fs_recursivefeature
       - fs_svm
@@ -107,7 +111,7 @@ reference:
   - title: Dimensionality reduction
     desc: >
       Replace the original columns with new components instead of keeping a
-      subset. These return their own list rather than an `fs_result`.
+      subset. These return a list of their own rather than an `fs_result`.
     contents:
       - fs_pca
       - fs_svd

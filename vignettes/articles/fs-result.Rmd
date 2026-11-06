@@ -8,12 +8,11 @@ library(featR)
 ```
 
 Fourteen of featR's sixteen functions return the same object, an `fs_result`.
-This article covers what is in it, how to read it, and how to use it to compare
-methods. The two exceptions, `fs_pca()` and `fs_svd()`, do dimensionality
-reduction and return their own lists. The
+The two exceptions, `fs_pca()` and `fs_svd()`, do dimensionality reduction
+and return their own lists; the
 [dimensionality reduction](dimensionality-reduction.html) article covers them.
 
-## Anatomy
+## The seven components
 
 An `fs_result` is a plain list with seven elements, always in this order:
 
@@ -54,6 +53,10 @@ features that were kept:
 summary(res)
 ```
 
+Here `scores` is the absolute correlation with `y`. `flip` is a perfect
+negative correlation, so it scores 1 and ranks above `signal` (0.998).
+`noise` scores 0.48, just under the 0.5 threshold.
+
 `selected()` is the stable accessor for the chosen names. Prefer it to
 `res$selected` in code you intend to keep:
 
@@ -63,41 +66,60 @@ selected(res)
 
 ## What `scores` means, method by method
 
-Scores are only comparable **within** one method. A correlation of 0.8 and a
-Boruta importance of 0.8 have nothing in common. The direction also differs:
-for `fs_chi()`, smaller is better. `summary()` knows this and sorts
-accordingly. For `fs_mars()` and `fs_correlation(prune = TRUE)`, which do not
-select by a cut on the score, `summary()` lists the selected features first
-(each group ordered by score) so a kept feature is never ranked below a
-dropped one.
+A correlation of 0.8 and a Boruta importance of 0.8 have nothing in common, so
+compare scores only within one method. The table gives the quantity each
+function reports and which direction is stronger.
 
-| Function | `scores` | Better is |
+| Function | `scores` | Stronger is |
 |---|---|---|
-| `fs_supervised()` | absolute Pearson *r* (numeric target) or ANOVA *F* (factor target) | larger |
-| `fs_unsupervised()` | variance, MAD, IQR, range, missing proportion, or distinct count | depends on the criterion |
-| `fs_chi()` | multiplicity-adjusted p-value | **smaller** |
-| `fs_infogain()` | information gain in bits, or gain ratio | larger |
-| `fs_correlation()` | each variable's largest absolute correlation with any other variable | larger means **more redundant** |
-| `fs_lasso()` | data.frame of standardized coefficients (`AbsCoefficient` ranks) | larger magnitude |
-| `fs_elastic()` | absolute coefficients on the scale the model saw (`NULL` for multinomial) | larger |
-| `fs_randomforest()` | permutation importance (mean decrease in accuracy, or %IncMSE) | larger |
-| `fs_mars()` | earth variable importance via `caret::varImp()` | larger |
-| `fs_recursivefeature()` | importance in the full-size RFE fit (every candidate present), averaged over all resamples | larger |
-| `fs_svm()` | SVM-RFE criterion `w^2`, or random-forest importance (`NULL` without selection) | larger |
-| `fs_boruta()` | median Boruta importance | larger |
-| `fs_stepwise()` | absolute *t* statistics of the retained terms (not valid for inference) | larger |
-| `fs_bayes()` | `NULL`: selection is between whole models, so there is no per-feature score | not applicable |
+| `fs_unsupervised()` | the chosen criterion per column: variance, MAD (on the standard-deviation scale), IQR, range, proportion missing, or number of distinct values; `NA` when undefined | depends on the criterion and on `direction` |
+| `fs_correlation()` | each variable's largest absolute correlation with any other variable; `NA` when none could be computed | larger means more redundant |
+| `fs_supervised()` | absolute Pearson *r* for a numeric outcome, in [0, 1]; one-way ANOVA *F* for a categorical outcome, `Inf` for perfect separation; `NA` for a constant feature | larger |
+| `fs_chi()` | p-value adjusted for multiple testing (Bonferroni by default); `NA` for a feature that could not be tested | smaller |
+| `fs_infogain()` | information gain in bits, or the gain ratio with `normalize = "gain_ratio"`; sorted, largest first | larger |
+| `fs_lasso()` | a data.frame with `Variable`, signed `Coefficient`, and `AbsCoefficient`, one row per design-matrix column, zeros included; standardized (coefficient times the column's standard deviation) when `standardize = TRUE`, the default. Raw coefficients are in `details$coefficients` | larger magnitude |
+| `fs_elastic()` | absolute coefficients at the winning alpha and lambda, on the scale of the columns the model saw (not standardized), zeros included; `NULL` for multinomial fits | larger |
+| `fs_randomforest()` | permutation importance: mean decrease in accuracy, or mean increase in MSE for regression; divided by its standard error unless `control$scale_importance = FALSE`; `NULL` when `control$importance = FALSE` | larger; negative means worse than a permuted copy |
+| `fs_mars()` | unscaled earth variable importance from `caret::varImp()`, one entry per original predictor; pruned predictors score 0, and a predictor the final model uses can score 0 or less; `NULL` if `varImp()` fails | larger, but `selected` is the predictors in the final model, not a cut on the score |
+| `fs_recursivefeature()` | each candidate's importance in the full-size fit (all candidates present), averaged over every resample; falls back to `caret::varImp()` when the function set records no per-resample importance | larger |
+| `fs_svm()` | with SVM-RFE, the squared weight `w^2` of each column in the first, full-feature linear SVM; with `select_method = "rf_rfe"`, random-forest importance averaged over resamples; `NULL` when `feature_select = FALSE` | larger |
+| `fs_boruta()` | median Boruta importance over the runs; `NA` for a feature with no importance history | larger |
+| `fs_stepwise()` | one entry per retained term: the absolute *t* statistic, or the largest absolute *t* among a factor's or interaction's coefficients. Biased upward by the selection, so not valid for inference | larger |
+| `fs_bayes()` | `NULL`: the method compares whole models, so there is no per-feature score | not applicable |
 
-Some methods score **design-matrix columns** rather than original columns.
-`fs_lasso()`, `fs_elastic()`, `fs_svm()`, and
-`fs_recursivefeature(handle_categorical = TRUE)` all do this, and so do the
-`scores` of `fs_stepwise()` (one *t* statistic per coefficient). A factor predictor
-`colour` therefore shows up as `colourgreen`, `colourred`, and so on. Map the
-names back yourself if you need the original variables.
+`summary()` ranks by these rules:
+
+* Smaller ranks first for `fs_chi()`, for `fs_correlation(prune = TRUE)`
+  (which keeps the least redundant variables), and for `fs_unsupervised()` and
+  `fs_supervised()` when the kept side is the low one (`direction = "below"`
+  with `action = "keep"`, or `"above"` with `"remove"`).
+* `fs_lasso()` ranks by absolute coefficient. Every other method ranks by the
+  signed value, so a negative permutation or Boruta importance ranks below a
+  useful feature instead of above it.
+* For `fs_mars()` and `fs_correlation(prune = TRUE)`, which do not select by a
+  cut on the score, the selected features are listed first, each group in
+  score order, so a kept feature is never ranked below a dropped one.
+
+### Design-matrix columns
+
+Some methods expand each factor or character predictor into one column per
+level and then score and select those columns. A factor `color` then shows up
+under its level columns, and you have to map them back yourself if you want
+the original variables.
+
+* `fs_lasso()` and `fs_elastic()` paste the level onto the name:
+  `colorgreen`, `colorred`.
+* `fs_svm()` and `fs_recursivefeature(handle_categorical = TRUE)` put a dot in
+  between: `color.green`, `color.red`.
+* `fs_stepwise()` keys `scores` and `selected` by term, so the factor appears
+  once as `color`. The per-coefficient values (`colorgreen`, `colorred`) are
+  in `details$coefficient_scores`.
+* `fs_mars()` attributes each dummy's importance back to its source predictor
+  and reports `color`.
 
 ## Comparing methods
 
-Because every result has the same shape, a comparison is a loop:
+Because every result has the same shape, comparing methods is a loop:
 
 ```{r}
 d2 <- data.frame(
@@ -115,15 +137,16 @@ lapply(runs, selected)
 ```
 
 Agreement between methods that work on different principles is weak evidence
-that a feature matters. Disagreement tells you to look closer. Neither is a
-substitute for validating the final set on data that played no part in
-choosing it. The [validation and leakage](validation-and-leakage.html)
-article covers that.
+that a feature matters, and disagreement is a reason to look closer. Neither
+replaces validating the final set on data that played no part in choosing it;
+the [validation and leakage](validation-and-leakage.html) article shows how.
 
 ## Empty selections
 
-When nothing passes, `selected` is `character(0)` and a warning says so. Code
-that consumes results should handle a length-zero selection:
+When nothing passes, `selected` is `character(0)`. `fs_supervised()` and
+`fs_unsupervised()` also warn that nothing met the criteria; the other
+functions do not warn about an empty selection. Code that consumes results
+should handle a length-zero selection:
 
 ```{r}
 none <- suppressWarnings(fs_unsupervised(d[, 1:3], threshold = 1e6))

@@ -32,7 +32,14 @@ fs_pca(
 - data:
 
   A data.frame or data.table with at least two rows and at least one
-  numeric column.
+  numeric column. Column names must be unique and non-empty. Non-numeric
+  (label) columns must not be named like a retained score column (`PC1`,
+  `PC2`, ...), which would shadow them in `pca_df`; that is an error.
+  Zero-variance detection is relative to each column's magnitude and
+  immune to [`sd()`](https://rdrr.io/r/stats/sd.html) over/underflow, so
+  columns in extreme units (beyond about `1e154` or below `1e-154`) are
+  kept; with `scale_data = FALSE` their variance cannot be represented
+  and they are an error.
 
 - num_pc:
 

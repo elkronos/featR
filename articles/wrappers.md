@@ -10,9 +10,10 @@ search never saw.
 
 [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
 wraps [`caret::rfe()`](https://rdrr.io/pkg/caret/man/rfe.html). It first
-splits the data. On the training rows it repeatedly fits a model, ranks
-the predictors, and drops the weakest. Resampling chooses the subset
-size. It then evaluates the result on the held-out rows.
+splits the data. On the training rows it fits a model, ranks the
+predictors by its importance, and refits on the top-ranked subset of
+each candidate size. Resampling chooses the subset size. It then
+evaluates the result on the held-out rows.
 
 ``` r
 
@@ -82,14 +83,21 @@ sv$details$performance$overall[c("Accuracy", "Kappa")]
 ```
 
 Without `n_features`, the number of features to keep is chosen by
-cross-validation over a short ladder of sizes (1, 2, 4, 8, …, p). You
-must state `task` explicitly. SVM-RFE needs `kernel = "linear"`, because
-the ranking uses the primal weight vector, which exists only for a
-linear kernel. For other kernels, use `select_method = "rf_rfe"`, which
-screens with random forests instead. Selection always runs on the
-training split, and `details$performance` comes from the test split.
-Selection works on the **dummy-encoded** predictors, so factor levels
-are selected individually.
+cross-validation over a short ladder of sizes (1, 2, 4, 8, …, p, at most
+six of them). You must state `task` explicitly. SVM-RFE needs
+`kernel = "linear"`, because the ranking uses the primal weight vector,
+which exists only for a linear kernel. For other kernels, use
+`select_method = "rf_rfe"`, which screens with random forests instead.
+Selection always runs on the training split, and `details$performance`
+comes from the test split; it is the honest estimate. Two other numbers
+are not. Each entry of `details$selection$size_scores` is a nested
+cross-validation estimate for its own size, but the chosen size is the
+best of up to six noisy estimates, so its score is optimistic. And with
+`feature_select = TRUE` the final model’s tuning cross-validation
+(`sv$model$results`, what printing `sv$model` shows) reuses the training
+rows the selector already used, so on pure noise it can approach perfect
+accuracy. Selection works on the **dummy-encoded** predictors, so factor
+levels are selected individually.
 
 ## `fs_boruta()`: all-relevant selection
 
@@ -158,11 +166,12 @@ st$scores
 #> 5.506882 4.246676 2.080819
 ```
 
-Pass `k = log(nrow(data))` to use BIC, which selects fewer terms.
-Stepwise search is greedy and unstable: small changes to the data can
-change the answer. The *t* statistics in `scores` and the p-values in
-`details$coefficients` are computed after selection on the same data, so
-they are biased toward significance. **Do not use them for inference.**
+Pass `k = log(nrow(data))` to use BIC, which usually selects fewer
+terms. Stepwise search is greedy and unstable: small changes to the data
+can change the answer. The *t* statistics in `scores` and the p-values
+in `details$coefficients` are computed after selection on the same data,
+so they are biased toward significance. **Do not use them for
+inference.**
 
 ## `fs_bayes()`: Bayesian model comparison
 
@@ -192,7 +201,12 @@ Bound the search with `max_comb_size` or `sample_combinations`. It needs
 brms, loo, and a working C++ toolchain, which is why this example is not
 run here. `details$mae` and `details$rmse` are in-sample, and the
 posterior of the returned model is post-selection, so neither is an
-honest estimate on its own.
+honest estimate on its own. `details$best_elpd` is approximately
+unbiased for a single fixed model, but it belongs to the model that won
+a search over up to `2^p - 1` candidates, so it is optimistic too
+(selection-induced bias; Piironen and Vehtari, 2017), and so are the
+differences in `details$loo_comparison`. Judge the chosen subset on data
+the search did not use.
 
 ## References
 
@@ -204,6 +218,10 @@ selection for cancer classification using support vector machines.
 Kursa, M. B. and Rudnicki, W. R. (2010). Feature selection with the
 Boruta package. *Journal of Statistical Software* 36(11).
 <https://doi.org/10.18637/jss.v036.i11>
+
+Piironen, J. and Vehtari, A. (2017). Comparison of Bayesian predictive
+methods for model selection. *Statistics and Computing* 27, 711–735.
+<https://doi.org/10.1007/s11222-016-9649-y>
 
 Vehtari, A., Gelman, A. and Gabry, J. (2017). Practical Bayesian model
 evaluation using leave-one-out cross-validation and WAIC. *Statistics

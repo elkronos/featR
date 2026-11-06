@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -206,7 +206,11 @@ Prefer it to <code>res$selected</code> in code you intend to keep:</p>
 <p>Scores are only comparable <strong>within</strong> one method. A
 correlation of 0.8 and a Boruta importance of 0.8 have nothing in
 common. The direction also differs: for <code><a href="../reference/fs_chi.html">fs_chi()</a></code>, smaller
-is better. <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> knows this and sorts accordingly.</p>
+is better. <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> knows this and sorts accordingly. For
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> and <code>fs_correlation(prune = TRUE)</code>,
+which do not select by a cut on the score, <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> lists
+the selected features first (each group ordered by score) so a kept
+feature is never ranked below a dropped one.</p>
 <table class="table">
 <colgroup>
 <col width="33%">
@@ -273,7 +277,8 @@ for multinomial)</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code></td>
-<td>resample-averaged importance from the RFE model</td>
+<td>importance in the full-size RFE fit (every candidate present),
+averaged over all resamples</td>
 <td>larger</td>
 </tr>
 <tr class="odd">
@@ -304,7 +309,10 @@ per-feature score</td>
 </table>
 <p>Some methods score <strong>design-matrix columns</strong> rather than
 original columns. <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>,
-and <code><a href="../reference/fs_svm.html">fs_svm()</a></code> all do this. A factor predictor
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code>, and
+<code>fs_recursivefeature(handle_categorical = TRUE)</code> all do this,
+and so do the <code>scores</code> of <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> (one
+<em>t</em> statistic per coefficient). A factor predictor
 <code>colour</code> therefore shows up as <code>colourgreen</code>,
 <code>colourred</code>, and so on. Map the names back yourself if you
 need the original variables.</p>

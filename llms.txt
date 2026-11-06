@@ -112,7 +112,7 @@ their own decomposition structure rather than an `fs_result`.
 | Function | What it does |
 |----|----|
 | [`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md) | PCA (prcomp, or bigstatsr for large data) with loadings, scores, variance explained, optional plot. |
-| [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md) | Exact or approximate (RSpectra) truncated SVD. Pass `n_singular_values < min(dim(x))` to enable the approximate solver. |
+| [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md) | Exact or approximate (RSpectra) truncated SVD. The approximate solver is used when `n_singular_values < min(dim(x))` and `min(dim(x))` exceeds `svd_threshold` (default 100). |
 
 ## Notes on honesty
 
@@ -131,7 +131,21 @@ Several methods can silently flatter themselves. featR tries not to:
   refuses to mean-impute by default (`impute = "none"`) because
   full-data imputation leaks across folds.
 - [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)’s
-  `feature_select` hook runs on the training split only.
+  `feature_select` hook runs on the training split only, so the held-out
+  `details$metrics` stay honest; the out-of-bag `details$oob` is grown
+  on those same rows and is optimistic when the hook looks at the
+  outcome.
+- Numbers computed on rows that also chose the features or tuning values
+  are optimistic and documented as such: `model$results` of caret-based
+  fits,
+  [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)’s
+  chosen-size `size_scores`,
+  [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)’s
+  `resampling_results`,
+  [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md)’s
+  `metric_value`,
+  [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)’s
+  `best_elpd`.
 - Post-selection statistics
   ([`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md)
   p-values) are labeled as invalid for inference rather than presented

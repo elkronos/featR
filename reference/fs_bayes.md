@@ -33,7 +33,9 @@ fs_bayes(
   A data.frame or data.table. It is copied, never modified. Only
   `target`, `predictors` and `date_col` are carried forward, and rows
   with a missing value in any of them are dropped before any model is
-  fitted.
+  fitted. Infinite values in those columns are an error. None of those
+  columns may be named `fitted_values`, `residuals`, `abs_residuals` or
+  `squared_residuals`, which are appended to `details$data`.
 
 - target:
 
@@ -46,16 +48,18 @@ fs_bayes(
 - predictors:
 
   Character vector. Names of the candidate predictor columns; at least
-  one, all present in `data`.
+  one, without duplicates, all present in `data`.
 
 - date_col:
 
   Character or NULL. Name of a date column. When provided, an
   `iso_week_id` feature (ISO year \* 100 + ISO week) is added to the
-  predictors. Note: `iso_week_id` enters the models as a continuous
-  covariate, which is a rough encoding of seasonality; a categorical or
-  cyclic encoding is deferred to a future version. Default NULL (no date
-  feature; the date column itself is never used as a predictor).
+  predictors, so neither the target, a predictor, nor the date column
+  may itself be named `iso_week_id`. Note: `iso_week_id` enters the
+  models as a continuous covariate, which is a rough encoding of
+  seasonality; a categorical or cyclic encoding is deferred to a future
+  version. Default NULL (no date feature; the date column itself is
+  never used as a predictor).
 
 - brm_family:
 
@@ -73,7 +77,8 @@ fs_bayes(
   max_treedepth = 15 and refresh = 0. `chains` and `cores` are respected
   when evaluating combinations sequentially (`cores` is capped at the
   detected core count; the defaults are 4 chains on 1 core), but both
-  are forced to 1 when `parallel_combinations = TRUE`. Default
+  are forced to 1 when `parallel_combinations = TRUE`. The PSIS-LOO step
+  uses the same core count, never `getOption("mc.cores")`. Default
   [`list()`](https://rdrr.io/r/base/list.html).
 
 - rule:
@@ -107,11 +112,15 @@ fs_bayes(
 - seed:
 
   Optional whole number (within the R integer range; fractional values
-  are an error rather than being truncated). When supplied, seeds the
-  random sampling of combinations (see `sample_combinations`) locally;
-  the previous RNG state is restored on exit. Default NULL: fs_bayes()
-  never seeds the RNG unless asked. Note this does not seed the
-  samplers; pass `seed` inside `brm_args` to control brms itself.
+  are an error rather than being truncated). When supplied, the whole
+  call runs on a local RNG stream and the caller's RNG state is restored
+  on exit. It seeds the random sampling of combinations (see
+  `sample_combinations`) and, unless `brm_args$seed` is given, also
+  draws one Stan seed per combination from that stream, so the MCMC fits
+  are reproducible too, including under `parallel_combinations = TRUE`.
+  An explicit `brm_args$seed` is used for every model instead. Default
+  NULL: fs_bayes() never seeds the RNG unless asked (brms/rstan then
+  draw their seeds from the global stream).
 
 - verbose:
 
@@ -145,8 +154,10 @@ An object of class `fs_result` with:
 
 - task:
 
-  "regression", or "classification" when `brm_family` is one of the
-  categorical brms families.
+  "classification" when `brm_family` is a binary, categorical or ordinal
+  family (`bernoulli`, `binomial`, `beta_binomial`, `categorical`,
+  `multinomial`, `cumulative`, `sratio`, `cratio`, `acat`), otherwise
+  "regression".
 
 - model:
 
@@ -161,13 +172,16 @@ An object of class `fs_result` with:
   post-selection errors computed on the same rows used to fit and
   select, so they are optimistic), `formula` (the selected model's
   formula string), `best_elpd` (the selected model's elpd_loo, possibly
-  `NA`), `loo_comparison` (the
+  `NA`; optimistic because it was selected, see Details),
+  `loo_comparison` (the
   [`loo::loo_compare()`](https://mc-stan.org/loo/reference/loo_compare.html)
   table – a matrix or data.frame depending on the loo version – or
   `NULL` when fewer than two models could be compared or the comparison
-  failed), `n_failed_fits` (how many combinations failed to fit) and
-  `n_features` (the number of candidate predictors, including
-  `iso_week_id` when `date_col` is supplied).
+  failed), `n_failed_fits` (how many combinations failed to fit),
+  `n_loo_failed` (how many fitted models were excluded because loo()
+  failed), `n_compared` (how many models with a finite elpd_loo competed
+  in the selection) and `n_features` (the number of candidate
+  predictors, including `iso_week_id` when `date_col` is supplied).
 
 - call:
 
@@ -195,9 +209,16 @@ comparison table is available, both rules fall back to the raw elpd
 maximum, ties broken by fewer predictors.
 
 Combinations whose model fails to fit are excluded from selection and
-counted in `details$n_failed_fits`, with a warning. If no fit yields a
-finite `elpd_loo` at all, the first successfully fitted model is
-returned with a warning; that is an arbitrary fallback, not a selection.
+counted in `details$n_failed_fits`, with a warning that quotes the first
+brms error. Fitted models for which
+[`loo::loo()`](https://mc-stan.org/loo/reference/loo.html) fails (or
+gives no finite elpd) are likewise excluded, counted in
+`details$n_loo_failed` and reported in a warning. If
+[`loo::loo_compare()`](https://mc-stan.org/loo/reference/loo_compare.html)
+itself fails, a warning says that the raw elpd maximum is used and
+`rule = "1se"` is not applied. If no fit yields a finite `elpd_loo` at
+all, the first successfully fitted model is returned with a warning;
+that is an arbitrary fallback, not a selection.
 
 Per-model sampler warnings (divergent transitions, R-hat, effective
 sample size) and loo's Pareto-k warnings are muffled while the models
@@ -208,12 +229,24 @@ with Pareto k \> 0.7 (unreliable PSIS-LOO estimates), each stating
 whether the selected model is among them. `verbose = TRUE` shows every
 individual warning.
 
-Two caveats are worth stating plainly. `details$mae` and `details$rmse`
-are in-sample errors computed on the same rows used to fit and to
-select, so they are optimistic. And anything read off the returned
-`brmsfit` (posterior intervals, effect sizes) is post-selection
-inference: the model was chosen by looking at the same data it is
-reported on.
+Three caveats are worth stating plainly. `details$mae` and
+`details$rmse` are in-sample errors computed on the same rows used to
+fit and to select, so they are optimistic. `details$best_elpd` (and the
+`loo_comparison` table) is optimistic too: PSIS-LOO is roughly unbiased
+for one fixed model, but the selected model's elpd_loo is the maximum,
+or a near-maximum under `rule = "1se"`, over `details$n_compared`
+candidates, so it overstates the chosen model's out-of-sample predictive
+performance, and increasingly so the larger the search
+(selection-induced bias; Piironen and Vehtari, 2017). An honest estimate
+needs the whole search repeated inside an outer cross-validation, or
+held-out data. And anything read off the returned `brmsfit` (posterior
+intervals, effect sizes) is post-selection inference: the model was
+chosen by looking at the same data it is reported on.
+
+## References
+
+Piironen, J. and Vehtari, A. (2017). Comparison of Bayesian predictive
+methods for model selection. *Statistics and Computing*, 27(3), 711-735.
 
 ## Examples
 
@@ -249,6 +282,6 @@ if (requireNamespace("brms", quietly = TRUE)) {
 }
 #> Compiling Stan program...
 #> Compiling Stan program...
-#> Warning: 2 of 2 model fits failed and were excluded from selection.
+#> Warning: 2 of 2 model fits failed and were excluded from selection. First error (y ~ x1): Boost not found; call install.packages('BH')
 # }
 ```

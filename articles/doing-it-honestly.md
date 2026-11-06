@@ -28,8 +28,15 @@ through a pipeline that avoids it.
   [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md),
   and [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
   split the data first and fit every data-dependent step on the training
-  rows only. The metrics in `details` come from rows the selection never
-  saw.
+  rows only. Their held-out metrics come from rows the selection never
+  saw: `details$metrics`
+  ([`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md),
+  [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)),
+  `details$test_metrics`
+  ([`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md))
+  and `details$performance`
+  ([`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)).
+  Not everything in `details` is held out, though; see the next point.
 - **Selection inside resampling.**
   [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
   repeats SVM-RFE inside every cross-validation fold when it chooses how
@@ -41,11 +48,22 @@ through a pipeline that avoids it.
   refuses missing predictors rather than imputing them from the full
   data. If you opt in to `impute = "mean"`, it warns you.
 - **Labeled in-sample numbers.** Statistics computed on the data used
-  for selection are documented as such, for example
+  for selection are documented as such, and are optimistic:
   [`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md)’s
-  p-values and
+  p-values,
   [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)’s
-  `details$mae`.
+  `details$mae`, `details$rmse` and `details$best_elpd` (the LOO score
+  of the winner of the search),
+  [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)’s
+  `details$oob` when a `control$feature_select` hook chose the columns
+  on the same training rows,
+  [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)’s
+  `details$selection$size_scores` entry for the chosen size,
+  [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)’s
+  `details$resampling_results`,
+  [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md)’s
+  `details$metric_value`, and the cross-validated tuning results in
+  `model$results` of any caret-based function.
 - **Known false-positive behavior is documented.** For example,
   [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
   can confirm pure-noise features, especially after

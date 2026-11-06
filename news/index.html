@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -49,6 +49,152 @@
       <small>Source: <a href="https://github.com/elkronos/featR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.2.0" id="featr-020">featR 0.2.0<a class="anchor" aria-label="anchor" href="#featr-020"></a></h2>
+<p>A correctness release. Two adversarial reviews of every function and every documentation page found and fixed silent wrong answers, hangs, crashes, and inaccurate claims. Several fixes change behaviour; they are listed first under each review. Where a result changed, the old result was wrong.</p>
+<div class="section level3">
+<h3 id="first-adversarial-review-0-2-0">First adversarial review<a class="anchor" aria-label="anchor" href="#first-adversarial-review-0-2-0"></a></h3>
+<p>A full statistical, methodological, and programmatic review, with every finding reproduced in R before it was fixed and a regression test added for each. This round also added the pkgdown site’s guides and articles.</p>
+<div class="section level4">
+<h4 id="behavior-changes-0-2-0">Behavior changes<a class="anchor" aria-label="anchor" href="#behavior-changes-0-2-0"></a></h4>
+<ul><li>
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>’s default <code>alpha_seq</code> is now <code>seq(0.1, 1, by = 0.1)</code>. The old default included <code>alpha = 0</code>, pure ridge. Ridge never zeroes a coefficient, so whenever it won the tuning (it won on every seed tried with correlated predictors) every predictor was reported as selected. A user-supplied <code>alpha = 0</code> that wins now warns.</li>
+<li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> gains <code>lambda = c("min", "1se")</code>. The default is unchanged; <code>"1se"</code> selects at <code>lambda.1se</code> for a sparser, more stable set, and <code>details$lambda_used</code> records which was used.</li>
+<li>
+<code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> ranks scores by value rather than by absolute value, except for <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>’s signed coefficients. Negative permutation or Boruta importance (worse than noise) previously ranked above useful features. It also lists the kept side first when a threshold filter kept the low scores.</li>
+<li>
+<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> passes <code>num.threads = 1</code> to Boruta’s importance engine, which otherwise used every core, contrary to featR’s sequential default.</li>
+<li>
+<code>seed</code> must be a whole number within the integer range. Fractional seeds were silently truncated (<code>seed = 1.9</code> gave the same stream as <code>seed = 1</code>).</li>
+<li>Parallel paths restore the caller’s own foreach backend on exit, through one shared helper. Previously they forced the session back to sequential, or left a user-registered backend pointing at featR’s stopped cluster.</li>
+</ul></div>
+<div class="section level4">
+<h4 id="statistical-corrections-0-2-0">Statistical corrections<a class="anchor" aria-label="anchor" href="#statistical-corrections-0-2-0"></a></h4>
+<ul><li><p><code><a href="../reference/fs_svm.html">fs_svm()</a></code>’s SVM-RFE subset-size search was optimistically biased. It scored the top of a ranking built on all training rows, including each fold’s held-out rows, and scaled once on all rows. On pure noise it reported cross-validated accuracy above 90% (up to 100% with 200 noise predictors and 60 rows) where the truth is 50%. The elimination and the scaling are now re-run inside every fold. The best size’s score is still the maximum over the candidate sizes, so it remains mildly optimistic (about 60% on the same noise); use the held-out <code>details$performance</code> as the honest estimate.</p></li>
+<li><p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> no longer discards sampler and loo warnings. Convergence problems and high Pareto <em>k</em> values are collected and summarized after the search, saying whether the selected model is affected.</p></li>
+<li><p><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> pooled per-forest importance standard errors with <code><a href="https://rdrr.io/pkg/randomForest/man/combine.html" class="external-link">randomForest::combine()</a></code> when run in parallel, which inflates them by about <code>sqrt(n_cores)</code> and shrank scaled importance by the same factor. They are now pooled exactly across trees.</p></li>
+<li><p><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> over-reported held-out accuracy for character and logical targets. The test factor was rebuilt from the test rows alone, and <code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code> silently dropped predictions of classes absent from them.</p></li>
+<li><p><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> computes the ANOVA <em>F</em> in closed form. Perfect separation scores <code>Inf</code> instead of a rounding-noise value near 1e31, only observed groups count towards the degrees of freedom, and the “essentially perfect fit” warning is gone. The constant-column check for correlation scores is relative to the data’s scale, so features measured in very small units are no longer scored <code>NA</code>.</p></li>
+<li><p><code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> clamps floating-point residue to zero, so exactly independent predictors score 0 and are not selected, and bins columns containing infinite values instead of failing.</p></li>
+<li><p><code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> use a relative zero-variance tolerance. Columns that are constant up to round-off are no longer scaled up to take a full share of a component: <code><a href="../reference/fs_pca.html">fs_pca()</a></code> drops them with a warning, and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> rejects them with an error naming them when it is asked to scale. Columns in very small units are kept. <code><a href="../reference/fs_svd.html">fs_svd()</a></code> falls back to the exact solver when RSpectra fails to converge.</p></li>
+<li><p><code><a href="../reference/fs_mars.html">fs_mars()</a></code> returns regression predictions and <code>R2</code> as plain numbers rather than 1 x 1 matrices.</p></li>
+</ul></div>
+<div class="section level4">
+<h4 id="bug-fixes-0-2-0">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-0-2-0"></a></h4>
+<ul><li>Non-syntactic column names: <code><a href="../reference/fs_mars.html">fs_mars()</a></code> never selected such predictors, and <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, and <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> returned them backticked, so <code>data[selected(res)]</code> failed. <code><a href="../reference/fs_svm.html">fs_svm()</a></code> carried the same backticks into its encoded feature names. <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> crashed on them with <code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::lmFuncs</a></code>. Formula construction now escapes backslashes and backticks inside names.</li>
+<li>
+<code><a href="../reference/fs_chi.html">fs_chi()</a></code> and <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> reject duplicated column names. The second copy was previously never tested.</li>
+<li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> give a clear error for a single design-matrix column instead of glmnet’s.</li>
+<li>
+<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> accepts a user-supplied <code>scope</code> instead of erroring.</li>
+<li>
+<code>fs_mars(search = "random")</code> with a factor outcome no longer fails on the first call in a fresh session.</li>
+<li>
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> rejects invalid <code>sampsize</code> entries instead of silently growing every tree on one row, imputes logical predictors, and warns when a numeric target is modeled with the default <code>task = "classification"</code>.</li>
+<li>
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> handles unused factor levels in the target, rejects fractional <code>sizes</code> and <code>NA</code> targets, reports <code>NA</code> test predictions, and requires randomForest when its defaults need it.</li>
+<li>
+<code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> validates the type of <code>diag_value</code>. Its documentation now describes the pruning rule accurately: strongest pair first, not <code><a href="https://rdrr.io/pkg/caret/man/findCorrelation.html" class="external-link">caret::findCorrelation()</a></code>’s scan order.</li>
+<li>
+<code><a href="../reference/fs_pca.html">fs_pca()</a></code> keeps logical and date columns as labels instead of dropping them silently.</li>
+</ul></div>
+</div>
+<div class="section level3">
+<h3 id="second-adversarial-review-0-2-0">Second adversarial review<a class="anchor" aria-label="anchor" href="#second-adversarial-review-0-2-0"></a></h3>
+<p>A second review, then a sweep of every bug class it found across the whole package. Every finding was reproduced in R by one checker and confirmed by a second before it was fixed, and each fix has a regression test.</p>
+<div class="section level4">
+<h4 id="behavior-changes-0-2-0-1">Behavior changes<a class="anchor" aria-label="anchor" href="#behavior-changes-0-2-0-1"></a></h4>
+<ul><li>
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>: <code>control$strata</code> must now be the name of a column. It is read from the training rows. A vector was silently misaligned with the training split. An <code>NA</code> in the strata column is an error.</li>
+<li>
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>: <code>scores</code> is now each candidate’s full-size importance averaged over every resample. caret’s <code>varImp(rfe)</code> averaged only over the resamples where a variable survived to the optimal size, and left some candidates unscored. It remains in <code>details$variable_importance</code>.</li>
+<li>
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code>fs_svm(select_method = "rf_rfe")</code> and <code>fs_randomforest(control = list(drop_zerovar = FALSE))</code> remove (or reject) predictors that are constant on the training rows. These hung randomForest indefinitely on classification targets. A predictor that is constant only inside one cross-validation resample (a rare indicator) is now set aside for that resample’s fits, with importance 0.</li>
+<li>Encoding: when a dummy name such as <code>g1</code> (factor <code>g</code>, level <code>1</code>) collides with another column or the target, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>, <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> and <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> now stop with an error. The real predictor was otherwise silently replaced by the dummy.</li>
+<li>
+<code>Inf</code>/<code>-Inf</code> in the target or predictors is now a clear error in <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> and <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>, and <code><a href="../reference/fs_pca.html">fs_pca()</a></code> now errors on it too. These previously failed inside the engine or were silently zeroed.</li>
+<li>User row indices that featR’s own <code>NA</code> drop or split would misapply are refused: <code>index</code>, <code>indexOut</code> and now <code>indexFinal</code> (<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>).</li>
+<li>Factor levels absent from the training rows are dropped before encoding in <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code> and <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, so they no longer become all-zero candidate features.</li>
+<li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> reports coefficients below 1e-10 times the largest standardized coefficient as 0, and gives numerically constant columns a coefficient of 0. Round-off residue was being selected.</li>
+<li>
+<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> <code>scores</code> are keyed by term, like <code>selected</code>. A factor term scores the largest |t| among its coefficients. Per-coefficient values are in <code>details$coefficient_scores</code>.</li>
+<li>
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> and <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> return <code>NA</code> for ROC AUC when the held-out rows contain one class (<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> also warns). They used to fail after training.</li>
+<li>
+<code>fs_svm(select_method = "rf_rfe", n_features = k)</code> keeps the top <code>k</code> by the reported scores. Its fallback screens on permutation importance, not impurity importance, which almost every predictor passed.</li>
+<li>
+<code>fs_bayes(seed = s)</code> now seeds the MCMC and no longer advances the caller’s RNG. Failed <code>loo()</code> fits and <code>loo_compare()</code> failures are now warnings. <code>details$n_loo_failed</code> and <code>details$n_compared</code> are added.</li>
+<li>
+<code>fs_chi(parallel = TRUE)</code> respects a future plan you already set, and restores the previous plan even when worker start-up fails.</li>
+<li>
+<code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> lists selected features first for <code><a href="../reference/fs_mars.html">fs_mars()</a></code> and <code>fs_correlation(prune = TRUE)</code>.</li>
+<li>Stricter, earlier validation:
+<ul><li>
+<code>rfe_control</code>/<code>train_control</code> methods, <code>number &gt;= 2</code>, and complete <code>functions</code> sets.</li>
+<li>Full <code>trainControl()</code> lists in <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>.</li>
+<li>
+<code>p_adjust_method</code> in <code><a href="../reference/fs_chi.html">fs_chi()</a></code>.</li>
+<li>
+<code>control$positive_class</code> in <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>.</li>
+<li>Engine requirements such as e1071, checked before any fitting.</li>
+</ul></li>
+<li>
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> reports the metric caret actually optimized when it fell back from an unknown <code>metric</code>.</li>
+</ul></div>
+<div class="section level4">
+<h4 id="statistical-corrections-0-2-0-1">Statistical corrections<a class="anchor" aria-label="anchor" href="#statistical-corrections-0-2-0-1"></a></h4>
+<ul><li>
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> selected predictors whose coefficient is zero at the tuned lambda. glmnet coefficients were interpolated between path knots; they are now computed exactly.</li>
+<li>
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> dropped predictors that are in the final earth model when their GCV importance was &lt;= 0. Selection now reads the model’s terms.</li>
+<li>
+<code>fs_svm(rf_rfe)</code> weighted resamples by survivorship when averaging importance.</li>
+<li>Seeded parallel <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> and <code><a href="../reference/fs_svm.html">fs_svm()</a></code> runs were not reproducible (caret’s per-resample seeds); fixed.</li>
+<li>
+<code><a href="../reference/fs_chi.html">fs_chi()</a></code> warns when its Monte Carlo p-value floor, <code>1/(B+1)</code>, means a feature cannot reach <code>sig_level</code> after multiplicity adjustment.</li>
+<li>Constant-column tests across <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>, <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>, <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, <code><a href="../reference/fs_svd.html">fs_svd()</a></code> and <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> are relative to the data’s scale. Round-off-constant columns are no longer scaled to full weight, and columns in extreme units are no longer mistaken for constants.</li>
+<li>
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> regression <code>R2</code> is <code>NA</code> for a held-out target that is constant up to round-off. It was about -1e29. Its <code>kappa</code> is computed directly and is no longer silently <code>NA</code> without e1071. A factor target in regression uses its labels, not its level codes.</li>
+<li>Optimism is documented where a reported quantity reuses the rows that selection saw:
+<ul><li>
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> <code>details$oob</code> with a supervised <code>feature_select</code>.</li>
+<li>
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code> <code>model$results</code> and the chosen size’s <code>size_scores</code>.</li>
+<li>
+<code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> <code>details$best_elpd</code>.</li>
+<li>The best-of-grid <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> metric.</li>
+</ul>
+The held-out <code>details</code> metrics are the honest estimates. Metric definitions (for example caret’s <code>Rsquared</code> is a squared correlation) are stated.</li>
+</ul></div>
+<div class="section level4">
+<h4 id="bug-fixes-0-2-0-1">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-0-2-0-1"></a></h4>
+<ul><li>Names:
+<ul><li>Duplicated, empty or <code>NA</code> column names are rejected rather than silently dropping or merging a column, across all the wrappers, <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code>, <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, <code><a href="../reference/fs_chi.html">fs_chi()</a></code>, <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> and <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>.</li>
+<li>
+<code>fs_recursivefeature(handle_categorical = TRUE)</code> and <code><a href="../reference/fs_mars.html">fs_mars()</a></code> classification returned backticked names, or dropped non-syntactic predictors.</li>
+<li>Fixed-name internal columns (<code>.mars_train_idx</code>, <code>desired_total</code>, <code>residuals</code>, <code>fitted_values</code>, <code>iso_week_id</code>, a predictor named <code>data</code>) no longer clash with user columns.</li>
+<li>Matrix input keeps its own column names.</li>
+</ul></li>
+<li>
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> classification with <code>n_cores &gt; 1</code> failed on the workers. Random search left earth’s dependencies attached.</li>
+<li>Clear featR errors replace cryptic engine errors for:
+<ul><li>one-level factor predictors;</li>
+<li>ordered, single-class, empty-label and unused-level targets;</li>
+<li>saturated stepwise models (<code>backward</code>/<code>both</code>; a forward search that ends on a perfect fit warns);</li>
+<li>one-row splits;</li>
+<li>list columns;</li>
+<li>every predictor removed by filtering;</li>
+<li>factor predictors with <code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::lmFuncs</a></code>.</li>
+</ul></li>
+<li>Restoring the foreach backend no longer marks a never-registered session as registered.</li>
+<li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>’s <code>lambda</code> argument moved before the housekeeping arguments.</li>
+</ul></div>
+</div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.1.0" id="featr-010">featR 0.1.0<a class="anchor" aria-label="anchor" href="#featr-010"></a></h2><p class="text-muted">CRAN release: 2026-09-14</p>
 <p>First release. Unifies the <code>feature_selection</code> script collection into a package with 16 exported <code>fs_*()</code> functions (plus the <code><a href="../reference/selected.html">selected()</a></code> accessor) sharing one calling convention and one return type.</p>
@@ -111,7 +257,7 @@
 <li><p><code><a href="../reference/fs_chi.html">fs_chi()</a></code> reports <code>correction_applied</code> from what <code><a href="https://rdrr.io/r/stats/chisq.test.html" class="external-link">stats::chisq.test()</a></code> actually did. A 2x2 table sitting exactly at expectation receives no Yates correction even when one is requested, and the row previously claimed otherwise.</p></li>
 <li><p><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> registers its cluster teardown before registering the parallel backend, so a failure there cannot leak the cluster, and restores the caller’s own foreach backend instead of forcing sequential execution.</p></li>
 <li><p><code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> sets <code>allowParallel</code> from whether featR created a cluster. caret’s default of <code>TRUE</code> meant a single-worker call would dispatch resamples to whatever backend the caller had registered elsewhere.</p></li>
-<li><p><code><a href="../reference/fs_svm.html">fs_svm()</a></code>’s <code>min_keep</code> is a floor rather than a quota: when random-forest RFE fails, the fallback keeps every predictor with positive impurity importance and only drops to <code>min_keep</code> top-ranked predictors if fewer qualify. It previously returned exactly one predictor.</p></li>
+<li><p>In <code>fs_svm(select_method = "rf_rfe")</code>, when random-forest RFE fails, the fallback keeps every predictor with positive impurity importance, and only falls back to the top <code>n_features</code> (1 when <code>n_features = NULL</code>) if fewer qualify. It previously returned exactly one predictor.</p></li>
 <li><p><code><a href="../reference/fs_mars.html">fs_mars()</a></code> no longer fails on every call (a data.table was indexed with the matrix returned by <code><a href="https://rdrr.io/pkg/caret/man/createDataPartition.html" class="external-link">caret::createDataPartition()</a></code>).</p></li>
 <li><p><code><a href="../reference/fs_mars.html">fs_mars()</a></code> sanitizes factor levels with <code>make.names(unique = TRUE)</code>, so distinct classes such as <code>"class 1"</code> and <code>"class.1"</code> can no longer merge.</p></li>
 <li><p><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> accepts data frames containing <code>NA</code> (the previous <code><a href="https://rdrr.io/r/stats/model.matrix.html" class="external-link">model.matrix()</a></code> call silently dropped those rows and then aborted).</p></li>
@@ -120,55 +266,6 @@
 <li><p><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> stratifies on the user’s target rather than any column literally named <code>"target"</code>, imputes test-only missing values, and accepts character predictors.</p></li>
 <li><p><code><a href="../reference/fs_svd.html">fs_svd()</a></code> errors on invalid arguments instead of silently repairing them.</p></li>
 </ul></div>
-<div class="section level3">
-<h3 id="pre-release-adversarial-review-0-1-0">Pre-release adversarial review<a class="anchor" aria-label="anchor" href="#pre-release-adversarial-review-0-1-0"></a></h3>
-<p>A full statistical, methodological, and programmatic review, with every finding reproduced in R before it was fixed and a regression test added for each.</p>
-<div class="section level4">
-<h4 id="behavior-changes-0-1-0">Behavior changes<a class="anchor" aria-label="anchor" href="#behavior-changes-0-1-0"></a></h4>
-<ul><li>
-<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>’s default <code>alpha_seq</code> is now <code>seq(0.1, 1, by = 0.1)</code>. The old default included <code>alpha = 0</code>, pure ridge. Ridge never zeroes a coefficient, so whenever it won the tuning (it won on every seed tried with correlated predictors) every predictor was reported as selected. A user-supplied <code>alpha = 0</code> that wins now warns.</li>
-<li>
-<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> gains <code>lambda = c("min", "1se")</code>. The default is unchanged; <code>"1se"</code> selects at <code>lambda.1se</code> for a sparser, more stable set, and <code>details$lambda_used</code> records which was used.</li>
-<li>
-<code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> ranks scores by value rather than by absolute value, except for <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>’s signed coefficients. Negative permutation or Boruta importance (worse than noise) previously ranked above useful features. It also lists the kept side first when a threshold filter kept the low scores.</li>
-<li>
-<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> passes <code>num.threads = 1</code> to Boruta’s importance engine, which otherwise used every core, contrary to featR’s sequential default.</li>
-<li>
-<code>seed</code> must be a whole number within the integer range. Fractional seeds were silently truncated (<code>seed = 1.9</code> gave the same stream as <code>seed = 1</code>).</li>
-<li>Parallel paths restore the caller’s own foreach backend on exit, through one shared helper. Previously they forced the session back to sequential, or left a user-registered backend pointing at featR’s stopped cluster.</li>
-</ul></div>
-<div class="section level4">
-<h4 id="statistical-corrections-0-1-0-1">Statistical corrections<a class="anchor" aria-label="anchor" href="#statistical-corrections-0-1-0-1"></a></h4>
-<ul><li><p><code><a href="../reference/fs_svm.html">fs_svm()</a></code>’s SVM-RFE subset-size search was optimistically biased. It scored the top of a ranking built on all training rows, including each fold’s held-out rows, and scaled once on all rows. On pure noise it reported about 93% cross-validated accuracy where the truth is 50%. The elimination and the scaling are now re-run inside every fold.</p></li>
-<li><p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> no longer discards sampler and loo warnings. Convergence problems and high Pareto <em>k</em> values are collected and summarized after the search, saying whether the selected model is affected.</p></li>
-<li><p><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> pooled per-forest importance standard errors with <code><a href="https://rdrr.io/pkg/randomForest/man/combine.html" class="external-link">randomForest::combine()</a></code> when run in parallel, which inflates them by about <code>sqrt(n_cores)</code> and shrank scaled importance by the same factor. They are now pooled exactly across trees.</p></li>
-<li><p><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> over-reported held-out accuracy for character and logical targets. The test factor was rebuilt from the test rows alone, and <code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code> silently dropped predictions of classes absent from them.</p></li>
-<li><p><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> computes the ANOVA <em>F</em> in closed form. Perfect separation scores <code>Inf</code> instead of a rounding-noise value near 1e31, only observed groups count towards the degrees of freedom, and the “essentially perfect fit” warning is gone. The constant-column check for correlation scores is relative to the data’s scale, so features measured in very small units are no longer scored <code>NA</code>.</p></li>
-<li><p><code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> clamps floating-point residue to zero, so exactly independent predictors score 0 and are not selected, and bins columns containing infinite values instead of failing.</p></li>
-<li><p><code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> use a relative zero-variance tolerance. Columns that are constant up to round-off are dropped rather than scaled up to take a full share of a component, and columns in very small units are kept. <code><a href="../reference/fs_svd.html">fs_svd()</a></code> falls back to the exact solver when RSpectra fails to converge.</p></li>
-<li><p><code><a href="../reference/fs_mars.html">fs_mars()</a></code> returns regression predictions and <code>R2</code> as plain numbers rather than 1 x 1 matrices.</p></li>
-</ul></div>
-<div class="section level4">
-<h4 id="bug-fixes-0-1-0-1">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-0-1-0-1"></a></h4>
-<ul><li>Non-syntactic column names: <code><a href="../reference/fs_mars.html">fs_mars()</a></code> never selected such predictors, and <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, and <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> returned them backticked, so <code>data[selected(res)]</code> failed. <code><a href="../reference/fs_svm.html">fs_svm()</a></code> carried the same backticks into its encoded feature names. <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> crashed on them with <code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::lmFuncs</a></code>. Formula construction now escapes backslashes and backticks inside names.</li>
-<li>
-<code><a href="../reference/fs_chi.html">fs_chi()</a></code> and <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> reject duplicated column names. The second copy was previously never tested.</li>
-<li>
-<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> give a clear error for a single design-matrix column instead of glmnet’s.</li>
-<li>
-<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> accepts a user-supplied <code>scope</code> instead of erroring.</li>
-<li>
-<code>fs_mars(search = "random")</code> with a factor outcome no longer fails on the first call in a fresh session.</li>
-<li>
-<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> rejects invalid <code>sampsize</code> entries instead of silently growing every tree on one row, imputes logical predictors, and warns when a numeric target is modeled with the default <code>task = "classification"</code>.</li>
-<li>
-<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> handles unused factor levels in the target, rejects fractional <code>sizes</code> and <code>NA</code> targets, reports <code>NA</code> test predictions, and requires randomForest when its defaults need it.</li>
-<li>
-<code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> validates the type of <code>diag_value</code>. Its documentation now describes the pruning rule accurately: strongest pair first, not <code><a href="https://rdrr.io/pkg/caret/man/findCorrelation.html" class="external-link">caret::findCorrelation()</a></code>’s scan order.</li>
-<li>
-<code><a href="../reference/fs_pca.html">fs_pca()</a></code> keeps logical and date columns as labels instead of dropping them silently.</li>
-</ul></div>
-</div>
 <div class="section level3">
 <h3 id="package-conventions-0-1-0">Package conventions<a class="anchor" aria-label="anchor" href="#package-conventions-0-1-0"></a></h3>
 <ul><li>Modeling engines are Suggests; each function checks for what it needs.</li>

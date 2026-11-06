@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -107,7 +107,10 @@ own code draws afterwards.</li>
 <span><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
 <p>Without a <code>seed</code>, randomized methods draw from your global
 stream like any other R function, so <code><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed()</a></code> before the
-call also works.</p>
+call also works for sequential runs. Parallel workers do not draw from
+your global stream, so pass <code>seed</code> to make a parallel run
+reproducible. For <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, whose workers grow the
+trees, <code>seed</code> is the only way.</p>
 <div class="section level3">
 <h3 id="which-functions-use-randomness">Which functions use randomness<a class="anchor" aria-label="anchor" href="#which-functions-use-randomness"></a>
 </h3>
@@ -138,9 +141,12 @@ expected cell counts are small.</li>
 <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>, <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, and
 <code><a href="../reference/fs_svd.html">fs_svd()</a></code> with the exact solver.</li>
 </ul>
-<p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> is special. Its <code>seed</code> controls
-only which subsets are sampled. To make the MCMC reproducible, pass
-<code>brm_args = list(seed = ...)</code> as well.</p>
+<p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> also fits models by MCMC. Its
+<code>seed</code> controls which subsets are sampled and, unless you
+pass <code>brm_args = list(seed = ...)</code>, also draws one Stan seed
+per candidate model, so a seeded call reproduces the MCMC fits too,
+including under <code>parallel_combinations = TRUE</code>. An explicit
+<code>brm_args$seed</code> is used for every model instead.</p>
 </div>
 </div>
 <div class="section level2">
@@ -156,10 +162,21 @@ gives 4.</li>
 returns</strong>, including on error.</li>
 <li>Parallel backends you registered yourself are restored
 afterwards.</li>
-<li>With a <code>seed</code>, parallel workers get reproducible
-L’Ecuyer-CMRG streams. Two seeded parallel runs therefore agree with
-each other. They need not agree with a seeded <em>sequential</em> run,
-because the workers draw from different streams.</li>
+<li>With a <code>seed</code>, two seeded parallel runs agree with each
+other. What makes them agree is that everything random is decided in the
+main R process from the local seed, not on the workers: the train/test
+split and the resampling folds, and, for the caret-based
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> and
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code>, one seed per resample that caret draws from that
+seed and hands to whichever worker fits the resample.
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> need nothing more,
+because glmnet fits are deterministic once the folds are fixed. Seeding
+the workers’ own RNG streams would not be enough on its own: foreach
+gives each resample to whichever worker is free, so which stream fits
+which resample changes from run to run. The exception is
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, which hands each worker one fixed block
+of trees and seeds the workers with L’Ecuyer-CMRG streams. A seeded
+parallel run need not agree with a seeded <em>sequential</em> one.</li>
 </ul>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/fs_randomforest.html">fs_randomforest</a></span><span class="op">(</span><span class="va">big_data</span>, <span class="st">"y"</span>, task <span class="op">=</span> <span class="st">"regression"</span>, n_cores <span class="op">=</span> <span class="fl">4</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>

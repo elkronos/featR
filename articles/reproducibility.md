@@ -31,7 +31,10 @@ identical(expected, observed)
 Without a `seed`, randomized methods draw from your global stream like
 any other R function, so
 [`set.seed()`](https://rdrr.io/r/base/Random.html) before the call also
-works.
+works for sequential runs. Parallel workers do not draw from your global
+stream, so pass `seed` to make a parallel run reproducible. For
+[`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md),
+whose workers grow the trees, `seed` is the only way.
 
 ### Which functions use randomness
 
@@ -66,8 +69,11 @@ works.
   with the exact solver.
 
 [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)
-is special. Its `seed` controls only which subsets are sampled. To make
-the MCMC reproducible, pass `brm_args = list(seed = ...)` as well.
+also fits models by MCMC. Its `seed` controls which subsets are sampled
+and, unless you pass `brm_args = list(seed = ...)`, also draws one Stan
+seed per candidate model, so a seeded call reproduces the MCMC fits too,
+including under `parallel_combinations = TRUE`. An explicit
+`brm_args$seed` is used for every model instead.
 
 ## Parallelism is opt-in and bounded
 
@@ -79,10 +85,28 @@ Every function runs on one core unless you ask for more. The rules are:
 - Clusters featR creates are **stopped when the call returns**,
   including on error.
 - Parallel backends you registered yourself are restored afterwards.
-- With a `seed`, parallel workers get reproducible L’Ecuyer-CMRG
-  streams. Two seeded parallel runs therefore agree with each other.
-  They need not agree with a seeded *sequential* run, because the
-  workers draw from different streams.
+- With a `seed`, two seeded parallel runs agree with each other. What
+  makes them agree is that everything random is decided in the main R
+  process from the local seed, not on the workers: the train/test split
+  and the resampling folds, and, for the caret-based
+  [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md),
+  [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
+  and
+  [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md),
+  one seed per resample that caret draws from that seed and hands to
+  whichever worker fits the resample.
+  [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md)
+  and
+  [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md)
+  need nothing more, because glmnet fits are deterministic once the
+  folds are fixed. Seeding the workers’ own RNG streams would not be
+  enough on its own: foreach gives each resample to whichever worker is
+  free, so which stream fits which resample changes from run to run. The
+  exception is
+  [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md),
+  which hands each worker one fixed block of trees and seeds the workers
+  with L’Ecuyer-CMRG streams. A seeded parallel run need not agree with
+  a seeded *sequential* one.
 
 ``` r
 

@@ -45,7 +45,11 @@ fs_supervised(
   Non-negative, finite numeric scalar threshold applied to the feature
   scores (not to the target directly). Default 0. Note that the two
   methods put scores on different scales: `[0, 1]` for `"correlation"`
-  and `[0, Inf]` for `"anova"`.
+  and `[0, Inf]` for `"anova"`. With the defaults (`threshold = 0`,
+  `direction = "above"`, `action = "keep"`) nothing is filtered in
+  practice: any non-constant feature has a sample \\\|r\| \> 0\\ or \\F
+  \> 0\\, even when it is pure noise, so every feature with a defined
+  score is kept. Choose a threshold to make an actual selection.
 
 - direction:
 
@@ -173,8 +177,11 @@ Features whose score is undefined (`NA`) are never selected, under both
 `action = "keep"` and `action = "remove"`; a warning reports how many
 such features were excluded.
 
-Columns are subset by integer index, never by name, so duplicated column
-names cannot select the wrong columns.
+Columns are subset by integer index, never by name, so duplicated
+feature names cannot select the wrong columns. The target's name must be
+unique, and every column must have a non-empty, non-NA name (a matrix
+keeps its own column names; `V1`, `V2`, ... are used only when it has
+none).
 
 ## Examples
 

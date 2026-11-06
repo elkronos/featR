@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -136,9 +136,11 @@ error of the minimum, which gives a sparser and more stable set.</li>
 <ul>
 <li>
 <strong>Correlated predictors.</strong> The lasso tends to keep one
-member of a correlated group and zero out the rest. Here <code>x1</code>
-and <code>x1_copy</code> compete, and an absent feature is
-<strong>not</strong> evidence that it is unrelated to the outcome.</li>
+member of a correlated group and zero out the rest, so an absent feature
+is <strong>not</strong> evidence that it is unrelated to the outcome.
+Here <code>x1</code> and <code>x1_copy</code> both survive, but they
+split one effect between them, so neither coefficient measures it on its
+own.</li>
 <li>
 <strong>Linear only.</strong> <code>x_nl</code> has a strong
 U-shaped effect but almost no linear one. The lasso gives it only a
@@ -153,7 +155,10 @@ coefficients are in <code>details$coefficients</code>.</li>
 <li>
 <strong>Factors</strong> are expanded into dummy columns, and the
 selection names those columns (<code>colourred</code>, not
-<code>colour</code>).</li>
+<code>colour</code>). A factor with only one observed level, or a dummy
+name that collides with another column (factor <code>g</code> with level
+<code>b</code> next to a column called <code>gb</code>), is an error
+rather than a silent mistake; so are infinite values.</li>
 <li>
 <strong>Missing values</strong> are an error by default.
 Mean-imputing on the full data before cross-validation leaks information
@@ -214,7 +219,10 @@ importance.</p>
 <span><span class="co">#&gt; [1] 0.770357</span></span></code></pre></div>
 <p>The forest finds <code>x_nl</code>, which the linear methods cannot.
 To turn the ranking into a selection, pass a hook. It runs on the
-training rows only, so the held-out metrics stay honest:</p>
+training rows only, so the held-out <code>details$metrics</code> stay
+honest. The out-of-bag <code>details$oob</code> does not: the forest is
+grown on the same training rows the hook just used, so with a hook that
+looks at the outcome the OOB error is optimistic.</p>
 <div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">top5</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">dt</span><span class="op">)</span> <span class="op">{</span></span>
 <span>  <span class="va">keep</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x1"</span>, <span class="st">"x2"</span>, <span class="st">"x3"</span>, <span class="st">"x_nl"</span>, <span class="st">"x1_copy"</span><span class="op">)</span>  <span class="co"># any rule you like</span></span>
@@ -225,11 +233,13 @@ training rows only, so the held-out metrics stay honest:</p>
 <span>                          seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">rf_sel</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] "x_nl"    "x2"      "x1"      "x1_copy" "x3"</span></span></code></pre></div>
-<p><code>task</code> must be given explicitly, because a numeric column
-can be a class label. Permutation importance splits credit between
-correlated predictors (see <code>x1</code> and <code>x1_copy</code>) and
-favors predictors with many distinct values, so treat close scores as
-ties.</p>
+<p><code>task</code> defaults to <code>"classification"</code>, because
+a numeric column can be a class label, so pass
+<code>task = "regression"</code> for a numeric outcome. featR warns when
+a numeric target meets the default. Permutation importance splits credit
+between correlated predictors (see <code>x1</code> and
+<code>x1_copy</code>) and can still favor predictors with many distinct
+values, so treat close scores as ties.</p>
 </div>
 <div class="section level2">
 <h2 id="fs_mars">
@@ -266,14 +276,16 @@ predictors and one member of each pair correlated above
 training rows only, and <code>details$removed_predictors</code> records
 what went. Here one of <code>x1</code> and <code>x1_copy</code> is
 removed before the model ever sees it. The filter does not look at the
-outcome, so which one goes is arbitrary. For classification, class
-upsampling (when requested by caret’s <code>sampling</code>) happens
-inside each resample. Test-set ROC and PR AUC are reported for binary
-outcomes when pROC and PRROC are installed.</p>
+outcome, so which one goes is arbitrary. For classification,
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> always up-samples the smaller classes, inside
+each resample. Test-set ROC and PR AUC are reported for binary outcomes
+when pROC and PRROC are installed.</p>
 <p>The reported regression <code>R2</code> is caret’s squared
 correlation between predictions and observations, not
 <code>1 - SSE/SST</code>. A biased model can still score well on it, so
-read it together with RMSE.</p>
+read it together with RMSE. <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> reports
+<code>1 - SSE/SST</code>, so the two <code>R2</code> values above are
+not on the same footing; compare the RMSEs.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

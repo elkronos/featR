@@ -26,13 +26,13 @@ fs_correlation(
 
 - data:
 
-  A data frame or matrix with at least 2 columns and unique column names
-  (a correlation matrix with duplicated dimnames is ambiguous, so
-  duplicates are rejected rather than silently resolved to the first
-  match). For `"pearson"`, `"spearman"`, `"kendall"`: all columns must
-  be numeric. For `"polychoric"`: all columns must be ordered factors.
-  For `"pointbiserial"`: columns may be numeric (continuous) or
-  dichotomous (exactly 2 unique non-NA values).
+  A data frame or matrix with at least 2 columns and unique, non-empty
+  column names (a correlation matrix with duplicated dimnames is
+  ambiguous, so duplicates are rejected rather than silently resolved to
+  the first match). For `"pearson"`, `"spearman"`, `"kendall"`: all
+  columns must be numeric. For `"polychoric"`: all columns must be
+  ordered factors. For `"pointbiserial"`: columns may be numeric
+  (continuous) or dichotomous (exactly 2 unique non-NA values).
 
 - threshold:
 
@@ -98,8 +98,10 @@ fs_correlation(
 - seed:
 
   Optional integer seed for reproducible sampling, applied locally; the
-  previous RNG state is restored afterwards. Default `NULL` (never
-  seeds).
+  previous RNG state is restored afterwards. It only matters for the row
+  down-sampling, which happens in the main R process; the point-biserial
+  computations run under `parallel = TRUE` use no random numbers, so no
+  worker RNG streams are set or needed. Default `NULL` (never seeds).
 
 - verbose:
 

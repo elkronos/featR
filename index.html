@@ -24,7 +24,7 @@
 
     <a class="navbar-brand me-2" href="index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -236,7 +236,7 @@
 </tr>
 <tr>
 <td><code><a href="reference/fs_svd.html">fs_svd()</a></code></td>
-<td>Exact or approximate (RSpectra) truncated SVD. Pass <code>n_singular_values &lt; min(dim(x))</code> to enable the approximate solver.</td>
+<td>Exact or approximate (RSpectra) truncated SVD. The approximate solver is used when <code>n_singular_values &lt; min(dim(x))</code> and <code>min(dim(x))</code> exceeds <code>svd_threshold</code> (default 100).</td>
 </tr>
 </tbody>
 </table>
@@ -253,7 +253,8 @@
 <li>
 <code><a href="reference/fs_elastic.html">fs_elastic()</a></code> fits PCA per fold; <code><a href="reference/fs_lasso.html">fs_lasso()</a></code> refuses to mean-impute by default (<code>impute = "none"</code>) because full-data imputation leaks across folds.</li>
 <li>
-<code><a href="reference/fs_randomforest.html">fs_randomforest()</a></code>’s <code>feature_select</code> hook runs on the training split only.</li>
+<code><a href="reference/fs_randomforest.html">fs_randomforest()</a></code>’s <code>feature_select</code> hook runs on the training split only, so the held-out <code>details$metrics</code> stay honest; the out-of-bag <code>details$oob</code> is grown on those same rows and is optimistic when the hook looks at the outcome.</li>
+<li>Numbers computed on rows that also chose the features or tuning values are optimistic and documented as such: <code>model$results</code> of caret-based fits, <code><a href="reference/fs_svm.html">fs_svm()</a></code>’s chosen-size <code>size_scores</code>, <code><a href="reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>’s <code>resampling_results</code>, <code><a href="reference/fs_elastic.html">fs_elastic()</a></code>’s <code>metric_value</code>, <code><a href="reference/fs_bayes.html">fs_bayes()</a></code>’s <code>best_elpd</code>.</li>
 <li>Post-selection statistics (<code><a href="reference/fs_stepwise.html">fs_stepwise()</a></code> p-values) are labeled as invalid for inference rather than presented as if they were not.</li>
 </ul>
 </div>

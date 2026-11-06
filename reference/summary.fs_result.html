@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -101,6 +101,20 @@ same ascending order is used for the threshold filters
 the low side of the threshold (<code>direction = "below"</code> with
 <code>action = "keep"</code>, or <code>"above"</code> with <code>"remove"</code>), so the
 kept features come first.</p>
+<p>Two methods select features by something other than a cut on the score,
+and for them the selected features are listed first (each group ordered
+by score), so a kept feature is never ranked below, or truncated out
+behind, a dropped one. <code><a href="fs_mars.html">fs_mars</a></code> selects every predictor the
+final model uses, which can have a zero or negative GCV importance while
+pruned predictors score 0. <code><a href="fs_correlation.html">fs_correlation</a></code> with
+<code>prune = TRUE</code> scores each variable by its largest absolute
+correlation with any other (larger = more redundant) and keeps one member
+of each redundant pair; its rows are ordered ascending within each group,
+least redundant first. With <code>prune = FALSE</code> the selection is the
+redundant set, ordered by decreasing score.</p>
+<p>The <code>selected</code> marks are matched by position when the result records a
+per-feature keep-mask (<code>details$mask</code>, as the threshold filters do),
+so features sharing a name are marked individually; otherwise by name.</p>
     </div>
 
     <div class="section level2">

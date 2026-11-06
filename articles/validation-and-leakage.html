@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -140,8 +140,13 @@ that number honest:</p>
 <code><a href="../reference/fs_svm.html">fs_svm()</a></code> split the data first. Selection, tuning, and
 preprocessing that learns from data (near-zero-variance filters,
 correlation filters, one-hot encoders, imputation values) are fitted on
-the training rows only. The metrics in <code>details</code> come from
-the held-out rows.</li>
+the training rows only. The held-out metrics –
+<code>details$metrics</code> (<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>,
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code>), <code>details$test_metrics</code>
+(<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>), <code>details$performance</code>
+(<code><a href="../reference/fs_svm.html">fs_svm()</a></code>) – come from rows the selection never saw. Other
+entries of <code>details</code> are computed on training rows and are
+optimistic; see the next points.</li>
 <li>
 <strong>Resampling-aware preprocessing.</strong>
 <code>fs_elastic(use_pca = TRUE)</code> refits centering, scaling, and
@@ -154,10 +159,24 @@ refuses missing predictors by default. <code>impute = "mean"</code> uses
 full-data means and warns you that it leaks.</li>
 <li>
 <strong>Labeled in-sample numbers.</strong>
-<code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>’s <code>details$mae</code> and
-<code>details$rmse</code>, and <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>’s <em>t</em>
-statistics and p-values, are computed on the rows used for selection.
-The documentation says so.</li>
+<code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>’s <code>details$mae</code>,
+<code>details$rmse</code> and <code>details$best_elpd</code>, and
+<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>’s <em>t</em> statistics and p-values, are
+computed on the rows used for selection. The documentation says so.</li>
+<li>
+<strong>Selection-reused numbers.</strong> Some resampled numbers
+are computed on the training rows after (or while) those rows chose the
+features or the tuning values, so they are optimistic even though they
+look like cross-validation: <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>’s out-of-bag
+<code>details$oob</code> when a <code>control$feature_select</code> hook
+looked at the target, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>’s <code>model$results</code>
+with <code>feature_select = TRUE</code> and the chosen size’s entry in
+<code>details$selection$size_scores</code>,
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>’s
+<code>details$resampling_results</code>, and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>’s
+<code>details$metric_value</code> (the best value over the whole tuning
+grid; <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> holds out no test rows). Use the
+held-out metrics above, or an outer resampling loop.</li>
 </ul>
 </div>
 <div class="section level2">

@@ -24,8 +24,10 @@ fs_stepwise(
 - data:
 
   A data.frame (or data.table) with at least two columns: the numeric
-  target and at least one candidate predictor. Every column other than
-  `target` is offered to the search.
+  target and at least one candidate predictor, with unique, non-empty
+  column names and no infinite values. Every column other than `target`
+  is offered to the search. After incomplete rows are dropped there must
+  be more rows than coefficients in the full model.
 
 - target:
 
@@ -65,14 +67,15 @@ An object of class `fs_result` with:
 
 - scores:
 
-  Named numeric vector of absolute t statistics from the final model's
-  coefficient table, excluding the intercept. Scores are per
-  coefficient, so a selected factor term appears here under its dummy
-  names (e.g. `grpb`, `grpc` for the term `grp`), not under the term
-  label reported in `selected`. **Caveat**: these statistics (and the
-  p-values in `details$coefficients`) are computed after selection on
-  the same data, so they are optimistically biased and are not valid for
-  inference.
+  Named numeric vector, one entry per selected term and keyed by the
+  same term labels as `selected`: the absolute t statistic of the term's
+  coefficient, or for a multi-coefficient term (a factor, an
+  interaction) the largest `|t|` among its coefficients (`NA` when all
+  of them are aliased). The per-coefficient `|t|` (e.g. `grpb`, `grpc`
+  for the term `grp`) are in `details$coefficient_scores`. **Caveat**:
+  these statistics (and the p-values in `details$coefficients`) are
+  computed after selection on the same data, so they are optimistically
+  biased and are not valid for inference.
 
 - method:
 
@@ -91,7 +94,8 @@ An object of class `fs_result` with:
 
   A list with `final_model` (the same `lm`), `coefficients` (the
   [`summary()`](https://rdrr.io/r/base/summary.html) coefficient matrix,
-  same caveat as `scores`), `selected_terms` (the same term labels as
+  same caveat as `scores`), `coefficient_scores` (named `|t|` per
+  non-intercept coefficient), `selected_terms` (the same term labels as
   `selected`), `direction` (the search direction actually used),
   `n_features` (the number of candidate predictors offered to the
   search, i.e. `ncol(data) - 1`) and `dropped_na_rows` (how many rows
@@ -157,6 +161,18 @@ Rows containing missing values in any column are dropped (with a
 warning) before the search, because `stepAIC()` cannot compare models
 fitted on differing row sets.
 
+For `direction = "backward"` or `"both"`, which start from the full
+model, the full model must leave residual degrees of freedom: with as
+many coefficients (intercept and factor dummies included) as complete
+rows it fits perfectly, its AIC is -Inf, and the call stops with an
+error naming the counts. A forward search starts from the intercept and
+may have more candidate predictors than rows; it warns if the model it
+ends on has no residual degrees of freedom (a perfect fit, so the
+selection is not meaningful). A factor or character predictor with fewer
+than two observed levels (after dropping incomplete rows) is an error,
+as is a factor dummy name that collides with another column or the
+target (factor `g` with level `b` next to a column `gb`).
+
 ## Examples
 
 ``` r
@@ -175,6 +191,6 @@ if (requireNamespace("MASS", quietly = TRUE)) {
 #>       wt     qsec       am 
 #> 5.506882 4.246676 2.080819 
 #> mpg ~ qsec + am
-#> <environment: 0x55b388988e80>
+#> <environment: 0x55c21d870208>
 # }
 ```

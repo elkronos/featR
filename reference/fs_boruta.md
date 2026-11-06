@@ -31,13 +31,17 @@ fs_boruta(
   and logical columns are converted to factors and Date/POSIXt columns
   to numeric, and any other type is an error. Neither the target nor the
   predictors may contain missing values, since Boruta's underlying
-  random forest cannot fit them.
+  random forest cannot fit them. Column names must be unique and
+  non-empty, and `data` must hold at least one predictor besides the
+  target.
 
 - target:
 
   Name of the target column in `data`. A factor target is treated as
   classification, a numeric target as regression; any other type is an
-  error, as is a target containing NAs.
+  error, as is a target containing NAs or infinite values. Unused factor
+  levels are dropped, and a factor target with fewer than two observed
+  classes is an error.
 
 - maxRuns:
 

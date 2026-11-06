@@ -29,7 +29,7 @@ kept.'></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -106,7 +106,13 @@ kept.</p>
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data.frame or data.table with at least two rows and at least
-one numeric column.</p></dd>
+one numeric column. Column names must be unique and non-empty. Non-numeric
+(label) columns must not be named like a retained score column (<code>PC1</code>,
+<code>PC2</code>, ...), which would shadow them in <code>pca_df</code>; that is an error.
+Zero-variance detection is relative to each column's magnitude and immune
+to <code><a href="https://rdrr.io/r/stats/sd.html" class="external-link">sd()</a></code> over/underflow, so columns in extreme units (beyond about
+<code>1e154</code> or below <code>1e-154</code>) are kept; with <code>scale_data = FALSE</code> their
+variance cannot be represented and they are an error.</p></dd>
 
 
 <dt id="arg-num-pc">num_pc<a class="anchor" aria-label="anchor" href="#arg-num-pc"></a></dt>

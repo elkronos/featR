@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -91,9 +91,10 @@ the search never saw.</p>
 elimination<a class="anchor" aria-label="anchor" href="#fs_recursivefeature-recursive-feature-elimination"></a>
 </h2>
 <p><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> wraps <code><a href="https://rdrr.io/pkg/caret/man/rfe.html" class="external-link">caret::rfe()</a></code>.
-It first splits the data. On the training rows it repeatedly fits a
-model, ranks the predictors, and drops the weakest. Resampling chooses
-the subset size. It then evaluates the result on the held-out rows.</p>
+It first splits the data. On the training rows it fits a model, ranks
+the predictors by its importance, and refits on the top-ranked subset of
+each candidate size. Resampling chooses the subset size. It then
+evaluates the result on the held-out rows.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">rfe</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_recursivefeature.html">fs_recursivefeature</a></span><span class="op">(</span></span>
 <span>  <span class="va">iris</span>, <span class="st">"Species"</span>,</span>
@@ -157,14 +158,22 @@ features were eliminated gives the ranking.</p>
 <span><span class="co">#&gt; 0.9333333 0.9000000</span></span></code></pre></div>
 <p>Without <code>n_features</code>, the number of features to keep is
 chosen by cross-validation over a short ladder of sizes (1, 2, 4, 8, …,
-p). You must state <code>task</code> explicitly. SVM-RFE needs
-<code>kernel = "linear"</code>, because the ranking uses the primal
-weight vector, which exists only for a linear kernel. For other kernels,
-use <code>select_method = "rf_rfe"</code>, which screens with random
-forests instead. Selection always runs on the training split, and
-<code>details$performance</code> comes from the test split. Selection
-works on the <strong>dummy-encoded</strong> predictors, so factor levels
-are selected individually.</p>
+p, at most six of them). You must state <code>task</code> explicitly.
+SVM-RFE needs <code>kernel = "linear"</code>, because the ranking uses
+the primal weight vector, which exists only for a linear kernel. For
+other kernels, use <code>select_method = "rf_rfe"</code>, which screens
+with random forests instead. Selection always runs on the training
+split, and <code>details$performance</code> comes from the test split;
+it is the honest estimate. Two other numbers are not. Each entry of
+<code>details$selection$size_scores</code> is a nested cross-validation
+estimate for its own size, but the chosen size is the best of up to six
+noisy estimates, so its score is optimistic. And with
+<code>feature_select = TRUE</code> the final model’s tuning
+cross-validation (<code>sv$model$results</code>, what printing
+<code>sv$model</code> shows) reuses the training rows the selector
+already used, so on pure noise it can approach perfect accuracy.
+Selection works on the <strong>dummy-encoded</strong> predictors, so
+factor levels are selected individually.</p>
 </div>
 <div class="section level2">
 <h2 id="fs_boruta-all-relevant-selection">
@@ -228,12 +237,13 @@ linear regression. It is cheap, deterministic, and returns an ordinary
 <span><span class="va">st</span><span class="op">$</span><span class="va">scores</span></span>
 <span><span class="co">#&gt;       wt     qsec       am </span></span>
 <span><span class="co">#&gt; 5.506882 4.246676 2.080819</span></span></code></pre></div>
-<p>Pass <code>k = log(nrow(data))</code> to use BIC, which selects fewer
-terms. Stepwise search is greedy and unstable: small changes to the data
-can change the answer. The <em>t</em> statistics in <code>scores</code>
-and the p-values in <code>details$coefficients</code> are computed after
-selection on the same data, so they are biased toward significance.
-<strong>Do not use them for inference.</strong></p>
+<p>Pass <code>k = log(nrow(data))</code> to use BIC, which usually
+selects fewer terms. Stepwise search is greedy and unstable: small
+changes to the data can change the answer. The <em>t</em> statistics in
+<code>scores</code> and the p-values in
+<code>details$coefficients</code> are computed after selection on the
+same data, so they are biased toward significance. <strong>Do not use
+them for inference.</strong></p>
 </div>
 <div class="section level2">
 <h2 id="fs_bayes-bayesian-model-comparison">
@@ -261,7 +271,13 @@ and samples a Stan program. Bound the search with
 brms, loo, and a working C++ toolchain, which is why this example is not
 run here. <code>details$mae</code> and <code>details$rmse</code> are
 in-sample, and the posterior of the returned model is post-selection, so
-neither is an honest estimate on its own.</p>
+neither is an honest estimate on its own. <code>details$best_elpd</code>
+is approximately unbiased for a single fixed model, but it belongs to
+the model that won a search over up to <code>2^p - 1</code> candidates,
+so it is optimistic too (selection-induced bias; Piironen and Vehtari,
+2017), and so are the differences in
+<code>details$loo_comparison</code>. Judge the chosen subset on data the
+search did not use.</p>
 </div>
 <div class="section level2">
 <h2 id="references">References<a class="anchor" aria-label="anchor" href="#references"></a>
@@ -271,6 +287,9 @@ selection for cancer classification using support vector machines.
 <em>Machine Learning</em> 46, 389–422. <a href="https://doi.org/10.1023/A:1012487302797" class="external-link uri">https://doi.org/10.1023/A:1012487302797</a></p>
 <p>Kursa, M. B. and Rudnicki, W. R. (2010). Feature selection with the
 Boruta package. <em>Journal of Statistical Software</em> 36(11). <a href="https://doi.org/10.18637/jss.v036.i11" class="external-link uri">https://doi.org/10.18637/jss.v036.i11</a></p>
+<p>Piironen, J. and Vehtari, A. (2017). Comparison of Bayesian
+predictive methods for model selection. <em>Statistics and
+Computing</em> 27, 711–735. <a href="https://doi.org/10.1007/s11222-016-9649-y" class="external-link uri">https://doi.org/10.1007/s11222-016-9649-y</a></p>
 <p>Vehtari, A., Gelman, A. and Gabry, J. (2017). Practical Bayesian
 model evaluation using leave-one-out cross-validation and WAIC.
 <em>Statistics and Computing</em> 27, 1413–1432. <a href="https://doi.org/10.1007/s11222-016-9696-4" class="external-link uri">https://doi.org/10.1007/s11222-016-9696-4</a></p>

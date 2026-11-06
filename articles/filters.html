@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -192,11 +192,12 @@ correlate above <code>threshold</code>:</p>
 <span><span class="va">red</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">pairs</span></span>
 <span><span class="co">#&gt;       Var1   Var2 Correlation</span></span>
 <span><span class="co">#&gt; 1 x_strong x_copy   0.9984364</span></span></code></pre></div>
-<p>Pruning uses the <code><a href="https://rdrr.io/pkg/caret/man/findCorrelation.html" class="external-link">caret::findCorrelation()</a></code> heuristic.
-Within the strongest remaining pair, it drops the member with the larger
-mean absolute correlation to everything else. That choice does not
-consult the outcome, so it may drop the member that predicts better.
-<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> prunes by importance instead.</p>
+<p>Pruning is a variant of the <code><a href="https://rdrr.io/pkg/caret/man/findCorrelation.html" class="external-link">caret::findCorrelation()</a></code>
+heuristic. It takes the strongest remaining pair first and drops the
+member with the larger mean absolute correlation to everything else.
+That choice does not consult the outcome, so it may drop the member that
+predicts better. <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> prunes by importance
+instead.</p>
 <p>Supported correlation types are <code>"pearson"</code>,
 <code>"spearman"</code>, <code>"kendall"</code>,
 <code>"polychoric"</code> (ordered factors, needs polycor), and

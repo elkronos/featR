@@ -21,7 +21,7 @@ rows. Permutation importance is reported as the per-feature score.'></head><body
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -94,8 +94,10 @@ rows. Permutation importance is reported as the per-feature score.</p>
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data.frame or data.table with at least one row and one column,
-holding the target and the candidate predictors (every other column).
-<code>Date</code> columns are converted to numeric before modeling.</p></dd>
+holding the target and the candidate predictors (every other column),
+with unique, non-empty column names and no infinite predictor values.
+<code>Date</code> columns are converted to numeric before modeling. An ordered
+factor target is modeled as an unordered one.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
@@ -110,8 +112,12 @@ when <code>task</code> is left at its default and the target is numeric, a warni
 says so, since every distinct value would become a class. A
 classification target is coerced with
 <code><a href="https://rdrr.io/r/base/factor.html" class="external-link">as.factor()</a></code> and must retain at least two levels; a regression target is
-coerced with <code><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric()</a></code>. Either way, rows whose target is <code>NA</code> after
-coercion are dropped with a warning.</p></dd>
+coerced with <code><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric()</a></code> – a factor through its labels
+(<code>as.numeric(as.character(y))</code>), never its internal level codes. Either
+way, rows whose target is <code>NA</code> after coercion are dropped with a warning;
+an infinite regression target is an error. With
+<code>control$drop_zerovar = FALSE</code>, training rows in which every predictor
+is constant are an error (there is nothing to split on).</p></dd>
 
 
 <dt id="arg-control">control<a class="anchor" aria-label="anchor" href="#arg-control"></a></dt>
@@ -236,14 +242,23 @@ whole number &gt;= 2, or <code>NULL</code> for no limit.</p></li>
 <li><p><code>sampsize = NULL</code> – rows drawn to grow each tree, passed to
 <code>randomForest</code>. A single number for regression (a vector is an
 error); one number per class is allowed for classification. Entries
-must be whole numbers &gt;= 1 (anything else is an error). Values are
-clamped to the training row count, and <code>NA</code> entries are replaced by
+must be whole numbers &gt;= 1 (anything else is an error). A single value
+is clamped to the training row count; a per-class (or, with
+<code>strata</code>, per-stratum) vector has each entry clamped to that
+class's (stratum's) frequency in the training rows, with a warning,
+since <code>randomForest</code> refuses larger entries and the training
+split is chosen inside the function. <code>NA</code> entries are replaced by
 the full training size when <code>replace = TRUE</code> and by
-<code>ceiling(0.632 * n)</code> otherwise.</p></li>
+<code>ceiling(0.632 * n)</code> otherwise (and then clamped likewise).</p></li>
 <li><p><code>classwt = NULL</code> – class priors for classification, forwarded
 to <code>randomForest</code> unchanged and unvalidated.</p></li>
-<li><p><code>strata = NULL</code> – stratification variable for the per-tree
-sampling, forwarded to <code>randomForest</code> unchanged and unvalidated.</p></li>
+<li><p><code>strata = NULL</code> – name of a column of <code>data</code> used as the
+stratification variable for the per-tree sampling (with
+<code>sampsize</code>). Its values are read from the training rows, so they
+stay aligned with the rows the forest is grown on; a vector is an
+error, because the training rows are chosen inside the function. The
+column must not contain <code>NA</code> (an error). The
+column is still used as a predictor unless removed.</p></li>
 <li><p><code>replace = TRUE</code> – sample rows with replacement when growing
 each tree.</p></li>
 <li><p><code>preprocess = NULL</code> – function <code>dt -&gt; dt</code>, applied to the
@@ -259,13 +274,15 @@ predictor and applied to NAs in train and test.</p></li>
 <code><a href="https://rdrr.io/pkg/caret/man/nearZeroVar.html" class="external-link">caret::nearZeroVar()</a></code>, using training data only.</p></li>
 <li><p><code>oob = TRUE</code> – include out-of-bag metrics in
 <code>details$oob</code> (<code>accuracy</code> for classification, <code>RMSE</code> for
-regression); see the note below about parallel training.</p></li>
+regression); see the notes below about parallel training and about
+<code>control$feature_select</code>, which makes these optimistic.</p></li>
 <li><p><code>return_test_data = FALSE</code> – when <code>TRUE</code>, the held-out
 rows are returned in <code>details$test_data</code>.</p></li>
 <li><p><code>positive_class = NULL</code> – optional level name treated as the
-positive class for binary AUC. Falls back to the second factor level
-both by default and, silently, when the string does not name a level of
-the target.</p></li>
+positive class for binary AUC; <code>NULL</code> means the second factor
+level. A string that does not name a level of the (cleaned)
+classification target is an error. ROC AUC itself does not depend on
+which class is called positive.</p></li>
 </ul><p>Unknown <code>control</code> entries are rejected, so typos and arguments that moved
 out of <code>control</code> (<code>seed</code>, <code>n_cores</code>, the former <code>split_ratio</code>) fail loudly.</p>
 <p><strong>Selection is train-only</strong>: <code>control$feature_select</code> runs
@@ -278,6 +295,12 @@ data before the split – subject to the caveat in the next paragraph.
 Near-zero-variance removal happens after the hook, so
 <code>details$feature_names</code> (the predictors the forest actually used) can be
 a subset of <code>selected</code>.</p>
+<p><strong>OOB metrics are not honest after a supervised hook</strong>: the forest is
+grown on the same training rows the hook selected on, so an out-of-bag row
+was out of the bag for the trees but <em>not</em> out of the selection.
+With a hook that consults the target, <code>details$oob</code> is optimistic (on
+pure noise it can read well above chance); only <code>details$metrics</code>,
+computed on the held-out rows, is free of the selection step.</p>
 <p><strong>What still sees the full data</strong>: <code>control$preprocess</code> runs
 before the split by design, so any quantity it learns – an imputation
 value, a scaling constant, anything that consults the target – is computed
@@ -293,15 +316,29 @@ error structures (<code>err.rate</code>, <code>mse</code>, <code>confusion</code
 case <code>details$oob</code> is <code>NULL</code> and a warning is emitted if
 <code>control$oob = TRUE</code>. The held-out metrics in <code>details$metrics</code>
 are unaffected; use <code>n_cores = 1</code> when you want the OOB numbers.</p>
-<p>Character predictors are converted to factors, with the levels learned on
-the training split. Test values unseen in training become NA and are imputed
+<p>Character predictors are converted to factors, and unused levels are
+dropped from factor predictors, so the levels are those seen in the
+training split. Test values unseen in training become NA and are imputed
 when <code>control$impute = TRUE</code>; with <code>control$impute = FALSE</code> those
 NAs survive into <code><a href="https://rdrr.io/r/stats/predict.html" class="external-link">predict()</a></code>, which <code>randomForest</code> cannot handle.
 <code>details$metrics$auc</code> is filled in only when the classification target
 has exactly two levels <em>and</em> the suggested package 'pROC' is installed;
-it is <code>NA</code> otherwise, which includes every multi-class fit. Regression
-fits report RMSE, MAE, and R2 instead, and R2 is <code>NA</code> when the held-out
-target has no variance.</p>
+it is <code>NA</code> otherwise, which includes every multi-class fit and (with a
+warning) a held-out split that contains only one of the two classes.
+For a binary target the positive class is <code>control$positive_class</code>
+or, by default, the <em>second</em> factor level (after unused levels are
+dropped), which is the class whose predicted probability is scored.
+<code><a href="fs_mars.html">fs_mars()</a></code> uses the <em>first</em> level instead. ROC AUC is the same
+whichever class is called positive, so <code>auc</code> does not depend on this
+choice, but the two functions' class-specific quantities (such as
+<code><a href="fs_mars.html">fs_mars()</a></code>'s PR AUC or sensitivity) are not directly comparable.
+<code>kappa</code> is Cohen's kappa computed from the held-out confusion table
+(<code>NA</code> when it is undefined, i.e. chance agreement is 1). Regression
+fits report RMSE, MAE, and R2 instead. R2 is <code>1 - SSE/SST</code> on the
+held-out rows (so it can be negative), not the squared correlation that
+<code><a href="fs_mars.html">fs_mars</a></code> reports, and it is <code>NA</code> when the held-out
+target has no variance (including variance that is only floating-point
+round-off, relative to the target's magnitude).</p>
     </div>
 
     <div class="section level2">

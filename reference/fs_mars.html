@@ -13,7 +13,7 @@ with their variable importance.'></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -89,8 +89,10 @@ with their variable importance.</p>
 
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
-<dd><p>data.frame or data.table with predictors and the target. A
-data.table is copied, never modified in place.</p></dd>
+<dd><p>data.frame or data.table with predictors and the target, with
+unique, non-empty column names and no infinite values. A data.table is
+copied, never modified in place. Unused levels of a factor target are
+dropped.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
@@ -148,8 +150,12 @@ highly correlated numeric predictors (default 0.95; 0 disables).</p></dd>
 
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Optional whole number for reproducibility, applied locally and
-restored on exit. Default NULL (never seeds by default). When NULL, no
-deterministic resampling seed lists are constructed either.</p></dd>
+restored on exit. Default NULL (never seeds by default). With a seed,
+one seed per resample (and tuning candidate) is drawn from the locally
+seeded RNG and passed to <code>caret::trainControl(seeds = )</code>, which is what
+keeps a seeded <code>n_cores &gt; 1</code> run reproducible; the parallel workers
+themselves are not given seeded RNG streams. When NULL, no deterministic
+resampling seed lists are constructed either.</p></dd>
 
 
 <dt id="arg-verbose">verbose<a class="anchor" aria-label="anchor" href="#arg-verbose"></a></dt>
@@ -161,22 +167,26 @@ log, and the small-class notice (default FALSE).</p></dd>
 <dd><p>Integer &gt;= 1. Number of parallel workers for model training
 (default 1 = sequential; no cluster is created and caret's
 <code>allowParallel</code> stays FALSE). Values above the detected core count are
-capped; requires 'doParallel' and 'foreach' when greater than 1.</p></dd>
+capped; requires 'doParallel' and 'foreach' when greater than 1. The
+workers need 'caret' and 'earth' installed, not attached.</p></dd>
 
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>An object of class <code>fs_result</code> with:</p><dl><dt>selected</dt>
 <dd><p>Character vector of the predictors earth retained
-(strictly positive <code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> importance), ordered by
-decreasing importance. Empty when no importance is available.</p></dd>
+(those appearing in a term of the final earth model), ordered by
+decreasing importance. If <code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> fails (with a
+warning), the predictors in the final earth model are still
+reported, in model order.</p></dd>
 
 <dt>scores</dt>
 <dd><p>Named numeric vector of unscaled variable importance, one
-entry per candidate predictor that entered training, floored at 0
-(predictors earth pruned away score 0). <code>NULL</code> when caret cannot
-compute variable importance for the fitted model, in which case
-<code>selected</code> is empty.</p></dd>
+entry per candidate predictor that entered training. Predictors
+earth pruned away score 0; a predictor in the final model keeps its
+importance even when that is zero or negative. <code>NULL</code> when caret cannot
+compute variable importance for the fitted model (a warning carrying
+caret's error message is raised).</p></dd>
 
 <dt>method</dt>
 <dd><p>"mars".</p></dd>
@@ -193,7 +203,8 @@ are coerced to factor), "regression" for a numeric one.</p></dd>
 carrying the training levels for classification), <code>metrics</code>
 (RMSE/MAE/R2 for regression; Accuracy/Kappa plus ROC_AUC/PR_AUC when
 the optional 'pROC'/'PRROC' packages are installed for binary
-classification), <code>confusion_matrix</code> (classification only, else
+classification; <code>ROC_AUC</code> is <code>NA</code> and <code>PR_AUC</code> absent when the
+held-out rows contain only one class), <code>confusion_matrix</code> (classification only, else
 NULL), <code>varimp</code> (the <code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> object, or NULL when
 unsupported), <code>removed_predictors</code> (a list with <code>nzv</code> and <code>corr</code>
 naming the dropped predictors), <code>train_index</code> (integer row indices
@@ -223,9 +234,11 @@ predictors (see <code>remove_nzv</code> and <code>corr_cut</code>) are identifie
 rows only and dropped from both halves; then <code><a href="https://rdrr.io/pkg/caret/man/train.html" class="external-link">caret::train()</a></code> fits earth
 under repeated cross-validation with <code>preProcess = c("center", "scale")</code>.</p>
 <p>Selection is read off the fitted model: <code>caret::varImp(model, scale = FALSE)</code>
-is computed on the caret <code>train</code> object and every predictor with a strictly
-positive importance is reported in <code>selected</code>. Predictors earth pruned away
-score 0 and are not selected. caret expands factors into dummy columns
+is computed on the caret <code>train</code> object, and every predictor that appears in
+a term of the final (pruned) earth model is reported in <code>selected</code>.
+Predictors earth pruned away score 0 and are not selected. earth's GCV
+importance can be zero or negative for a predictor the final model still
+uses; such a predictor is selected and keeps its signed importance. caret expands factors into dummy columns
 before fitting, so each importance row is attributed back to the source
 predictor by name (the longest candidate name it starts with) and a
 predictor keeps the largest importance of its encoded columns; that
@@ -236,10 +249,18 @@ attributed like any other.</p>
 <p>For classification, class imbalance is handled by <code>sampling = "up"</code> inside
 <code><a href="https://rdrr.io/pkg/caret/man/trainControl.html" class="external-link">caret::trainControl()</a></code>, i.e. upsampling happens within each resample; the
 data are never upsampled before cross-validation (which would leak
-duplicated rows across folds). The FIRST factor level is treated as the
-positive class for ROC/PR AUC, and the test-set ROC AUC is computed with a
-fixed direction, so a worse-than-chance model scores below 0.5 rather than
-being silently flipped. Factor levels are sanitized with
+duplicated rows across folds). The FIRST factor level (after unused levels
+are dropped and labels sanitized) is treated as the positive class for
+ROC/PR AUC and for the sensitivity/specificity (<code>Sens</code>/<code>Spec</code>) that
+<code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::twoClassSummary()</a></code> reports in <code>model$results</code>; there is no
+override, so reorder the target's levels with <code><a href="https://rdrr.io/r/stats/relevel.html" class="external-link">stats::relevel()</a></code> to
+change it. This differs from <code><a href="fs_randomforest.html">fs_randomforest()</a></code>, whose default positive
+class is the second level. ROC AUC does not depend on which class is
+positive, but PR AUC, sensitivity and specificity do. The test-set ROC AUC
+is computed with a fixed direction, so a worse-than-chance model scores
+below 0.5 rather than being silently flipped. Classification requires the 'e1071' package
+(used by <code><a href="https://rdrr.io/pkg/caret/man/confusionMatrix.html" class="external-link">caret::confusionMatrix()</a></code> and caret's resampling summaries),
+which is checked before any training. Factor levels are sanitized with
 <code>make.names(unique = TRUE)</code>, so distinct labels can never be merged.</p>
 <p>For regression, the reported <code>R2</code> comes from <code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::R2()</a></code>, which is the
 squared correlation between predictions and observations – not

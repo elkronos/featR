@@ -29,8 +29,10 @@ fs_randomforest(
 - data:
 
   A data.frame or data.table with at least one row and one column,
-  holding the target and the candidate predictors (every other column).
-  `Date` columns are converted to numeric before modeling.
+  holding the target and the candidate predictors (every other column),
+  with unique, non-empty column names and no infinite predictor values.
+  `Date` columns are converted to numeric before modeling. An ordered
+  factor target is modeled as an unordered one.
 
 - target:
 
@@ -46,8 +48,12 @@ fs_randomforest(
   value would become a class. A classification target is coerced with
   [`as.factor()`](https://rdrr.io/r/base/factor.html) and must retain at
   least two levels; a regression target is coerced with
-  [`as.numeric()`](https://rdrr.io/r/base/numeric.html). Either way,
-  rows whose target is `NA` after coercion are dropped with a warning.
+  [`as.numeric()`](https://rdrr.io/r/base/numeric.html) – a factor
+  through its labels (`as.numeric(as.character(y))`), never its internal
+  level codes. Either way, rows whose target is `NA` after coercion are
+  dropped with a warning; an infinite regression target is an error.
+  With `control$drop_zerovar = FALSE`, training rows in which every
+  predictor is constant are an error (there is nothing to split on).
 
 - control:
 
@@ -190,16 +196,25 @@ correlated predictors, so treat close scores as ties.
 - `sampsize = NULL` – rows drawn to grow each tree, passed to
   `randomForest`. A single number for regression (a vector is an error);
   one number per class is allowed for classification. Entries must be
-  whole numbers \>= 1 (anything else is an error). Values are clamped to
-  the training row count, and `NA` entries are replaced by the full
-  training size when `replace = TRUE` and by `ceiling(0.632 * n)`
-  otherwise.
+  whole numbers \>= 1 (anything else is an error). A single value is
+  clamped to the training row count; a per-class (or, with `strata`,
+  per-stratum) vector has each entry clamped to that class's (stratum's)
+  frequency in the training rows, with a warning, since `randomForest`
+  refuses larger entries and the training split is chosen inside the
+  function. `NA` entries are replaced by the full training size when
+  `replace = TRUE` and by `ceiling(0.632 * n)` otherwise (and then
+  clamped likewise).
 
 - `classwt = NULL` – class priors for classification, forwarded to
   `randomForest` unchanged and unvalidated.
 
-- `strata = NULL` – stratification variable for the per-tree sampling,
-  forwarded to `randomForest` unchanged and unvalidated.
+- `strata = NULL` – name of a column of `data` used as the
+  stratification variable for the per-tree sampling (with `sampsize`).
+  Its values are read from the training rows, so they stay aligned with
+  the rows the forest is grown on; a vector is an error, because the
+  training rows are chosen inside the function. The column must not
+  contain `NA` (an error). The column is still used as a predictor
+  unless removed.
 
 - `replace = TRUE` – sample rows with replacement when growing each
   tree.
@@ -221,16 +236,18 @@ correlated predictors, so treat close scores as ties.
   using training data only.
 
 - `oob = TRUE` – include out-of-bag metrics in `details$oob` (`accuracy`
-  for classification, `RMSE` for regression); see the note below about
-  parallel training.
+  for classification, `RMSE` for regression); see the notes below about
+  parallel training and about `control$feature_select`, which makes
+  these optimistic.
 
 - `return_test_data = FALSE` – when `TRUE`, the held-out rows are
   returned in `details$test_data`.
 
 - `positive_class = NULL` – optional level name treated as the positive
-  class for binary AUC. Falls back to the second factor level both by
-  default and, silently, when the string does not name a level of the
-  target.
+  class for binary AUC; `NULL` means the second factor level. A string
+  that does not name a level of the (cleaned) classification target is
+  an error. ROC AUC itself does not depend on which class is called
+  positive.
 
 Unknown `control` entries are rejected, so typos and arguments that
 moved out of `control` (`seed`, `n_cores`, the former `split_ratio`)
@@ -246,6 +263,13 @@ data before the split – subject to the caveat in the next paragraph.
 Near-zero-variance removal happens after the hook, so
 `details$feature_names` (the predictors the forest actually used) can be
 a subset of `selected`.
+
+**OOB metrics are not honest after a supervised hook**: the forest is
+grown on the same training rows the hook selected on, so an out-of-bag
+row was out of the bag for the trees but *not* out of the selection.
+With a hook that consults the target, `details$oob` is optimistic (on
+pure noise it can read well above chance); only `details$metrics`,
+computed on the held-out rows, is free of the selection step.
 
 **What still sees the full data**: `control$preprocess` runs before the
 split by design, so any quantity it learns – an imputation value, a
@@ -266,16 +290,33 @@ emitted if `control$oob = TRUE`. The held-out metrics in
 `details$metrics` are unaffected; use `n_cores = 1` when you want the
 OOB numbers.
 
-Character predictors are converted to factors, with the levels learned
-on the training split. Test values unseen in training become NA and are
-imputed when `control$impute = TRUE`; with `control$impute = FALSE`
-those NAs survive into
-[`predict()`](https://rdrr.io/r/stats/predict.html), which
+Character predictors are converted to factors, and unused levels are
+dropped from factor predictors, so the levels are those seen in the
+training split. Test values unseen in training become NA and are imputed
+when `control$impute = TRUE`; with `control$impute = FALSE` those NAs
+survive into [`predict()`](https://rdrr.io/r/stats/predict.html), which
 `randomForest` cannot handle. `details$metrics$auc` is filled in only
 when the classification target has exactly two levels *and* the
 suggested package 'pROC' is installed; it is `NA` otherwise, which
-includes every multi-class fit. Regression fits report RMSE, MAE, and R2
-instead, and R2 is `NA` when the held-out target has no variance.
+includes every multi-class fit and (with a warning) a held-out split
+that contains only one of the two classes. For a binary target the
+positive class is `control$positive_class` or, by default, the *second*
+factor level (after unused levels are dropped), which is the class whose
+predicted probability is scored.
+[`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
+uses the *first* level instead. ROC AUC is the same whichever class is
+called positive, so `auc` does not depend on this choice, but the two
+functions' class-specific quantities (such as
+[`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)'s
+PR AUC or sensitivity) are not directly comparable. `kappa` is Cohen's
+kappa computed from the held-out confusion table (`NA` when it is
+undefined, i.e. chance agreement is 1). Regression fits report RMSE,
+MAE, and R2 instead. R2 is `1 - SSE/SST` on the held-out rows (so it can
+be negative), not the squared correlation that
+[`fs_mars`](https://elkronos.github.io/featR/reference/fs_mars.md)
+reports, and it is `NA` when the held-out target has no variance
+(including variance that is only floating-point round-off, relative to
+the target's magnitude).
 
 ## Examples
 

@@ -11,7 +11,7 @@ outcomes only (gaussian family)."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -71,11 +71,11 @@ outcomes only (gaussian family).</p>
 <span>  custom_folds <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  impute <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"none"</span>, <span class="st">"mean"</span><span class="op">)</span>,</span>
 <span>  return_model <span class="op">=</span> <span class="cn">FALSE</span>,</span>
+<span>  lambda <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"min"</span>, <span class="st">"1se"</span><span class="op">)</span>,</span>
 <span>  seed <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  verbose <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  parallel <span class="op">=</span> <span class="cn">FALSE</span>,</span>
-<span>  n_cores <span class="op">=</span> <span class="fl">2L</span>,</span>
-<span>  lambda <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"min"</span>, <span class="st">"1se"</span><span class="op">)</span></span>
+<span>  n_cores <span class="op">=</span> <span class="fl">2L</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -85,7 +85,7 @@ outcomes only (gaussian family).</p>
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data.frame or data.table holding the target and the candidate
-predictors. A numeric matrix with column names is also accepted;
+predictors, with unique, non-empty column names. A numeric matrix with column names is also accepted;
 non-numeric matrices are not (supply a data.frame so factors and
 characters can be expanded by <code><a href="https://rdrr.io/r/stats/model.matrix.html" class="external-link">model.matrix()</a></code>).</p></dd>
 
@@ -130,6 +130,11 @@ computed on the full data and warns about the leakage.</p></dd>
 (and pass <code>keep = TRUE</code> to <code>cv.glmnet()</code>); default FALSE.</p></dd>
 
 
+<dt id="arg-lambda">lambda<a class="anchor" aria-label="anchor" href="#arg-lambda"></a></dt>
+<dd><p>Which cross-validated penalty to select at: <code>"min"</code>
+(default, <code>lambda.min</code>) or <code>"1se"</code> (<code>lambda.1se</code>, sparser). See Details.</p></dd>
+
+
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Optional whole number for reproducibility, applied locally and
 restored on exit; default NULL (never seeds by default).</p></dd>
@@ -152,22 +157,16 @@ backend status and how many design-matrix columns were selected.</p></dd>
 <code>parallel = TRUE</code>. Default 2. Values above the detected core count are
 capped.</p></dd>
 
-
-<dt id="arg-lambda">lambda<a class="anchor" aria-label="anchor" href="#arg-lambda"></a></dt>
-<dd><p>Which cross-validated penalty to select at: <code>"min"</code>
-(default, <code>lambda.min</code>) or <code>"1se"</code> (<code>lambda.1se</code>, sparser). See Details.</p></dd>
-
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>An <code>fs_result</code> object with:</p>
 <dl><dt>selected</dt>
-<dd><p>Design-matrix columns whose raw coefficient at the
-chosen lambda (<code>lambda.min</code> by default) is non-zero, ordered by
-decreasing <code>scores</code> magnitude.
-(Selection reads the raw coefficients, so a constant column that glmnet
-nonetheless gave a non-zero coefficient is reported even though its
-standardized score is 0.)</p></dd>
+<dd><p>Design-matrix columns whose coefficient at the chosen
+lambda (<code>lambda.min</code> by default) is non-zero, ordered by decreasing
+<code>scores</code> magnitude. Constant (and numerically constant) columns always
+have coefficient 0, so they are never selected; floating-point residue
+coefficients are zeroed (see Details).</p></dd>
 
 <dt>scores</dt>
 <dd><p>data.frame with columns Variable, Coefficient and
@@ -229,6 +228,20 @@ of the units the predictors happen to be measured in. glmnet standardizes
 internally for fitting but reports coefficients back on the input scale, so
 those raw coefficients are kept in <code>details$coefficients</code>. With
 <code>standardize = FALSE</code>, <code>scores</code> is the raw table and the two are identical.</p>
+<p>Constant columns get a coefficient of exactly 0 and are never selected.
+The same holds for columns that are constant up to floating-point
+round-off (spread negligible relative to magnitude): standardization would
+otherwise blow that round-off up to a full-scale predictor with a raw
+coefficient around 1e15, so such columns are held at 0 during the fit. A
+column whose variance overflows (values around 1e154 or larger) is an
+error; rescale it first. Coefficients that are floating-point residue
+(below <code>1e-10</code> times the largest standardized coefficient) are reported as
+exactly 0: with all-level dummy coding of the first factor, the redundant
+level otherwise kept a coefficient around 1e-13 and was selected.</p>
+<p>Design-matrix names must be unique, because <code>selected</code> and <code>scores</code> name
+columns: a factor dummy that collides with another column or the target
+(factor <code>g</code> with level <code>b</code> next to a column <code>gb</code>) is an error, as is a
+factor or character predictor with fewer than two observed levels.</p>
 <p>Raw coefficient magnitude is a scale-dependent notion of importance: a
 predictor measured in small units earns a large coefficient for the same
 effect. That applies to <code>details$coefficients</code> always, and to <code>scores</code> when
@@ -244,8 +257,7 @@ that this leaks. Columns that are entirely NA are an error either way.</p>
     <div class="section level2">
     <h2 id="ref-examples">Examples<a class="anchor" aria-label="anchor" href="#ref-examples"></a></h2>
     <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="co"># \donttest{</span></span></span>
-<span class="r-in"><span><span class="kw">if</span> <span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/ns-load.html" class="external-link">requireNamespace</a></span><span class="op">(</span><span class="st">"glmnet"</span>, quietly <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span> <span class="op">&amp;&amp;</span></span></span>
-<span class="r-in"><span>    <span class="fu"><a href="https://rdrr.io/r/base/ns-load.html" class="external-link">requireNamespace</a></span><span class="op">(</span><span class="st">"Matrix"</span>, quietly <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">{</span></span></span>
+<span class="r-in"><span><span class="kw">if</span> <span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/ns-load.html" class="external-link">requireNamespace</a></span><span class="op">(</span><span class="st">"glmnet"</span>, quietly <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">{</span></span></span>
 <span class="r-in"><span>  <span class="va">n</span> <span class="op">&lt;-</span> <span class="fl">100</span></span></span>
 <span class="r-in"><span>  <span class="va">df</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span></span>
 <span class="r-in"><span>    x1 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="va">n</span><span class="op">)</span>,</span></span>

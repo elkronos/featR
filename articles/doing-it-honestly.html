@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -108,8 +108,13 @@ through a pipeline that avoids it.</p>
 <strong>Held-out splits.</strong> <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>,
 <code><a href="../reference/fs_mars.html">fs_mars()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, and
 <code><a href="../reference/fs_svm.html">fs_svm()</a></code> split the data first and fit every data-dependent
-step on the training rows only. The metrics in <code>details</code> come
-from rows the selection never saw.</li>
+step on the training rows only. Their held-out metrics come from rows
+the selection never saw: <code>details$metrics</code>
+(<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, <code><a href="../reference/fs_mars.html">fs_mars()</a></code>),
+<code>details$test_metrics</code> (<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>)
+and <code>details$performance</code> (<code><a href="../reference/fs_svm.html">fs_svm()</a></code>). Not
+everything in <code>details</code> is held out, though; see the next
+point.</li>
 <li>
 <strong>Selection inside resampling.</strong> <code><a href="../reference/fs_svm.html">fs_svm()</a></code>
 repeats SVM-RFE inside every cross-validation fold when it chooses how
@@ -123,9 +128,18 @@ them from the full data. If you opt in to <code>impute = "mean"</code>,
 it warns you.</li>
 <li>
 <strong>Labeled in-sample numbers.</strong> Statistics computed on
-the data used for selection are documented as such, for example
-<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>’s p-values and <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>’s
-<code>details$mae</code>.</li>
+the data used for selection are documented as such, and are optimistic:
+<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>’s p-values, <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>’s
+<code>details$mae</code>, <code>details$rmse</code> and
+<code>details$best_elpd</code> (the LOO score of the winner of the
+search), <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>’s <code>details$oob</code> when
+a <code>control$feature_select</code> hook chose the columns on the same
+training rows, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>’s
+<code>details$selection$size_scores</code> entry for the chosen size,
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>’s
+<code>details$resampling_results</code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>’s
+<code>details$metric_value</code>, and the cross-validated tuning
+results in <code>model$results</code> of any caret-based function.</li>
 <li>
 <strong>Known false-positive behavior is documented.</strong> For
 example, <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> can confirm pure-noise features,

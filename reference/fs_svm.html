@@ -15,7 +15,7 @@ count."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -91,11 +91,13 @@ count.</p>
 
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
-<dd><p>A data frame containing predictors and the target.</p></dd>
+<dd><p>A data frame containing predictors and the target, with
+unique, non-empty column names.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
-<dd><p>A string naming the target variable.</p></dd>
+<dd><p>A string naming the target variable. For classification, no
+class label may be the empty string.</p></dd>
 
 
 <dt id="arg-task">task<a class="anchor" aria-label="anchor" href="#arg-task"></a></dt>
@@ -146,7 +148,8 @@ actually run. An unrecognized value is always an error.</p></dd>
 number of encoded predictors. For <code>"svm_rfe"</code> the top
 <code>n_features</code> ranked features are kept and the cross-validated size
 search is skipped; for <code>"rf_rfe"</code> it truncates the selection to its
-first <code>n_features</code> entries and is the minimum number of features
+<code>n_features</code> highest-scoring entries and is the minimum number of
+features
 the random-forest fallback keeps (see Details). Ignored when
 <code>feature_select = FALSE</code>. Default <code>NULL</code> (the size is chosen
 automatically).</p></dd>
@@ -162,9 +165,13 @@ classification, up-samples classes within CV resampling (default
 <dd><p>Optional whole-number seed (within the R integer range;
 fractional values are an error, not truncated), applied locally for the
 duration of the call
-and restored afterwards; also used to set reproducible RNG streams on
-parallel workers when <code>n_cores &gt; 1</code>. Default <code>NULL</code> (never
-seeds by default).</p></dd>
+and restored afterwards. When <code>n_cores &gt; 1</code>, caret's resampling
+controls get <code>seeds = NULL</code>, so caret draws one seed per
+resample from the locally seeded RNG; that is what makes two seeded
+parallel runs agree. The workers also get L'Ecuyer-CMRG streams, but
+those alone would not, because foreach hands resamples to whichever
+worker is free. A seeded parallel run need not equal a seeded sequential
+one. Default <code>NULL</code> (never seeds by default).</p></dd>
 
 
 <dt id="arg-verbose">verbose<a class="anchor" aria-label="anchor" href="#arg-verbose"></a></dt>
@@ -185,7 +192,8 @@ cluster is created for the duration of the call and stopped on exit.</p></dd>
 <code>feature_select = FALSE</code> this is every encoded predictor. With
 <code>"svm_rfe"</code> it is the surviving subset, ordered from most to least
 important; with <code>"rf_rfe"</code> it is the subset in the order
-<code><a href="https://rdrr.io/pkg/caret/man/rfe.html" class="external-link">caret::rfe()</a></code> reports it.</p></dd>
+<code><a href="https://rdrr.io/pkg/caret/man/rfe.html" class="external-link">caret::rfe()</a></code> reports it, or, when <code>n_features</code> truncated
+it, ordered by decreasing <code>scores</code>.</p></dd>
 
 <dt>scores</dt>
 <dd><p>Named numeric vector covering every encoded predictor, not
@@ -206,13 +214,19 @@ produced comparable scores.</p></dd>
 <dd><p><code>"classification"</code> or <code>"regression"</code>.</p></dd>
 
 <dt>model</dt>
-<dd><p>The fitted <code><a href="https://rdrr.io/pkg/caret/man/train.html" class="external-link">caret::train</a></code> object.</p></dd>
+<dd><p>The fitted <code><a href="https://rdrr.io/pkg/caret/man/train.html" class="external-link">caret::train</a></code> object. With
+<code>feature_select = TRUE</code> its resampled metrics are optimistic
+(see Details); use <code>details$performance</code>.</p></dd>
 
 <dt>details</dt>
 <dd><p>A list with <code>test_set</code> (the test split with its
 coerced target and aligned factor levels), <code>predictions</code> (test-set
-predictions), <code>performance</code> (a <code><a href="https://rdrr.io/pkg/caret/man/confusionMatrix.html" class="external-link">caret::confusionMatrix</a></code> for
-classification, or a named RMSE/Rsquared/MAE vector for regression),
+predictions in the row order of <code>test_set</code>: a factor for
+classification, an unnamed numeric vector for regression),
+<code>performance</code> (a <code><a href="https://rdrr.io/pkg/caret/man/confusionMatrix.html" class="external-link">caret::confusionMatrix</a></code> for
+classification, or a named <code>RMSE</code>/<code>Rsquared</code>/<code>MAE</code>
+vector from <code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code> for regression, where
+<code>Rsquared</code> is the squared correlation; see Details),
 <code>selection</code> (<code>NULL</code> when no selection ran, otherwise a list
 with <code>method</code>, <code>ranking</code> from most to least important,
 <code>scores</code>, and the size search's <code>sizes</code>, <code>size_scores</code>
@@ -261,31 +275,69 @@ cross-validation with the same linear SVM, on folds shared by every
 candidate size. Inside each fold the standardization and the whole
 elimination are re-run on that fold's training rows only, and the top
 features of that fold's own ranking are scored on its held-out rows, so
-the size search is free of the selection bias of scoring a ranking that
-has already seen the held-out rows. The winner is the size with the
+no candidate size is scored by a ranking that has already seen its
+held-out rows. The winner is the size with the
 highest mean accuracy (classification) or the lowest mean RMSE
 (regression), ties going to the smaller size, and the kept features are
 the top of the ranking computed on the whole training split; if no size
-could be scored, all features are kept.</p></li>
+could be scored, all features are kept with a warning. Each entry of
+<code>details$selection$size_scores</code> is an honest estimate for its own
+size, but the entry of the <em>chosen</em> size is the best of up to six
+noisy estimates and is therefore optimistic (on pure noise it typically
+sits a few points above chance); use <code>details$performance</code> for an
+unbiased estimate.</p></li>
 <li><p><code>select_method = "rf_rfe"</code> keeps the older random-forest
 screening (<code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::rfFuncs</a></code>) and works with every kernel. It runs
 its own 10-fold cross-validation over subset sizes 1 to p, independent
-of <code>nfolds</code>. If <code>rfe()</code> fails or selects nothing, a plain
-random forest is fitted instead, with a warning, and every predictor
-with a positive mean decrease in node impurity is kept – or, if fewer
-than <code>n_features</code> (1 when <code>n_features = NULL</code>) qualify, the
-top <code>n_features</code> by that importance. With <code>n_features</code>
-supplied the result is then truncated to <code>n_features</code>, so the
-fallback keeps exactly that many (capped at the number available).</p></li>
+of <code>nfolds</code>. Numerically constant encoded predictors are removed
+before screening (score <code>NA</code>, never selected). If <code>rfe()</code>
+fails or selects nothing, a plain random forest is fitted instead, with
+a warning, and every predictor with a positive permutation importance
+(mean decrease in accuracy, or <code>%IncMSE</code> for regression) is kept
+– or, if fewer than <code>n_features</code> (1 when
+<code>n_features = NULL</code>) qualify, the top <code>n_features</code> by that
+importance. This fallback is a weak screen: roughly half of pure-noise
+predictors have positive permutation importance. With
+<code>n_features</code> supplied the selection is truncated to the
+<code>n_features</code> selected predictors with the highest reported
+<code>scores</code>, so the fallback keeps exactly that many (capped at the
+number available).</p></li>
 <li><p>Selection always runs on the training split only, so the test set
-never informs which features survive.</p></li>
+never informs which features survive. The final model's tuning
+cross-validation, however, reuses the training rows the selector has
+already seen, so with <code>feature_select = TRUE</code> the resampled
+metrics in <code>model$results</code> and <code>model$resample</code> (what
+printing <code>model</code> shows) are optimistically biased – on pure noise
+they can approach perfect accuracy – and the maximum over
+<code>tune_grid</code> adds further optimism. Only <code>details$performance</code>,
+computed on the untouched test split, is an honest estimate.</p></li>
+<li><p>Regression performance (<code>details$performance</code>) comes from
+<code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code>: <code>RMSE</code>, <code>MAE</code>, and
+<code>Rsquared</code>, which is the <em>squared Pearson correlation</em>
+between test predictions and observations – not
+<code>1 - SSE/SST</code>. It is therefore never negative and ignores bias
+and scale errors (predictions of <code>2 * y</code> score 1), so it is not
+comparable with an <code>R2</code> defined as <code>1 - SSE/SST</code> (for example
+<code><a href="fs_randomforest.html">fs_randomforest()</a></code>'s). Classification performance is a
+<code><a href="https://rdrr.io/pkg/caret/man/confusionMatrix.html" class="external-link">caret::confusionMatrix</a></code>, whose <code>overall</code> element holds
+<code>Accuracy</code> and Cohen's <code>Kappa</code>.</p></li>
 <li><p>Class-imbalance handling (<code>class_imbalance = TRUE</code>,
 classification only) up-samples <em>within</em> each cross-validation
 resample via <code>caret::trainControl(sampling = "up")</code>, so no
 resampled rows leak across folds.</p></li>
 <li><p>After the train/test split, factor (and character) predictor
-levels in the test set are aligned to the training levels; test rows
-containing levels unseen in training are dropped with a warning.</p></li>
+levels in the test set are aligned to the levels observed in the
+training rows (unused factor levels are dropped, so they produce no
+all-zero dummy columns); test rows containing levels unseen in
+training are dropped with a warning. If a dummy column name
+(<code>&lt;factor&gt;&lt;level&gt;</code>) coincides with another column or the target,
+for example factor <code>g</code> with level <code>"1"</code> next to a numeric
+<code>g1</code>, the call stops and asks for a rename. A factor or
+character predictor with fewer than two distinct non-missing values
+is an error naming the column, and so is one left with a single level
+in the training rows because its other levels fell only into the
+held-out rows. Non-finite
+(<code>Inf</code>) values in the predictors or target are an error.</p></li>
 <li><p>A numeric target with <code>task = "classification"</code> is coerced
 to a factor (with a message) only when it has at most 10 unique
 values; more than 10 unique values is an error suggesting

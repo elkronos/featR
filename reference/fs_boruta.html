@@ -15,7 +15,7 @@ features the one with the highest median Boruta importance is kept."></head><bod
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -90,13 +90,17 @@ columns may be numeric, factor, character, logical, Date or POSIXt;
 character and logical columns are converted to factors and Date/POSIXt
 columns to numeric, and any other type is an error. Neither the target
 nor the predictors may contain missing values, since Boruta's underlying
-random forest cannot fit them.</p></dd>
+random forest cannot fit them. Column names must be unique and
+non-empty, and <code>data</code> must hold at least one predictor besides the
+target.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
 <dd><p>Name of the target column in <code>data</code>. A factor target is
 treated as classification, a numeric target as regression; any other type
-is an error, as is a target containing NAs.</p></dd>
+is an error, as is a target containing NAs or infinite values. Unused
+factor levels are dropped, and a factor target with fewer than two
+observed classes is an error.</p></dd>
 
 
 <dt id="arg-maxruns">maxRuns<a class="anchor" aria-label="anchor" href="#arg-maxruns"></a></dt>

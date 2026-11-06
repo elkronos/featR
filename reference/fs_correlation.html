@@ -9,7 +9,7 @@ by default, reduces each correlated group to a single representative."></head><b
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -80,8 +80,8 @@ by default, reduces each correlated group to a single representative.</p>
 
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
-<dd><p>A data frame or matrix with at least 2 columns and unique
-column names (a correlation matrix with duplicated dimnames is ambiguous,
+<dd><p>A data frame or matrix with at least 2 columns and unique,
+non-empty column names (a correlation matrix with duplicated dimnames is ambiguous,
 so duplicates are rejected rather than silently resolved to the first
 match). For <code>"pearson"</code>, <code>"spearman"</code>,
 <code>"kendall"</code>: all columns must be numeric. For <code>"polychoric"</code>:
@@ -152,7 +152,10 @@ never takes part in flagging, scoring, or pruning. Default <code>0</code>.</p></
 
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Optional integer seed for reproducible sampling, applied
-locally; the previous RNG state is restored afterwards. Default
+locally; the previous RNG state is restored afterwards. It only matters
+for the row down-sampling, which happens in the main R process; the
+point-biserial computations run under <code>parallel = TRUE</code> use no
+random numbers, so no worker RNG streams are set or needed. Default
 <code>NULL</code> (never seeds).</p></dd>
 
 

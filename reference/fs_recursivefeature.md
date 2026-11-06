@@ -32,15 +32,17 @@ fs_recursivefeature(
 - data:
 
   A data.frame or data.table with at least one row and one column,
-  holding the target and the candidate predictors (every other column).
-  It is converted to a plain data.frame on entry.
+  holding the target and the candidate predictors (every other column),
+  with unique, non-empty column names and at least two candidate
+  predictors (after any one-hot encoding). It is converted to a plain
+  data.frame on entry.
 
 - target:
 
   Single string naming the target column of `data`; a column index is
   not accepted. A factor, character, or logical target means
   classification (unused factor levels are dropped), anything else
-  regression. The target may not contain missing values.
+  regression. The target may not contain missing or infinite values.
 
 - sizes:
 
@@ -60,12 +62,18 @@ fs_recursivefeature(
   List of arguments for
   [`caret::rfeControl()`](https://rdrr.io/pkg/caret/man/rfeControl.html);
   must contain at least `method` and `number`. Default
-  `list(method = "cv", number = 5)`. `functions` selects the caret RFE
-  function set and defaults to
-  [`caret::rfFuncs`](https://rdrr.io/pkg/caret/man/caretFuncs.html). An
-  `allowParallel` entry is dropped with a warning (use the `parallel`
-  argument instead), while a `verbose` entry, if present, overrides the
-  `verbose` argument for
+  `list(method = "cv", number = 5)`. `method` must be one of `"cv"`,
+  `"repeatedcv"`, `"LOOCV"`, `"boot"`, `"boot632"`, `"LGOCV"` or
+  `"test"`, and `number` must be at least 2 for `"cv"`/`"repeatedcv"`.
+  `index`, `indexOut` and `indexFinal` are not accepted (an error):
+  resampling runs on the internal training split, so row numbers built
+  for `data` would point at the wrong rows. `functions` selects the
+  caret RFE function set and defaults to
+  [`caret::rfFuncs`](https://rdrr.io/pkg/caret/man/caretFuncs.html); a
+  supplied set must contain the functions `summary`, `fit`, `pred`,
+  `rank`, `selectSize` and `selectVar`. An `allowParallel` entry is
+  dropped with a warning (use the `parallel` argument instead), while a
+  `verbose` entry, if present, overrides the `verbose` argument for
   [`caret::rfe()`](https://rdrr.io/pkg/caret/man/rfe.html). With
   `method = "repeatedcv"` and no `repeats`, caret's default of 1 is used
   and a warning says so.
@@ -74,9 +82,14 @@ fs_recursivefeature(
 
   List of arguments for
   [`caret::trainControl()`](https://rdrr.io/pkg/caret/man/trainControl.html),
-  used only when `return_final_model = TRUE`. Must contain `method`, and
-  also `number` unless `method = "none"`. Default
-  `list(method = "cv", number = 5)`.
+  used only when `return_final_model = TRUE`, and then validated
+  (together with `model_method`) before the search starts. Must contain
+  `method`, and also `number` unless `method = "none"` (at least 2 for
+  `"cv"`/`"repeatedcv"`). `index`, `indexOut` and `indexFinal` are not
+  accepted (an error), for the same reason as in `rfe_control`. Unless
+  it is set here, `allowParallel` follows the `parallel` argument, so a
+  foreach backend you registered yourself is not used by a sequential
+  call. Default `list(method = "cv", number = 5)`.
 
 - model_method:
 
@@ -87,7 +100,13 @@ fs_recursivefeature(
 - handle_categorical:
 
   Logical; one-hot encode predictors with full-rank dummies (fitted on
-  the training rows, applied to the test rows). Default `FALSE`.
+  the training rows, applied to the test rows). A dummy name
+  (`<variable><level>`) that collides with another column is an error.
+  Function sets that work on a model matrix (for example
+  [`caret::lmFuncs`](https://rdrr.io/pkg/caret/man/caretFuncs.html))
+  rank dummy columns rather than factors, so they need
+  `handle_categorical = TRUE` when factor predictors are present;
+  without it the call stops with an error saying so. Default `FALSE`.
 
 - return_final_model:
 
@@ -105,10 +124,14 @@ fs_recursivefeature(
   truncated. It covers the split and the RFE resampling, is applied for
   the duration of the call only (the previous RNG state is restored on
   exit), and defaults to `NULL`, which never seeds. Under
-  `parallel = TRUE` the seed is also used to set reproducible
-  L'Ecuyer-CMRG streams on the workers, so two seeded parallel runs
-  agree with each other; because the workers draw from their own
-  streams, a seeded parallel run need not equal a seeded sequential one.
+  `parallel = TRUE` a seed also sets `rfe_control$seeds = NULL` (unless
+  you supplied `seeds`), so caret draws one seed per resample from the
+  locally seeded RNG; that is what makes two seeded parallel runs agree
+  with each other (the workers additionally get L'Ecuyer-CMRG streams,
+  but those alone would not, because foreach hands resamples to
+  whichever worker is free). A seeded parallel run need not equal a
+  seeded sequential one, because the sequential run keeps caret's
+  default `seeds = NA`.
 
 - verbose:
 
@@ -122,8 +145,13 @@ fs_recursivefeature(
   Logical. If `TRUE`, registers a two-worker PSOCK cluster (capped at
   the detected core count) for the duration of the call, then stops it
   and restores whichever foreach backend was registered before the call;
-  requires the suggested packages 'foreach' and 'doParallel'. Default
-  `FALSE`.
+  requires the suggested packages 'foreach' and 'doParallel'. The RFE
+  resampling and the final model's resampling both follow this setting;
+  a custom function set such as
+  [`caret::caretFuncs`](https://rdrr.io/pkg/caret/man/caretFuncs.html)
+  builds its own inner
+  [`caret::train()`](https://rdrr.io/pkg/caret/man/train.html) control
+  and is not covered. Default `FALSE`.
 
 ## Value
 
@@ -136,11 +164,16 @@ An object of class `fs_result` with:
 
 - scores:
 
-  Named numeric vector of resample-averaged importance from
+  Named numeric vector with one entry per candidate predictor: its
+  importance in the full-size fit (all candidates present), averaged
+  over every resample. Unlike
   [`caret::varImp()`](https://rdrr.io/pkg/caret/man/varImp.html) on the
-  `rfe` object: its "Overall" column when caret supplies one, otherwise
-  the row means of whatever numeric columns it did supply. `NULL` when
-  there is nothing usable.
+  `rfe` object, this does not average a variable only over the resamples
+  where it survived to the optimal size, so marginal variables are not
+  inflated and no candidate is missing. When the function set records no
+  per-resample importance, the
+  [`caret::varImp()`](https://rdrr.io/pkg/caret/man/varImp.html) values
+  are used instead; `NULL` when there is nothing usable.
 
 - method:
 
@@ -165,13 +198,17 @@ An object of class `fs_result` with:
   `resampling_results` (the RFE resampling summary over candidate sizes,
   computed inside the training rows), `variable_importance` (the
   [`caret::varImp()`](https://rdrr.io/pkg/caret/man/varImp.html)
-  data.frame), `preprocessor` (the `dummyVars` encoder, or `NULL` when
+  data.frame, which averages each variable only over the resamples where
+  it survived to the optimal size; `selected` follows caret's
+  `optVariables` rule, which is weighted the same way), `preprocessor`
+  (the `dummyVars` encoder, or `NULL` when
   `handle_categorical = FALSE`), `train_index` and `test_index` (row
   indices into `data` for the two partitions), `final_model_variables`
   (predictors the final model actually used after NZV/linear-combination
   filtering, or `NULL` when no final model was requested) and
   `n_features` (candidate predictors offered to RFE, counted after
-  one-hot encoding when `handle_categorical = TRUE`).
+  one-hot encoding when `handle_categorical = TRUE` and after constant
+  predictors were removed).
 
 - call:
 
@@ -198,7 +235,7 @@ when `return_final_model = TRUE`. Both are checked before any fitting
 starts. Parallel execution additionally requires 'foreach' and
 'doParallel'; classification metrics use
 [`caret::postResample()`](https://rdrr.io/pkg/caret/man/postResample.html),
-which needs 'e1071'.
+which needs 'e1071' (also checked before any fitting starts).
 
 Everything that could leak is fitted on the training rows: the one-hot
 encoder, the factor levels the test columns are aligned to, the
@@ -208,6 +245,16 @@ therefore a genuine held-out estimate. It applies
 to the predictions of the fitted `rfe` object (caret's own refit on all
 the training rows, restricted to the optimal subset) on test rows that
 took no part in choosing either the features or the subset size.
+
+The metrics are caret's: for regression `RMSE`, `Rsquared` and `MAE`,
+where `Rsquared` is the *squared Pearson correlation* between
+predictions and observations, not `1 - SSE/SST`. It is never negative
+and ignores bias and scale errors, so it is not comparable with an `R2`
+defined as `1 - SSE/SST` (for example
+[`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)'s
+`details$metrics$R2`). For classification they are `Accuracy`
+(proportion of held-out rows classified correctly) and `Kappa` (Cohen's
+kappa, accuracy corrected for chance agreement).
 
 Two other summaries on the result are *not* held-out estimates, by
 construction. `details$resampling_results` summarizes resampling
@@ -223,6 +270,14 @@ replaced by their
 the `rfe` object and the final model, because caret's function sets
 cannot handle them; `selected`, `scores`, `details$variable_importance`
 and `details$final_model_variables` report the original names.
+
+Infinite values (`Inf`/`-Inf`) anywhere in `data` are an error.
+Predictors that are constant on the training rows (a single value, or a
+factor with a single observed level) are removed before RFE with a
+warning; they carry no information, and a random forest fitted on a
+single constant predictor never returns. Factor predictors keep only the
+levels observed in the training rows; a held-out value with a level the
+training rows never saw is treated as missing, with a warning.
 
 Missing values in the *training* predictors are rejected with an error;
 impute or drop incomplete rows before calling. NAs in the held-out rows

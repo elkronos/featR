@@ -63,7 +63,15 @@ that number honest:
   split the data first. Selection, tuning, and preprocessing that learns
   from data (near-zero-variance filters, correlation filters, one-hot
   encoders, imputation values) are fitted on the training rows only. The
-  metrics in `details` come from the held-out rows.
+  held-out metrics – `details$metrics`
+  ([`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md),
+  [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)),
+  `details$test_metrics`
+  ([`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)),
+  `details$performance`
+  ([`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)) –
+  come from rows the selection never saw. Other entries of `details` are
+  computed on training rows and are optimistic; see the next points.
 - **Resampling-aware preprocessing.** `fs_elastic(use_pca = TRUE)`
   refits centering, scaling, and PCA inside each resample. Class
   upsampling in
@@ -77,10 +85,27 @@ that number honest:
   full-data means and warns you that it leaks.
 - **Labeled in-sample numbers.**
   [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)’s
-  `details$mae` and `details$rmse`, and
+  `details$mae`, `details$rmse` and `details$best_elpd`, and
   [`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md)’s
   *t* statistics and p-values, are computed on the rows used for
   selection. The documentation says so.
+- **Selection-reused numbers.** Some resampled numbers are computed on
+  the training rows after (or while) those rows chose the features or
+  the tuning values, so they are optimistic even though they look like
+  cross-validation:
+  [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)’s
+  out-of-bag `details$oob` when a `control$feature_select` hook looked
+  at the target,
+  [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)’s
+  `model$results` with `feature_select = TRUE` and the chosen size’s
+  entry in `details$selection$size_scores`,
+  [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)’s
+  `details$resampling_results`, and
+  [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md)’s
+  `details$metric_value` (the best value over the whole tuning grid;
+  [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md)
+  holds out no test rows). Use the held-out metrics above, or an outer
+  resampling loop.
 
 ## What featR cannot do for you
 

@@ -15,7 +15,7 @@ model and scope are set up so that forward moves are possible.'></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -83,8 +83,10 @@ model and scope are set up so that forward moves are possible.</p>
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data.frame (or data.table) with at least two columns: the
-numeric target and at least one candidate predictor. Every column other
-than <code>target</code> is offered to the search.</p></dd>
+numeric target and at least one candidate predictor, with unique,
+non-empty column names and no infinite values. Every column other
+than <code>target</code> is offered to the search. After incomplete rows are
+dropped there must be more rows than coefficients in the full model.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
@@ -118,11 +120,12 @@ what else <code>...</code> quietly absorbs.</p></dd>
 (excluding the intercept).</p></dd>
 
 <dt>scores</dt>
-<dd><p>Named numeric vector of absolute t statistics from the
-final model's coefficient table, excluding the intercept. Scores are
-per coefficient, so a selected factor term appears here under its
-dummy names (e.g. <code>grpb</code>, <code>grpc</code> for the term <code>grp</code>), not under the
-term label reported in <code>selected</code>.
+<dd><p>Named numeric vector, one entry per selected term and
+keyed by the same term labels as <code>selected</code>: the absolute t statistic
+of the term's coefficient, or for a multi-coefficient term (a factor,
+an interaction) the largest <code>|t|</code> among its coefficients (<code>NA</code> when all
+of them are aliased). The per-coefficient <code>|t|</code> (e.g. <code>grpb</code>, <code>grpc</code>
+for the term <code>grp</code>) are in <code>details$coefficient_scores</code>.
 <strong>Caveat</strong>: these statistics (and the p-values in
 <code>details$coefficients</code>) are computed after selection on the same data,
 so they are optimistically biased and are not valid for inference.</p></dd>
@@ -140,6 +143,7 @@ complete-case data in a private environment (see Details).</p></dd>
 <dt>details</dt>
 <dd><p>A list with <code>final_model</code> (the same <code>lm</code>), <code>coefficients</code>
 (the <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> coefficient matrix, same caveat as <code>scores</code>),
+<code>coefficient_scores</code> (named <code>|t|</code> per non-intercept coefficient),
 <code>selected_terms</code> (the same term labels as <code>selected</code>), <code>direction</code> (the
 search direction actually used), <code>n_features</code> (the number of candidate
 predictors offered to the search, i.e. <code>ncol(data) - 1</code>) and
@@ -190,6 +194,17 @@ them; check your argument names against the list below.</p>
 <p>Rows containing missing values in any column are dropped (with a warning)
 before the search, because <code>stepAIC()</code> cannot compare models fitted on
 differing row sets.</p>
+<p>For <code>direction = "backward"</code> or <code>"both"</code>, which start from the full
+model, the full model must leave residual degrees of freedom: with as many
+coefficients (intercept and factor dummies included) as complete rows it
+fits perfectly, its AIC is -Inf, and the call stops with an error naming
+the counts. A forward search starts from the intercept and may have more
+candidate predictors than rows; it warns if the model it ends on has no
+residual degrees of freedom (a perfect fit, so the selection is not
+meaningful). A factor or character predictor with fewer than two observed
+levels (after dropping incomplete rows) is an error, as is a factor dummy
+name that collides with another column or the target (factor <code>g</code> with
+level <code>b</code> next to a column <code>gb</code>).</p>
     </div>
 
     <div class="section level2">
@@ -209,7 +224,7 @@ differing row sets.</p>
 <span class="r-out co"><span class="r-pr">#&gt;</span>       wt     qsec       am </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 5.506882 4.246676 2.080819 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> mpg ~ qsec + am</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x55b388988e80&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x55c21d870208&gt;</span>
 <span class="r-in"><span><span class="co"># }</span></span></span>
 </code></pre></div>
     </div>

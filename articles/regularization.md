@@ -67,9 +67,10 @@ selected(fs_lasso(d, "y", nfolds = 5, seed = 1, lambda = "1se"))
 ```
 
 - **Correlated predictors.** The lasso tends to keep one member of a
-  correlated group and zero out the rest. Here `x1` and `x1_copy`
-  compete, and an absent feature is **not** evidence that it is
-  unrelated to the outcome.
+  correlated group and zero out the rest, so an absent feature is
+  **not** evidence that it is unrelated to the outcome. Here `x1` and
+  `x1_copy` both survive, but they split one effect between them, so
+  neither coefficient measures it on its own.
 - **Linear only.** `x_nl` has a strong U-shaped effect but almost no
   linear one. The lasso gives it only a small coefficient, from whatever
   linear trend this sample happens to contain, and badly understates how
@@ -79,7 +80,10 @@ selected(fs_lasso(d, "y", nfolds = 5, seed = 1, lambda = "1se"))
   measured in different units. The raw coefficients are in
   `details$coefficients`.
 - **Factors** are expanded into dummy columns, and the selection names
-  those columns (`colourred`, not `colour`).
+  those columns (`colourred`, not `colour`). A factor with only one
+  observed level, or a dummy name that collides with another column
+  (factor `g` with level `b` next to a column called `gb`), is an error
+  rather than a silent mistake; so are infinite values.
 - **Missing values** are an error by default. Mean-imputing on the full
   data before cross-validation leaks information between folds.
 
@@ -140,7 +144,10 @@ rf$details$metrics
 
 The forest finds `x_nl`, which the linear methods cannot. To turn the
 ranking into a selection, pass a hook. It runs on the training rows
-only, so the held-out metrics stay honest:
+only, so the held-out `details$metrics` stay honest. The out-of-bag
+`details$oob` does not: the forest is grown on the same training rows
+the hook just used, so with a hook that looks at the outcome the OOB
+error is optimistic.
 
 ``` r
 
@@ -155,10 +162,12 @@ selected(rf_sel)
 #> [1] "x_nl"    "x2"      "x1"      "x1_copy" "x3"
 ```
 
-`task` must be given explicitly, because a numeric column can be a class
-label. Permutation importance splits credit between correlated
-predictors (see `x1` and `x1_copy`) and favors predictors with many
-distinct values, so treat close scores as ties.
+`task` defaults to `"classification"`, because a numeric column can be a
+class label, so pass `task = "regression"` for a numeric outcome. featR
+warns when a numeric target meets the default. Permutation importance
+splits credit between correlated predictors (see `x1` and `x1_copy`) and
+can still favor predictors with many distinct values, so treat close
+scores as ties.
 
 ## `fs_mars()`
 
@@ -199,10 +208,15 @@ correlated above `corr_cut` (default 0.95). It fits those filters on the
 training rows only, and `details$removed_predictors` records what went.
 Here one of `x1` and `x1_copy` is removed before the model ever sees it.
 The filter does not look at the outcome, so which one goes is arbitrary.
-For classification, class upsampling (when requested by caret’s
-`sampling`) happens inside each resample. Test-set ROC and PR AUC are
-reported for binary outcomes when pROC and PRROC are installed.
+For classification,
+[`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
+always up-samples the smaller classes, inside each resample. Test-set
+ROC and PR AUC are reported for binary outcomes when pROC and PRROC are
+installed.
 
 The reported regression `R2` is caret’s squared correlation between
 predictions and observations, not `1 - SSE/SST`. A biased model can
 still score well on it, so read it together with RMSE.
+[`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)
+reports `1 - SSE/SST`, so the two `R2` values above are not on the same
+footing; compare the RMSEs.

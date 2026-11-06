@@ -97,7 +97,12 @@ and a Boruta importance of 0.8 have nothing in common. The direction
 also differs: for
 [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md),
 smaller is better. [`summary()`](https://rdrr.io/r/base/summary.html)
-knows this and sorts accordingly.
+knows this and sorts accordingly. For
+[`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md) and
+`fs_correlation(prune = TRUE)`, which do not select by a cut on the
+score, [`summary()`](https://rdrr.io/r/base/summary.html) lists the
+selected features first (each group ordered by score) so a kept feature
+is never ranked below a dropped one.
 
 | Function | `scores` | Better is |
 |----|----|----|
@@ -110,7 +115,7 @@ knows this and sorts accordingly.
 | [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md) | absolute coefficients on the scale the model saw (`NULL` for multinomial) | larger |
 | [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md) | permutation importance (mean decrease in accuracy, or %IncMSE) | larger |
 | [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md) | earth variable importance via [`caret::varImp()`](https://rdrr.io/pkg/caret/man/varImp.html) | larger |
-| [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md) | resample-averaged importance from the RFE model | larger |
+| [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md) | importance in the full-size RFE fit (every candidate present), averaged over all resamples | larger |
 | [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md) | SVM-RFE criterion `w^2`, or random-forest importance (`NULL` without selection) | larger |
 | [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md) | median Boruta importance | larger |
 | [`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md) | absolute *t* statistics of the retained terms (not valid for inference) | larger |
@@ -120,10 +125,13 @@ Some methods score **design-matrix columns** rather than original
 columns.
 [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md),
 [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md),
-and [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
-all do this. A factor predictor `colour` therefore shows up as
-`colourgreen`, `colourred`, and so on. Map the names back yourself if
-you need the original variables.
+[`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md), and
+`fs_recursivefeature(handle_categorical = TRUE)` all do this, and so do
+the `scores` of
+[`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md)
+(one *t* statistic per coefficient). A factor predictor `colour`
+therefore shows up as `colourgreen`, `colourred`, and so on. Map the
+names back yourself if you need the original variables.
 
 ## Comparing methods
 

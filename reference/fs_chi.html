@@ -15,7 +15,7 @@ when any expected cell count is &amp;lt; 5, and supports multiple-testing correc
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -88,7 +88,7 @@ when any expected cell count is &lt; 5, and supports multiple-testing correction
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data.frame or data.table with features and target, with
-unique column names. Character columns are coerced to factor. The input
+unique, non-empty, non-NA column names. Character columns are coerced to factor. The input
 object is never modified.</p></dd>
 
 
@@ -113,7 +113,8 @@ corrected.</p></dd>
 <dt id="arg-p-adjust-method">p_adjust_method<a class="anchor" aria-label="anchor" href="#arg-p-adjust-method"></a></dt>
 <dd><p>Character: one of <code><a href="https://rdrr.io/r/stats/p.adjust.html" class="external-link">stats::p.adjust.methods</a></code>
 (default "bonferroni"). Set to "none" to disable multiple-testing
-correction. Matching is case-insensitive. The correction counts only the
+correction. Matching is case-insensitive, and an invalid name is an
+error before any feature is tested. The correction counts only the
 features that were actually tested: a skipped feature has an <code>NA</code> p-value,
 and <code><a href="https://rdrr.io/r/stats/p.adjust.html" class="external-link">stats::p.adjust()</a></code> drops NAs before its default <code>n = length(p)</code> is
 evaluated, so skipped features keep an <code>NA</code> adjusted p-value and do not
@@ -123,7 +124,13 @@ features, "bonferroni" therefore multiplies by <code>k</code>, not by <code>k + 
 
 <dt id="arg-simulation-b">simulation_B<a class="anchor" aria-label="anchor" href="#arg-simulation-b"></a></dt>
 <dd><p>Whole number &gt;= 100: replicates for the simulation-based
-p-value used when any expected cell count is &lt; 5 (default 2000).</p></dd>
+p-value used when any expected cell count is &lt; 5 (default 2000). A
+simulated p-value is never below <code>1 / (simulation_B + 1)</code>, so after a
+multiplicity adjustment it may be unable to reach <code>sig_level</code> at all
+(with Bonferroni, once the number of tested features reaches
+<code>sig_level * (simulation_B + 1)</code>, i.e. 101 at the defaults); a warning
+then names the affected features and the <code>simulation_B</code> that would be
+needed.</p></dd>
 
 
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
@@ -147,9 +154,13 @@ suggested furrr and future packages. Default FALSE (sequential).</p></dd>
 
 <dt id="arg-n-cores">n_cores<a class="anchor" aria-label="anchor" href="#arg-n-cores"></a></dt>
 <dd><p>Whole number &gt;= 1. Number of workers used when
-<code>parallel = TRUE</code>; requests are capped at the detected core count. A
-<code><a href="https://future.futureverse.org/reference/multisession.html" class="external-link">future::multisession</a></code> plan is set for the duration of the call and the
-previous plan is restored on exit. Default 2.</p></dd>
+<code>parallel = TRUE</code>; requests are capped at the detected core count. If
+the current future plan is sequential (the default), a
+<code><a href="https://future.futureverse.org/reference/multisession.html" class="external-link">future::multisession</a></code> plan with that many workers is set for the
+duration of the call and the previous plan is restored on exit, even if
+worker start-up fails. If you have already set a non-sequential plan
+(e.g. <code>future::plan(future::multisession, workers = 4)</code>), it is used as
+is, its workers are left running, and <code>n_cores</code> is ignored. Default 2.</p></dd>
 
 </dl></div>
     <div class="section level2">

@@ -28,9 +28,9 @@ fs_chi(
 
 - data:
 
-  A data.frame or data.table with features and target, with unique
-  column names. Character columns are coerced to factor. The input
-  object is never modified.
+  A data.frame or data.table with features and target, with unique,
+  non-empty, non-NA column names. Character columns are coerced to
+  factor. The input object is never modified.
 
 - target:
 
@@ -55,8 +55,9 @@ fs_chi(
   Character: one of
   [`stats::p.adjust.methods`](https://rdrr.io/r/stats/p.adjust.html)
   (default "bonferroni"). Set to "none" to disable multiple-testing
-  correction. Matching is case-insensitive. The correction counts only
-  the features that were actually tested: a skipped feature has an `NA`
+  correction. Matching is case-insensitive, and an invalid name is an
+  error before any feature is tested. The correction counts only the
+  features that were actually tested: a skipped feature has an `NA`
   p-value, and
   [`stats::p.adjust()`](https://rdrr.io/r/stats/p.adjust.html) drops NAs
   before its default `n = length(p)` is evaluated, so skipped features
@@ -67,7 +68,13 @@ fs_chi(
 - simulation_B:
 
   Whole number \>= 100: replicates for the simulation-based p-value used
-  when any expected cell count is \< 5 (default 2000).
+  when any expected cell count is \< 5 (default 2000). A simulated
+  p-value is never below `1 / (simulation_B + 1)`, so after a
+  multiplicity adjustment it may be unable to reach `sig_level` at all
+  (with Bonferroni, once the number of tested features reaches
+  `sig_level * (simulation_B + 1)`, i.e. 101 at the defaults); a warning
+  then names the affected features and the `simulation_B` that would be
+  needed.
 
 - seed:
 
@@ -91,10 +98,14 @@ fs_chi(
 - n_cores:
 
   Whole number \>= 1. Number of workers used when `parallel = TRUE`;
-  requests are capped at the detected core count. A
+  requests are capped at the detected core count. If the current future
+  plan is sequential (the default), a
   [`future::multisession`](https://future.futureverse.org/reference/multisession.html)
-  plan is set for the duration of the call and the previous plan is
-  restored on exit. Default 2.
+  plan with that many workers is set for the duration of the call and
+  the previous plan is restored on exit, even if worker start-up fails.
+  If you have already set a non-sequential plan (e.g.
+  `future::plan(future::multisession, workers = 4)`), it is used as is,
+  its workers are left running, and `n_cores` is ignored. Default 2.
 
 ## Value
 

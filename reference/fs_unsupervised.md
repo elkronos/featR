@@ -137,7 +137,11 @@ or a model-based method for that judgment.
 
 Supported methods:
 
-- `"variance"`: Sample variance (denominator n - 1).
+- `"variance"`: Sample variance (denominator n - 1), in squared units.
+  For values below about `1e-162` in magnitude the variance is smaller
+  than the smallest double and is reported as 0, so to screen for
+  constant columns on data in extreme units use `"range"` (threshold 0)
+  or `"n_unique"` (threshold 1).
 
 - `"mad"`: Median absolute deviation, computed with
   [`stats::mad()`](https://rdrr.io/r/stats/mad.html)'s default
@@ -170,7 +174,9 @@ Features whose score is undefined (`NA`) are never selected, under both
 such features were excluded.
 
 Columns are subset by integer index, never by name, so duplicated column
-names cannot select the wrong columns.
+names cannot select the wrong columns. Every column must have a
+non-empty, non-NA name; a matrix keeps its own column names (`V1`, `V2`,
+... are used only when it has none).
 
 ## Examples
 

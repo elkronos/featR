@@ -17,7 +17,7 @@ model on the training rows.'></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -93,15 +93,17 @@ model on the training rows.</p>
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data.frame or data.table with at least one row and one column,
-holding the target and the candidate predictors (every other column). It
-is converted to a plain data.frame on entry.</p></dd>
+holding the target and the candidate predictors (every other column), with
+unique, non-empty column names and at least two candidate predictors
+(after any one-hot encoding). It is converted to a plain data.frame on
+entry.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
 <dd><p>Single string naming the target column of <code>data</code>; a column
 index is not accepted. A factor, character, or logical target means
 classification (unused factor levels are dropped), anything else
-regression. The target may not contain missing values.</p></dd>
+regression. The target may not contain missing or infinite values.</p></dd>
 
 
 <dt id="arg-sizes">sizes<a class="anchor" aria-label="anchor" href="#arg-sizes"></a></dt>
@@ -120,8 +122,14 @@ proportion of the stratified split. Default 0.8.</p></dd>
 <dt id="arg-rfe-control">rfe_control<a class="anchor" aria-label="anchor" href="#arg-rfe-control"></a></dt>
 <dd><p>List of arguments for <code><a href="https://rdrr.io/pkg/caret/man/rfeControl.html" class="external-link">caret::rfeControl()</a></code>; must contain
 at least <code>method</code> and <code>number</code>. Default <code>list(method = "cv", number = 5)</code>.
+<code>method</code> must be one of <code>"cv"</code>, <code>"repeatedcv"</code>, <code>"LOOCV"</code>, <code>"boot"</code>,
+<code>"boot632"</code>, <code>"LGOCV"</code> or <code>"test"</code>, and <code>number</code> must be at least 2 for
+<code>"cv"</code>/<code>"repeatedcv"</code>. <code>index</code>, <code>indexOut</code> and <code>indexFinal</code> are not
+accepted (an error): resampling runs on the internal training split, so
+row numbers built for <code>data</code> would point at the wrong rows.
 <code>functions</code> selects the caret RFE function set and defaults to
-<code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::rfFuncs</a></code>. An <code>allowParallel</code> entry is dropped with a warning (use
+<code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::rfFuncs</a></code>; a supplied set must contain the functions <code>summary</code>,
+<code>fit</code>, <code>pred</code>, <code>rank</code>, <code>selectSize</code> and <code>selectVar</code>. An <code>allowParallel</code> entry is dropped with a warning (use
 the <code>parallel</code> argument instead), while a <code>verbose</code> entry, if present,
 overrides the <code>verbose</code> argument for <code><a href="https://rdrr.io/pkg/caret/man/rfe.html" class="external-link">caret::rfe()</a></code>. With
 <code>method = "repeatedcv"</code> and no <code>repeats</code>, caret's default of 1 is used and
@@ -130,8 +138,13 @@ a warning says so.</p></dd>
 
 <dt id="arg-train-control">train_control<a class="anchor" aria-label="anchor" href="#arg-train-control"></a></dt>
 <dd><p>List of arguments for <code><a href="https://rdrr.io/pkg/caret/man/trainControl.html" class="external-link">caret::trainControl()</a></code>, used
-only when <code>return_final_model = TRUE</code>. Must contain <code>method</code>, and also
-<code>number</code> unless <code>method = "none"</code>. Default
+only when <code>return_final_model = TRUE</code>, and then validated (together with
+<code>model_method</code>) before the search starts. Must contain <code>method</code>, and also
+<code>number</code> unless <code>method = "none"</code> (at least 2 for <code>"cv"</code>/<code>"repeatedcv"</code>).
+<code>index</code>, <code>indexOut</code> and <code>indexFinal</code> are not accepted (an error), for the
+same reason as in <code>rfe_control</code>. Unless it is set here, <code>allowParallel</code>
+follows the <code>parallel</code> argument, so a foreach backend you registered
+yourself is not used by a sequential call. Default
 <code>list(method = "cv", number = 5)</code>.</p></dd>
 
 
@@ -143,8 +156,12 @@ model, for example <code>"rf"</code> or <code>"lm"</code>. Used only when
 
 <dt id="arg-handle-categorical">handle_categorical<a class="anchor" aria-label="anchor" href="#arg-handle-categorical"></a></dt>
 <dd><p>Logical; one-hot encode predictors with full-rank
-dummies (fitted on the training rows, applied to the test rows).
-Default <code>FALSE</code>.</p></dd>
+dummies (fitted on the training rows, applied to the test rows). A dummy
+name (<code>&lt;variable&gt;&lt;level&gt;</code>) that collides with another column is an
+error. Function sets that work on a model matrix (for example
+<code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::lmFuncs</a></code>) rank dummy columns rather than factors, so they need
+<code>handle_categorical = TRUE</code> when factor predictors are present; without
+it the call stops with an error saying so. Default <code>FALSE</code>.</p></dd>
 
 
 <dt id="arg-return-final-model">return_final_model<a class="anchor" aria-label="anchor" href="#arg-return-final-model"></a></dt>
@@ -162,10 +179,14 @@ fractional or out-of-range values are an error rather than being
 truncated. It covers the split and the RFE resampling, is applied for
 the duration of the call only (the previous RNG state is restored on
 exit), and defaults to <code>NULL</code>, which never seeds. Under
-<code>parallel = TRUE</code> the seed is also used to set reproducible
-L'Ecuyer-CMRG streams on the workers, so two seeded parallel runs agree
-with each other; because the workers draw from their own streams, a
-seeded parallel run need not equal a seeded sequential one.</p></dd>
+<code>parallel = TRUE</code> a seed also sets <code>rfe_control$seeds = NULL</code> (unless
+you supplied <code>seeds</code>), so caret draws one seed per resample from the
+locally seeded RNG; that is what makes two seeded parallel runs agree
+with each other (the workers additionally get L'Ecuyer-CMRG streams, but
+those alone would not, because foreach hands resamples to whichever
+worker is free). A seeded parallel run need not equal a seeded
+sequential one, because the sequential run keeps caret's default
+<code>seeds = NA</code>.</p></dd>
 
 
 <dt id="arg-verbose">verbose<a class="anchor" aria-label="anchor" href="#arg-verbose"></a></dt>
@@ -179,7 +200,9 @@ latter. Default <code>FALSE</code>.</p></dd>
 (capped at the detected core count) for the duration of the call, then
 stops it and restores whichever foreach backend was registered before the
 call; requires the suggested packages 'foreach' and 'doParallel'.
-Default <code>FALSE</code>.</p></dd>
+The RFE resampling and the final model's resampling both follow this
+setting; a custom function set such as <code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::caretFuncs</a></code> builds its own
+inner <code><a href="https://rdrr.io/pkg/caret/man/train.html" class="external-link">caret::train()</a></code> control and is not covered. Default <code>FALSE</code>.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -189,10 +212,15 @@ Default <code>FALSE</code>.</p></dd>
 (<code>optVariables</code> at the optimal subset size).</p></dd>
 
 <dt>scores</dt>
-<dd><p>Named numeric vector of resample-averaged importance from
-<code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> on the <code>rfe</code> object: its "Overall" column when
-caret supplies one, otherwise the row means of whatever numeric
-columns it did supply. <code>NULL</code> when there is nothing usable.</p></dd>
+<dd><p>Named numeric vector with one entry per candidate
+predictor: its importance in the full-size fit (all candidates
+present), averaged over every resample. Unlike <code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code>
+on the <code>rfe</code> object, this does not average a variable only over
+the resamples where it survived to the optimal size, so marginal
+variables are not inflated and no candidate is missing. When the
+function set records no per-resample importance, the
+<code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> values are used instead; <code>NULL</code> when there is
+nothing usable.</p></dd>
 
 <dt>method</dt>
 <dd><p>"rfe".</p></dd>
@@ -211,14 +239,18 @@ always present even when <code>model</code> holds the final model),
 (<code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code> on the held-out rows – the only held-out
 estimate on the object), <code>resampling_results</code> (the RFE resampling
 summary over candidate sizes, computed inside the training rows),
-<code>variable_importance</code> (the <code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> data.frame),
+<code>variable_importance</code> (the <code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> data.frame, which
+averages each variable only over the resamples where it survived
+to the optimal size; <code>selected</code> follows caret's <code>optVariables</code>
+rule, which is weighted the same way),
 <code>preprocessor</code> (the <code>dummyVars</code> encoder, or <code>NULL</code> when
 <code>handle_categorical = FALSE</code>), <code>train_index</code> and <code>test_index</code> (row
 indices into <code>data</code> for the two partitions), <code>final_model_variables</code>
 (predictors the final model actually used after
 NZV/linear-combination filtering, or <code>NULL</code> when no final model was
 requested) and <code>n_features</code> (candidate predictors offered to RFE,
-counted after one-hot encoding when <code>handle_categorical = TRUE</code>).</p></dd>
+counted after one-hot encoding when <code>handle_categorical = TRUE</code> and
+after constant predictors were removed).</p></dd>
 
 <dt>call</dt>
 <dd><p>The matched call.</p></dd>
@@ -241,7 +273,8 @@ unless you supply a different set (for example
 it is also needed for the default final model (<code>model_method = "rf"</code>) when
 <code>return_final_model = TRUE</code>. Both are checked before any fitting starts.
 Parallel execution additionally requires 'foreach' and 'doParallel';
-classification metrics use <code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code>, which needs 'e1071'.</p>
+classification metrics use <code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code>, which needs 'e1071'
+(also checked before any fitting starts).</p>
 <p>Everything that could leak is fitted on the training rows: the one-hot
 encoder, the factor levels the test columns are aligned to, the elimination
 itself, and the final model. <code>details$test_metrics</code> is therefore a genuine
@@ -249,6 +282,14 @@ held-out estimate. It applies <code><a href="https://rdrr.io/pkg/caret/man/postR
 the fitted <code>rfe</code> object (caret's own refit on all the training rows,
 restricted to the optimal subset) on test rows that took no part in choosing
 either the features or the subset size.</p>
+<p>The metrics are caret's: for regression <code>RMSE</code>, <code>Rsquared</code> and <code>MAE</code>, where
+<code>Rsquared</code> is the <em>squared Pearson correlation</em> between predictions
+and observations, not <code>1 - SSE/SST</code>. It is never negative and ignores bias
+and scale errors, so it is not comparable with an <code>R2</code> defined as
+<code>1 - SSE/SST</code> (for example <code><a href="fs_randomforest.html">fs_randomforest()</a></code>'s <code>details$metrics$R2</code>).
+For classification they are <code>Accuracy</code> (proportion of held-out rows
+classified correctly) and <code>Kappa</code> (Cohen's kappa, accuracy corrected for
+chance agreement).</p>
 <p>Two other summaries on the result are <em>not</em> held-out estimates, by
 construction. <code>details$resampling_results</code> summarizes resampling performed
 inside the training rows across candidate subset sizes, and, when
@@ -261,6 +302,13 @@ replaced by their <code><a href="https://rdrr.io/r/base/make.names.html" class="
 final model, because caret's function sets cannot handle them; <code>selected</code>,
 <code>scores</code>, <code>details$variable_importance</code> and <code>details$final_model_variables</code>
 report the original names.</p>
+<p>Infinite values (<code>Inf</code>/<code>-Inf</code>) anywhere in <code>data</code> are an error.
+Predictors that are constant on the training rows (a single value, or a
+factor with a single observed level) are removed before RFE with a
+warning; they carry no information, and a random forest fitted on a single
+constant predictor never returns. Factor predictors keep only the levels
+observed in the training rows; a held-out value with a level the training
+rows never saw is treated as missing, with a warning.</p>
 <p>Missing values in the <em>training</em> predictors are rejected with an error;
 impute or drop incomplete rows before calling. NAs in the held-out rows are
 not imputed: depending on the function set, <code><a href="https://rdrr.io/r/stats/predict.html" class="external-link">predict()</a></code> either stops (random

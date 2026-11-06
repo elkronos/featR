@@ -126,12 +126,12 @@ red$details$pairs
 #> 1 x_strong x_copy   0.9984364
 ```
 
-Pruning uses the
+Pruning is a variant of the
 [`caret::findCorrelation()`](https://rdrr.io/pkg/caret/man/findCorrelation.html)
-heuristic. Within the strongest remaining pair, it drops the member with
-the larger mean absolute correlation to everything else. That choice
-does not consult the outcome, so it may drop the member that predicts
-better.
+heuristic. It takes the strongest remaining pair first and drops the
+member with the larger mean absolute correlation to everything else.
+That choice does not consult the outcome, so it may drop the member that
+predicts better.
 [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
 prunes by importance instead.
 

@@ -11,7 +11,7 @@ regularization via caret::train(method = "glmnet"). Supports regression
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -83,7 +83,7 @@ regularization via <code>caret::train(method = "glmnet")</code>. Supports regres
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data frame (or data.table) containing the target and the
-candidate predictors.</p></dd>
+candidate predictors, with unique, non-empty column names.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
@@ -102,15 +102,20 @@ over, or <code>NULL</code> (default) to use glmnet's own path per alpha.</p></dd
 
 
 <dt id="arg-trcontrol">trControl<a class="anchor" aria-label="anchor" href="#arg-trcontrol"></a></dt>
-<dd><p>Optional <code><a href="https://rdrr.io/pkg/caret/man/trainControl.html" class="external-link">caret::trainControl()</a></code> object. If <code>NULL</code>
-(default), 5-fold CV with an NA-safe summary function is used. When
-<code>use_pca = TRUE</code>, <code>pcaComp = nPCs</code> is injected into its <code>preProcOptions</code>.</p></dd>
+<dd><p>Optional <code><a href="https://rdrr.io/pkg/caret/man/trainControl.html" class="external-link">caret::trainControl()</a></code> object (a partial list
+or a string is an error). If <code>NULL</code> (default), 5-fold CV with an NA-safe
+summary function is used. When <code>use_pca = TRUE</code>, <code>pcaComp = nPCs</code> is
+injected into its <code>preProcOptions</code>. If rows with missing values are
+dropped, user-supplied <code>index</code>, <code>indexOut</code> or <code>indexFinal</code> are an error,
+because their row numbers would no longer match.</p></dd>
 
 
 <dt id="arg-metric">metric<a class="anchor" aria-label="anchor" href="#arg-metric"></a></dt>
 <dd><p>Optional character. Performance metric to optimize. If <code>NULL</code>
 (default), <code>"RMSE"</code> is used for regression and <code>"Accuracy"</code> for
-classification.</p></dd>
+classification. A name caret does not find in the summary output makes
+caret warn and fall back to its default; <code>details$metric_name</code> then
+reports the metric actually used.</p></dd>
 
 
 <dt id="arg-use-pca">use_pca<a class="anchor" aria-label="anchor" href="#arg-use-pca"></a></dt>
@@ -127,7 +132,15 @@ predictor matrix. Default <code>NULL</code>, which is an error when
 
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Optional integer seed applied locally (and restored on exit)
-before resampling and tuning. Default <code>NULL</code> (never seeds by default).</p></dd>
+before resampling and tuning. Default <code>NULL</code> (never seeds by default).
+The resampling folds are drawn in the main R process and the glmnet fits
+themselves are deterministic, so a seeded <code>n_cores &gt; 1</code> run gives the
+same result as a seeded sequential one. When <code>trControl$seeds</code> is unset
+(<code>NA</code>, the <code>trainControl()</code> default), caret draws one seed per resample
+in the main process from this seed and sets it on each worker, so seeded
+runs that use worker-side randomness (for example <code>sampling = "up"</code>) are
+reproducible with any <code>n_cores</code>. A user-supplied <code>trControl$seeds</code> takes
+precedence.</p></dd>
 
 
 <dt id="arg-verbose">verbose<a class="anchor" aria-label="anchor" href="#arg-verbose"></a></dt>
@@ -167,8 +180,10 @@ predictor has one coefficient per class and no single score exists.</p></dd>
 <dd><p>List of <code>coef</code> (coefficients at the best lambda, intercept
 included: a sparse matrix, or a list of them for multinomial fits),
 <code>best_alpha</code> and <code>best_lambda</code> (the winning tuning pair), <code>metric_name</code>
-(the metric optimized), <code>metric_value</code> (its resampled value for that
-pair, <code>NA</code> when the metric is absent from caret's results table),
+(the metric caret actually optimized, which differs from <code>metric</code> when
+caret fell back to its default), <code>metric_value</code> (its resampled value for that
+pair, <code>NA</code> when the metric is absent from caret's results table; an
+optimistic, in-sample-tuned figure, see Details),
 <code>use_pca</code>, and <code>n_features</code> (number of columns the model saw, i.e.
 <code>nPCs</code> when <code>use_pca = TRUE</code>).</p></dd>
 
@@ -195,10 +210,19 @@ contributes k - 1 dummy columns and <code>selected</code>, <code>scores</code> a
 name design-matrix columns rather than the original columns. Non-syntactic
 names are reported as the caller wrote them, without the backticks
 <code><a href="https://rdrr.io/r/stats/model.matrix.html" class="external-link">model.matrix()</a></code> adds. <code>glmnet</code> needs at least two design-matrix columns,
-so a single numeric predictor is an error.</p>
+so a single numeric predictor is an error. A factor or character
+predictor with fewer than two distinct values is an error naming the
+column, and so is a dummy name that collides with another column (factor
+<code>g</code> with level <code>b</code> next to a column called <code>gb</code>).</p>
 <p>Rows with a missing response, or a missing value in any predictor, are
-dropped before fitting (an error if that leaves nothing), and a constant
-predictor column is a hard error rather than a silently degenerate fit. A
+dropped before fitting (an error if that leaves nothing). The task is
+inferred from the remaining rows: a class that occurred only in dropped
+rows is removed with a message, and a class with fewer than two complete
+rows is an error. Infinite values (<code>Inf</code>/<code>-Inf</code>) in the target or any
+predictor are an error. A predictor column that is constant, or constant
+up to floating-point round-off (range below <code>1000 * .Machine$double.eps</code>
+times its magnitude), is a hard error rather than a silently degenerate
+fit; dense and sparse input use the same rule. A
 logical response is converted to a two-level factor with a message; a
 numeric response with only two distinct values is still treated as
 regression, with a warning telling you to convert it to a factor if you
@@ -225,6 +249,30 @@ wins is still decided by resampling. With <code>use_pca = TRUE</code> that path 
 computed on the original predictors, so it is only an approximation of the
 scale the components live on; pass <code>lambda_seq</code> explicitly if you need to
 control it.</p>
+<p>The winning pair is the one with the best resampled metric (caret's
+default <code>selectionFunction = "best"</code>). With hundreds of alpha/lambda
+candidates that choice is noisy and leans towards too little penalty: on
+pure-noise data (100 rows, 50 predictors) it selected 8.5 predictors on
+average and at least one in every run. A <code>trControl</code> with
+<code>selectionFunction = "oneSE"</code> picks the most penalized pair within one
+standard error of the best and is much sparser (1.8 on average in the same
+simulation). For the same reason <code>details$metric_value</code>, the best value
+over the whole grid, is an optimistic estimate of performance; <code>fs_elastic()</code>
+holds out no test rows, so it reports no honest performance estimate, and
+one needs an outer resampling loop around the whole call. Coefficients
+are taken at exactly the winning lambda (refitting the path if it is not
+one of the final model's knots), not interpolated between knots.</p>
+<p>The resampled metrics (in <code>model$results</code> and <code>details$metric_value</code>) are
+caret's: <code>RMSE</code>, <code>Rsquared</code> and <code>MAE</code> for regression, where <code>Rsquared</code> is
+the <em>squared Pearson correlation</em> between held-out-fold predictions
+and observations (<code><a href="https://rdrr.io/pkg/caret/man/postResample.html" class="external-link">caret::postResample()</a></code>), not <code>1 - SSE/SST</code>, and is not
+comparable with an <code>R2</code> defined as <code>1 - SSE/SST</code> (for example
+<code><a href="fs_randomforest.html">fs_randomforest()</a></code>'s). It lies in [0, 1], except that a fold where it is
+undefined (constant predictions, typical at the large-lambda end of the
+path) is recorded as <code>-Inf</code> by featR's summary function, so such grid rows
+show <code>-Inf</code> in <code>model$results</code>; <code>Accuracy</code> and Cohen's <code>Kappa</code> for
+classification, which needs the suggested package 'e1071' (checked before
+any fitting).</p>
     </div>
 
     <div class="section level2">

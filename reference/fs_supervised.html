@@ -11,7 +11,7 @@ features are selected or dropped by comparing that score to threshold."></head><
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -102,7 +102,12 @@ other type is an error.</p></dd>
 <dd><p>Non-negative, finite numeric scalar threshold applied to
 the feature scores (not to the target directly). Default 0. Note that the
 two methods put scores on different scales: <code>[0, 1]</code> for
-<code>"correlation"</code> and <code>[0, Inf]</code> for <code>"anova"</code>.</p></dd>
+<code>"correlation"</code> and <code>[0, Inf]</code> for <code>"anova"</code>. With the
+defaults (<code>threshold = 0</code>, <code>direction = "above"</code>,
+<code>action = "keep"</code>) nothing is filtered in practice: any
+non-constant feature has a sample \(|r| &gt; 0\) or \(F &gt; 0\), even
+when it is pure noise, so every feature with a defined score is kept.
+Choose a threshold to make an actual selection.</p></dd>
 
 
 <dt id="arg-direction">direction<a class="anchor" aria-label="anchor" href="#arg-direction"></a></dt>
@@ -208,8 +213,10 @@ differ, a message reports the resolved method when
 </ul><p>Features whose score is undefined (<code>NA</code>) are never selected, under
 both <code>action = "keep"</code> and <code>action = "remove"</code>; a warning
 reports how many such features were excluded.</p>
-<p>Columns are subset by integer index, never by name, so duplicated column
-names cannot select the wrong columns.</p>
+<p>Columns are subset by integer index, never by name, so duplicated feature
+names cannot select the wrong columns. The target's name must be unique,
+and every column must have a non-empty, non-NA name (a matrix keeps its own
+column names; <code>V1</code>, <code>V2</code>, ... are used only when it has none).</p>
     </div>
 
     <div class="section level2">

@@ -11,7 +11,7 @@ fs_result."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">featR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -87,7 +87,10 @@ them with <code><a href="https://mc-stan.org/loo/reference/loo_compare.html" cla
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data.frame or data.table. It is copied, never modified. Only
 <code>target</code>, <code>predictors</code> and <code>date_col</code> are carried forward, and rows with a
-missing value in any of them are dropped before any model is fitted.</p></dd>
+missing value in any of them are dropped before any model is fitted.
+Infinite values in those columns are an error. None of those columns may
+be named <code>fitted_values</code>, <code>residuals</code>, <code>abs_residuals</code> or
+<code>squared_residuals</code>, which are appended to <code>details$data</code>.</p></dd>
 
 
 <dt id="arg-target">target<a class="anchor" aria-label="anchor" href="#arg-target"></a></dt>
@@ -98,13 +101,14 @@ exist in <code>data</code> and suit <code>brm_family</code> (numeric for <code><
 
 <dt id="arg-predictors">predictors<a class="anchor" aria-label="anchor" href="#arg-predictors"></a></dt>
 <dd><p>Character vector. Names of the candidate predictor
-columns; at least one, all present in <code>data</code>.</p></dd>
+columns; at least one, without duplicates, all present in <code>data</code>.</p></dd>
 
 
 <dt id="arg-date-col">date_col<a class="anchor" aria-label="anchor" href="#arg-date-col"></a></dt>
 <dd><p>Character or NULL. Name of a date column. When provided, an
 <code>iso_week_id</code> feature (ISO year * 100 + ISO week) is added to the
-predictors. Note: <code>iso_week_id</code> enters the models as a continuous
+predictors, so neither the target, a predictor, nor the date column may
+itself be named <code>iso_week_id</code>. Note: <code>iso_week_id</code> enters the models as a continuous
 covariate, which is a rough encoding of seasonality; a categorical or
 cyclic encoding is deferred to a future version. Default NULL (no date
 feature; the date column itself is never used as a predictor).</p></dd>
@@ -126,6 +130,8 @@ adapt_delta = 0.99, max_treedepth = 15 and refresh = 0. <code>chains</code> and
 <code>cores</code> are respected when evaluating combinations sequentially (<code>cores</code>
 is capped at the detected core count; the defaults are 4 chains on 1
 core), but both are forced to 1 when <code>parallel_combinations = TRUE</code>.
+The PSIS-LOO step uses the same core count, never
+<code>getOption("mc.cores")</code>.
 Default <code><a href="https://rdrr.io/r/base/list.html" class="external-link">list()</a></code>.</p></dd>
 
 
@@ -159,12 +165,15 @@ become unavailable; a warning says so. Default FALSE.</p></dd>
 
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Optional whole number (within the R integer range; fractional
-values are an error rather than being truncated). When supplied, seeds
-the random sampling of
-combinations (see <code>sample_combinations</code>) locally; the previous RNG state
-is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
-asked. Note this does not seed the samplers; pass <code>seed</code> inside
-<code>brm_args</code> to control brms itself.</p></dd>
+values are an error rather than being truncated). When supplied, the
+whole call runs on a local RNG stream and the caller's RNG state is
+restored on exit. It seeds the random sampling of combinations (see
+<code>sample_combinations</code>) and, unless <code>brm_args$seed</code> is given, also draws
+one Stan seed per combination from that stream, so the MCMC fits are
+reproducible too, including under <code>parallel_combinations = TRUE</code>. An
+explicit <code>brm_args$seed</code> is used for every model instead. Default NULL:
+fs_bayes() never seeds the RNG unless asked (brms/rstan then draw their
+seeds from the global stream).</p></dd>
 
 
 <dt id="arg-verbose">verbose<a class="anchor" aria-label="anchor" href="#arg-verbose"></a></dt>
@@ -193,8 +202,10 @@ predictors were offered.</p></dd>
 <dd><p>"bayes".</p></dd>
 
 <dt>task</dt>
-<dd><p>"regression", or "classification" when <code>brm_family</code> is one of
-the categorical brms families.</p></dd>
+<dd><p>"classification" when <code>brm_family</code> is a binary, categorical or
+ordinal family (<code>bernoulli</code>, <code>binomial</code>, <code>beta_binomial</code>,
+<code>categorical</code>, <code>multinomial</code>, <code>cumulative</code>, <code>sratio</code>, <code>cratio</code>,
+<code>acat</code>), otherwise "regression".</p></dd>
 
 <dt>model</dt>
 <dd><p>The selected <code>brmsfit</code>.</p></dd>
@@ -206,11 +217,15 @@ plus appended <code>fitted_values</code>, <code>residuals</code>, <code>abs_resi
 <code>squared_residuals</code> columns), <code>mae</code> and <code>rmse</code> (in-sample,
 post-selection errors computed on the same rows used to fit and select,
 so they are optimistic), <code>formula</code> (the selected model's formula
-string), <code>best_elpd</code> (the selected model's elpd_loo, possibly <code>NA</code>),
+string), <code>best_elpd</code> (the selected model's elpd_loo, possibly <code>NA</code>;
+optimistic because it was selected, see Details),
 <code>loo_comparison</code> (the <code><a href="https://mc-stan.org/loo/reference/loo_compare.html" class="external-link">loo::loo_compare()</a></code> table – a matrix or
 data.frame depending on the loo version – or <code>NULL</code> when fewer than two
 models could be compared or the comparison failed), <code>n_failed_fits</code>
-(how many combinations failed to fit) and <code>n_features</code> (the number of
+(how many combinations failed to fit), <code>n_loo_failed</code> (how many fitted
+models were excluded because loo() failed), <code>n_compared</code> (how many
+models with a finite elpd_loo competed in the selection) and
+<code>n_features</code> (the number of
 candidate predictors, including <code>iso_week_id</code> when <code>date_col</code> is
 supplied).</p></dd>
 
@@ -237,9 +252,14 @@ wins, which is the older behavior and is more prone to over-fitting the
 comparison. When no usable comparison table is available, both rules fall
 back to the raw elpd maximum, ties broken by fewer predictors.</p>
 <p>Combinations whose model fails to fit are excluded from selection and
-counted in <code>details$n_failed_fits</code>, with a warning. If no fit yields a
-finite <code>elpd_loo</code> at all, the first successfully fitted model is returned
-with a warning; that is an arbitrary fallback, not a selection.</p>
+counted in <code>details$n_failed_fits</code>, with a warning that quotes the first
+brms error. Fitted models for which <code><a href="https://mc-stan.org/loo/reference/loo.html" class="external-link">loo::loo()</a></code> fails (or gives no finite
+elpd) are likewise excluded, counted in <code>details$n_loo_failed</code> and
+reported in a warning. If <code><a href="https://mc-stan.org/loo/reference/loo_compare.html" class="external-link">loo::loo_compare()</a></code> itself fails, a warning
+says that the raw elpd maximum is used and <code>rule = "1se"</code> is not applied.
+If no fit yields a finite <code>elpd_loo</code> at all, the first successfully fitted
+model is returned with a warning; that is an arbitrary fallback, not a
+selection.</p>
 <p>Per-model sampler warnings (divergent transitions, R-hat, effective sample
 size) and loo's Pareto-k warnings are muffled while the models are fitted,
 so a search over many subsets does not flood the console, but they are not
@@ -247,11 +267,23 @@ discarded: after the search one warning summarizes how many fits raised
 sampler warnings and another how many have observations with Pareto
 k &gt; 0.7 (unreliable PSIS-LOO estimates), each stating whether the selected
 model is among them. <code>verbose = TRUE</code> shows every individual warning.</p>
-<p>Two caveats are worth stating plainly. <code>details$mae</code> and <code>details$rmse</code> are
-in-sample errors computed on the same rows used to fit and to select, so
-they are optimistic. And anything read off the returned <code>brmsfit</code>
-(posterior intervals, effect sizes) is post-selection inference: the model
-was chosen by looking at the same data it is reported on.</p>
+<p>Three caveats are worth stating plainly. <code>details$mae</code> and <code>details$rmse</code>
+are in-sample errors computed on the same rows used to fit and to select,
+so they are optimistic. <code>details$best_elpd</code> (and the <code>loo_comparison</code>
+table) is optimistic too: PSIS-LOO is roughly unbiased for one fixed model,
+but the selected model's elpd_loo is the maximum, or a near-maximum under
+<code>rule = "1se"</code>, over <code>details$n_compared</code> candidates, so it overstates the
+chosen model's out-of-sample predictive performance, and increasingly so
+the larger the search (selection-induced bias; Piironen and Vehtari, 2017).
+An honest estimate needs the whole search repeated inside an outer
+cross-validation, or held-out data. And anything read off the returned
+<code>brmsfit</code> (posterior intervals, effect sizes) is post-selection inference:
+the model was chosen by looking at the same data it is reported on.</p>
+    </div>
+    <div class="section level2">
+    <h2 id="references">References<a class="anchor" aria-label="anchor" href="#references"></a></h2>
+    <p>Piironen, J. and Vehtari, A. (2017). Comparison of Bayesian predictive
+methods for model selection. <em>Statistics and Computing</em>, 27(3), 711-735.</p>
     </div>
 
     <div class="section level2">
@@ -287,7 +319,7 @@ was chosen by looking at the same data it is reported on.</p>
 <span class="r-in"><span><span class="op">}</span></span></span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span> Compiling Stan program...</span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span> Compiling Stan program...</span>
-<span class="r-wrn co"><span class="r-pr">#&gt;</span> <span class="warning">Warning: </span>2 of 2 model fits failed and were excluded from selection.</span>
+<span class="r-wrn co"><span class="r-pr">#&gt;</span> <span class="warning">Warning: </span>2 of 2 model fits failed and were excluded from selection. First error (y ~ x1): Boost not found; call install.packages('BH')</span>
 <span class="r-in"><span><span class="co"># }</span></span></span>
 </code></pre></div>
     </div>

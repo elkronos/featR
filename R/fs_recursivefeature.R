@@ -39,71 +39,76 @@ rfe_task_type <- function(y) {
 #' @noRd
 rfe_guard_rf_funcs <- function(funcs) {
   if (!identical(funcs$fit, caret::rfFuncs$fit)) return(funcs)
-  env <- new.env(parent = baseenv())
-  env$fit0 <- funcs$fit
-  env$pred0 <- funcs$pred
-  env$rank0 <- funcs$rank
-  env$varies <- function(x) {
-    if (is.matrix(x)) {
-      apply(x, 2L, function(v) length(unique(v[!is.na(v)])) > 1L)
-    } else {
-      vapply(x, function(v) length(unique(v[!is.na(v)])) > 1L, logical(1L))
-    }
-  }
-  fit <- function(x, y, first, last, ...) {
-    keep <- varies(x)
-    if (!any(keep)) {
-      return(structure(list(y = y, vars = colnames(x)),
-                       class = "featr_constant_fit"))
-    }
-    obj <- fit0(x[, keep, drop = FALSE], y, first, last, ...)
-    obj$featr_vars <- colnames(x)[keep]
-    obj
-  }
-  pred <- function(object, x) {
-    if (inherits(object, "featr_constant_fit")) {
-      y <- object$y
-      n <- nrow(x)
-      if (is.factor(y)) {
-        p <- as.numeric(table(y)) / length(y)
-        names(p) <- levels(y)
-        cls <- factor(rep(levels(y)[which.max(p)], n), levels = levels(y))
-        probs <- as.data.frame(matrix(rep(p, each = n), nrow = n,
-                                      dimnames = list(NULL, levels(y))))
-        return(cbind(data.frame(pred = cls), probs))
+  # The factory's enclosing environment is baseenv(), so the closures it
+  # returns capture only fit0/pred0/rank0/varies (no featR namespace).
+  factory <- function(fit0, pred0, rank0) {
+    # Force now: the arguments are promises on `funcs`, which is modified
+    # below, and a lazy lookup would make each wrapper call itself.
+    force(fit0)
+    force(pred0)
+    force(rank0)
+    varies <- function(x) {
+      if (is.matrix(x)) {
+        apply(x, 2L, function(v) length(unique(v[!is.na(v)])) > 1L)
+      } else {
+        vapply(x, function(v) length(unique(v[!is.na(v)])) > 1L, logical(1L))
       }
-      return(rep(mean(y), n))
     }
-    if (!is.null(object$featr_vars)) {
-      x <- x[, object$featr_vars, drop = FALSE]
+    fit <- function(x, y, first, last, ...) {
+      keep <- varies(x)
+      if (!any(keep)) {
+        return(structure(list(y = y, vars = colnames(x)),
+                         class = "featr_constant_fit"))
+      }
+      obj <- fit0(x[, keep, drop = FALSE], y, first, last, ...)
+      obj$featr_vars <- colnames(x)[keep]
+      obj
     }
-    pred0(object, x)
+    pred <- function(object, x) {
+      if (inherits(object, "featr_constant_fit")) {
+        y <- object$y
+        n <- nrow(x)
+        if (is.factor(y)) {
+          p <- as.numeric(table(y)) / length(y)
+          names(p) <- levels(y)
+          cls <- factor(rep(levels(y)[which.max(p)], n), levels = levels(y))
+          probs <- as.data.frame(matrix(rep(p, each = n), nrow = n,
+                                        dimnames = list(NULL, levels(y))))
+          return(cbind(data.frame(pred = cls), probs))
+        }
+        return(rep(mean(y), n))
+      }
+      if (!is.null(object$featr_vars)) {
+        x <- x[, object$featr_vars, drop = FALSE]
+      }
+      pred0(object, x)
+    }
+    rank <- function(object, x, y) {
+      all_vars <- colnames(x)
+      if (inherits(object, "featr_constant_fit")) {
+        return(data.frame(Overall = rep(0, length(all_vars)), var = all_vars,
+                          row.names = all_vars, stringsAsFactors = FALSE))
+      }
+      used <- if (is.null(object$featr_vars)) all_vars else object$featr_vars
+      r <- rank0(object, x[, used, drop = FALSE], y)
+      miss <- setdiff(all_vars, r$var)
+      if (length(miss) > 0L) {
+        add <- r[rep(1L, length(miss)), , drop = FALSE]
+        num <- vapply(add, is.numeric, logical(1L))
+        add[num] <- 0
+        add$var <- miss
+        rownames(add) <- miss
+        r <- rbind(r, add)
+      }
+      r
+    }
+    list(fit = fit, pred = pred, rank = rank)
   }
-  rank <- function(object, x, y) {
-    all_vars <- colnames(x)
-    if (inherits(object, "featr_constant_fit")) {
-      return(data.frame(Overall = rep(0, length(all_vars)), var = all_vars,
-                        row.names = all_vars, stringsAsFactors = FALSE))
-    }
-    used <- if (is.null(object$featr_vars)) all_vars else object$featr_vars
-    r <- rank0(object, x[, used, drop = FALSE], y)
-    miss <- setdiff(all_vars, r$var)
-    if (length(miss) > 0L) {
-      add <- r[rep(1L, length(miss)), , drop = FALSE]
-      num <- vapply(add, is.numeric, logical(1L))
-      add[num] <- 0
-      add$var <- miss
-      rownames(add) <- miss
-      r <- rbind(r, add)
-    }
-    r
-  }
-  environment(fit) <- env
-  environment(pred) <- env
-  environment(rank) <- env
-  funcs$fit <- fit
-  funcs$pred <- pred
-  funcs$rank <- rank
+  environment(factory) <- baseenv()
+  guarded <- factory(funcs$fit, funcs$pred, funcs$rank)
+  funcs$fit <- guarded$fit
+  funcs$pred <- guarded$pred
+  funcs$rank <- guarded$rank
   funcs
 }
 

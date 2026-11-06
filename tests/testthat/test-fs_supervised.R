@@ -589,3 +589,46 @@ test_that("ANOVA F matches stats and is Inf, silently, under perfect separation"
                  "undefined scores and were excluded: k")
   expect_true(is.na(r2$scores[["k"]]))
 })
+
+test_that("a duplicated target name is an error, not a leaked feature", {
+  set.seed(1)
+  n <- 50
+  d <- data.frame(y = rnorm(n), x = rnorm(n), y2 = rnorm(n))
+  names(d)[3] <- "y"
+  d[[3]] <- d[[1]] + rnorm(n, 0, 0.01)
+  expect_error(fs_supervised(d, "y", threshold = 0.5),
+               "'y' \\(the target\\) appears more than once")
+})
+
+test_that("features in extreme units are scored, not treated as constant", {
+  set.seed(1)
+  x <- rnorm(50)
+  y <- x + rnorm(50)
+  d <- data.frame(a = x * 1e-170, b = x * 1e170, c = x, t = y)
+  expect_no_warning(res <- fs_supervised(d, "t", threshold = 0.1))
+  expect_equal(unname(res$scores), rep(abs(cor(x, y)), 3))
+  expect_identical(res$selected, c("a", "b", "c"))
+
+  g <- factor(rep(c("p", "q"), 25))
+  xx <- rnorm(50) + as.integer(g)
+  da <- data.frame(a = xx * 1e-200, b = xx * 1e160, c = xx, g = g)
+  sc <- fs_supervised(da, "g")$scores
+  expect_true(all(is.finite(sc)))
+  expect_equal(unname(sc), rep(sc[["c"]], 3))
+  # A genuinely constant column is still NA.
+  dk <- data.frame(k = rep(1e-170, 50), t = y)
+  expect_warning(
+    expect_warning(r <- fs_supervised(dk, "t"), "undefined scores"),
+    "No features meet"
+  )
+  expect_true(is.na(r$scores[["k"]]))
+})
+
+test_that("matrix input keeps its own column names instead of inventing V<j>", {
+  set.seed(1)
+  m <- cbind(y = rnorm(30), V3 = rnorm(30), rnorm(30))
+  colnames(m)[3] <- ""
+  expect_error(fs_supervised(m, "y"), "must not have empty or NA column names")
+  colnames(m)[3] <- "z"
+  expect_identical(names(fs_supervised(m, "y")$scores), c("V3", "z"))
+})

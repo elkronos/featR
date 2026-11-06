@@ -19,7 +19,7 @@ fs_chi(
 }
 \arguments{
 \item{data}{A data.frame or data.table with features and target, with
-unique column names. Character columns are coerced to factor. The input
+unique, non-empty, non-NA column names. Character columns are coerced to factor. The input
 object is never modified.}
 
 \item{target}{Character scalar: name of the target column. It is coerced to
@@ -36,7 +36,8 @@ corrected.}
 
 \item{p_adjust_method}{Character: one of \code{stats::p.adjust.methods}
 (default "bonferroni"). Set to "none" to disable multiple-testing
-correction. Matching is case-insensitive. The correction counts only the
+correction. Matching is case-insensitive, and an invalid name is an
+error before any feature is tested. The correction counts only the
 features that were actually tested: a skipped feature has an \code{NA} p-value,
 and \code{stats::p.adjust()} drops NAs before its default \code{n = length(p)} is
 evaluated, so skipped features keep an \code{NA} adjusted p-value and do not
@@ -44,7 +45,13 @@ inflate the multiplier for the others. With \code{k} tested and \code{s} skipped
 features, "bonferroni" therefore multiplies by \code{k}, not by \code{k + s}.}
 
 \item{simulation_B}{Whole number >= 100: replicates for the simulation-based
-p-value used when any expected cell count is < 5 (default 2000).}
+p-value used when any expected cell count is < 5 (default 2000). A
+simulated p-value is never below \code{1 / (simulation_B + 1)}, so after a
+multiplicity adjustment it may be unable to reach \code{sig_level} at all
+(with Bonferroni, once the number of tested features reaches
+\code{sig_level * (simulation_B + 1)}, i.e. 101 at the defaults); a warning
+then names the affected features and the \code{simulation_B} that would be
+needed.}
 
 \item{seed}{Optional integer. Seeds the RNG locally (the previous RNG state
 is restored on exit), which makes simulation-based p-values reproducible
@@ -60,9 +67,13 @@ coercion, skipped features, worker count). Default FALSE.}
 suggested furrr and future packages. Default FALSE (sequential).}
 
 \item{n_cores}{Whole number >= 1. Number of workers used when
-\code{parallel = TRUE}; requests are capped at the detected core count. A
-\code{future::multisession} plan is set for the duration of the call and the
-previous plan is restored on exit. Default 2.}
+\code{parallel = TRUE}; requests are capped at the detected core count. If
+the current future plan is sequential (the default), a
+\code{future::multisession} plan with that many workers is set for the
+duration of the call and the previous plan is restored on exit, even if
+worker start-up fails. If you have already set a non-sequential plan
+(e.g. \code{future::plan(future::multisession, workers = 4)}), it is used as
+is, its workers are left running, and \code{n_cores} is ignored. Default 2.}
 }
 \value{
 An object of class \code{fs_result} with:

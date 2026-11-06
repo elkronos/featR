@@ -5,6 +5,10 @@
 # Helpers
 ###############################################################################
 
+# Columns bayes_add_metrics_to_data() appends to the modeling data.
+bayes_metric_columns <- c("fitted_values", "residuals", "abs_residuals",
+                          "squared_residuals")
+
 #' Validate data columns and types for fs_bayes()
 #'
 #' Checks that the target, predictor, and (if provided) date columns exist
@@ -39,6 +43,31 @@ bayes_validate_data <- function(data,
   if (!is.null(date_col) && !date_col %in% names(data)) {
     stop("Date column '", date_col, "' not found in data.")
   }
+  # A repeated predictor produced duplicate candidate models (and an
+  # "x1 + x1" formula), counted twice towards the search.
+  if (anyDuplicated(predictors) > 0L) {
+    stop("'predictors' must not contain duplicates; repeated: ",
+         paste(unique(predictors[duplicated(predictors)]), collapse = ", "),
+         ".", call. = FALSE)
+  }
+  # Columns are looked up by name, so a duplicated name silently used the
+  # first copy only.
+  used <- c(target, predictors, date_col)
+  dup_used <- intersect(used, names(data)[duplicated(names(data))])
+  if (length(dup_used) > 0L) {
+    stop("'data' has duplicated column names among the columns used: ",
+         paste(dup_used, collapse = ", "), ". Rename the duplicates first.",
+         call. = FALSE)
+  }
+  # date_col adds a column named "iso_week_id" by reference, which silently
+  # overwrote a user column of that name -- including the target, which the
+  # search then regressed on its own replacement.
+  if (!is.null(date_col) && "iso_week_id" %in% used) {
+    stop("With 'date_col', fs_bayes() adds a predictor named 'iso_week_id', ",
+         "which would overwrite the column of that name used as the target, ",
+         "a predictor, or the date column. Rename that column first.",
+         call. = FALSE)
+  }
 
   # A family object is a list carrying a single character `family`. Passing the
   # generator without parentheses (brms::bernoulli rather than
@@ -52,6 +81,17 @@ bayes_validate_data <- function(data,
          "'family' element, such as stats::gaussian() or brms::bernoulli(). ",
          "Note the parentheses: the function itself (for example ",
          "brms::bernoulli) is not a family object.", call. = FALSE)
+  }
+
+  # The fitted-metric columns are added to details$data by reference; a
+  # used column of the same name was silently overwritten there.
+  clash <- intersect(used, bayes_metric_columns)
+  if (length(clash) > 0L) {
+    stop("fs_bayes() appends columns named ",
+         paste(bayes_metric_columns, collapse = ", "),
+         " to the returned data, which would overwrite the column(s) used as ",
+         "the target, a predictor, or the date column: ",
+         paste(clash, collapse = ", "), ". Rename them first.", call. = FALSE)
   }
 
   # Minimal sanity checks re: family/response
@@ -112,7 +152,14 @@ bayes_task_from_family <- function(brm_family) {
 #' @noRd
 bayes_add_week_feature <- function(data, date_col, predictors) {
   if (!inherits(data[[date_col]], "Date")) {
-    data.table::set(data, j = date_col, value = as.Date(data[[date_col]]))
+    as_date <- tryCatch(
+      as.Date(data[[date_col]]),
+      error = function(e) {
+        stop(sprintf("Date column '%s' could not be converted to Date: %s",
+                     date_col, conditionMessage(e)), call. = FALSE)
+      }
+    )
+    data.table::set(data, j = date_col, value = as_date)
   }
 
   iso_year <- as.integer(strftime(data[[date_col]], "%G"))
@@ -252,7 +299,8 @@ bayes_generate_predictor_combinations <- function(predictors,
 #' @param brm_args List. Additional arguments for brms::brm().
 #' @param verbose Logical. Print progress and warnings.
 #' @return A list with `model` (the fitted brms model, or NULL if fitting
-#'   failed) and `warnings` (character vector of the muffled warning messages).
+#'   failed), `warnings` (character vector of the muffled warning messages)
+#'   and `error` (the brm() error message when fitting failed, else NULL).
 #' @noRd
 bayes_fit_model <- function(data,
                             formula_str,
@@ -282,6 +330,7 @@ bayes_fit_model <- function(data,
   }
 
   fit_warnings <- character(0)
+  fit_error <- NULL
   model <- tryCatch({
     # Record and (optionally) log warnings, but do not fail the fit because
     # of them. They used to be discarded outright, so a selected model with
@@ -297,6 +346,9 @@ bayes_fit_model <- function(data,
       }
     )
   }, error = function(e) {
+    # Kept, so that fs_bayes() can quote it: discarding it forced a re-run of
+    # the whole search with verbose = TRUE just to learn why fits failed.
+    fit_error <<- conditionMessage(e)
     if (verbose) {
       message("Error [", formula_str, "]: ", conditionMessage(e))
     }
@@ -307,7 +359,7 @@ bayes_fit_model <- function(data,
     message("Successfully fitted: ", formula_str)
   }
 
-  list(model = model, warnings = fit_warnings)
+  list(model = model, warnings = fit_warnings, error = fit_error)
 }
 
 #' Is this a two-dimensional draws summary with an Estimate column?
@@ -391,7 +443,10 @@ bayes_add_metrics_to_data <- function(data, model, verbose = FALSE) {
 #' observation's contribution to elpd_loo is unreliable.
 #'
 #' @return A list with elements preds, model, loo, loo_val, formula_str,
-#'   fit_warnings (character) and n_bad_k (integer, `NA` without a loo).
+#'   fit_warnings (character), n_bad_k (integer, `NA` without a loo),
+#'   fit_error (brm() error message or NULL) and loo_error (loo() error
+#'   message, or a note that elpd_loo was not finite, or NULL). loo() runs
+#'   on `brm_args$cores` cores (1 when unset), never on getOption("mc.cores").
 #' @noRd
 bayes_evaluate_combination <- function(preds,
                                        data,
@@ -417,6 +472,8 @@ bayes_evaluate_combination <- function(preds,
   loo_obj <- NULL
   loo_val <- NA_real_
   n_bad_k <- NA_integer_
+  loo_error <- NULL
+  loo_cores <- if (is.null(brm_args$cores)) 1L else brm_args$cores
 
   if (!is.null(model)) {
     if (!is.null(brm_args$algorithm) && identical(brm_args$algorithm, "fixed_param")) {
@@ -426,7 +483,10 @@ bayes_evaluate_combination <- function(preds,
     } else {
       loo_obj <- tryCatch(
         withCallingHandlers(
-          loo::loo(model),
+          # Pin loo's cores to the brms core budget: loo otherwise defaults to
+          # getOption("mc.cores"), which oversubscribed the machine (and every
+          # parallel_combinations worker) for users who set that option.
+          loo::loo(model, cores = loo_cores),
           warning = function(w) {
             if (verbose) {
               message("LOO warning [", formula_str, "]: ", conditionMessage(w))
@@ -435,6 +495,7 @@ bayes_evaluate_combination <- function(preds,
           }
         ),
         error = function(e) {
+          loo_error <<- conditionMessage(e)
           if (verbose) {
             message("LOO failed [", formula_str, "]: ", conditionMessage(e))
           }
@@ -446,6 +507,9 @@ bayes_evaluate_combination <- function(preds,
           loo_obj$estimates["elpd_loo", "Estimate"],
           error = function(e) NA_real_
         )
+        if (!is.finite(loo_val)) {
+          loo_error <- "loo() returned no finite elpd_loo estimate."
+        }
         k <- loo_obj$diagnostics$pareto_k
         if (is.numeric(k)) {
           n_bad_k <- sum(k > 0.7, na.rm = TRUE)
@@ -461,7 +525,9 @@ bayes_evaluate_combination <- function(preds,
     loo_val      = loo_val,
     formula_str  = formula_str,
     fit_warnings = fit$warnings,
-    n_bad_k      = n_bad_k
+    n_bad_k      = n_bad_k,
+    fit_error    = fit$error,
+    loo_error    = loo_error
   )
 }
 
@@ -527,7 +593,8 @@ bayes_warn_diagnostics <- function(results, chosen = NA_integer_) {
 #'   in `results`. Where those labels live is version dependent: loo <= 2.9 put
 #'   them in the rownames, loo >= 2.10.0 returns a data.frame with no rownames
 #'   and a `"model"` column instead. Returns NULL when fewer than two
-#'   comparable models exist or the comparison fails.
+#'   comparable models exist or the comparison fails (the latter with a
+#'   warning).
 #' @noRd
 bayes_loo_comparison <- function(results, idx) {
   if (length(idx) < 2L) {
@@ -538,7 +605,14 @@ bayes_loo_comparison <- function(results, idx) {
     return(NULL)
   }
   names(loo_objs) <- paste0("model", idx)
-  tryCatch(loo::loo_compare(loo_objs), error = function(e) NULL)
+  # A failure here makes both rules fall back to the raw elpd maximum, which
+  # silently replaced a requested rule = "1se"; say so.
+  tryCatch(loo::loo_compare(loo_objs), error = function(e) {
+    warning("loo::loo_compare() failed (", conditionMessage(e), "); ",
+            "selecting the raw elpd maximum instead, so rule = \"1se\" is ",
+            "not applied and details$loo_comparison is NULL.", call. = FALSE)
+    NULL
+  })
 }
 
 #' Choose one model from the loo comparison
@@ -649,9 +723,14 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #' back to the raw elpd maximum, ties broken by fewer predictors.
 #'
 #' Combinations whose model fails to fit are excluded from selection and
-#' counted in `details$n_failed_fits`, with a warning. If no fit yields a
-#' finite `elpd_loo` at all, the first successfully fitted model is returned
-#' with a warning; that is an arbitrary fallback, not a selection.
+#' counted in `details$n_failed_fits`, with a warning that quotes the first
+#' brms error. Fitted models for which `loo::loo()` fails (or gives no finite
+#' elpd) are likewise excluded, counted in `details$n_loo_failed` and
+#' reported in a warning. If `loo::loo_compare()` itself fails, a warning
+#' says that the raw elpd maximum is used and `rule = "1se"` is not applied.
+#' If no fit yields a finite `elpd_loo` at all, the first successfully fitted
+#' model is returned with a warning; that is an arbitrary fallback, not a
+#' selection.
 #'
 #' Per-model sampler warnings (divergent transitions, R-hat, effective sample
 #' size) and loo's Pareto-k warnings are muffled while the models are fitted,
@@ -661,23 +740,38 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #' k > 0.7 (unreliable PSIS-LOO estimates), each stating whether the selected
 #' model is among them. `verbose = TRUE` shows every individual warning.
 #'
-#' Two caveats are worth stating plainly. `details$mae` and `details$rmse` are
-#' in-sample errors computed on the same rows used to fit and to select, so
-#' they are optimistic. And anything read off the returned `brmsfit`
-#' (posterior intervals, effect sizes) is post-selection inference: the model
-#' was chosen by looking at the same data it is reported on.
+#' Three caveats are worth stating plainly. `details$mae` and `details$rmse`
+#' are in-sample errors computed on the same rows used to fit and to select,
+#' so they are optimistic. `details$best_elpd` (and the `loo_comparison`
+#' table) is optimistic too: PSIS-LOO is roughly unbiased for one fixed model,
+#' but the selected model's elpd_loo is the maximum, or a near-maximum under
+#' `rule = "1se"`, over `details$n_compared` candidates, so it overstates the
+#' chosen model's out-of-sample predictive performance, and increasingly so
+#' the larger the search (selection-induced bias; Piironen and Vehtari, 2017).
+#' An honest estimate needs the whole search repeated inside an outer
+#' cross-validation, or held-out data. And anything read off the returned
+#' `brmsfit` (posterior intervals, effect sizes) is post-selection inference:
+#' the model was chosen by looking at the same data it is reported on.
+#'
+#' @references
+#' Piironen, J. and Vehtari, A. (2017). Comparison of Bayesian predictive
+#' methods for model selection. *Statistics and Computing*, 27(3), 711-735.
 #'
 #' @param data A data.frame or data.table. It is copied, never modified. Only
 #'   `target`, `predictors` and `date_col` are carried forward, and rows with a
 #'   missing value in any of them are dropped before any model is fitted.
+#'   Infinite values in those columns are an error. None of those columns may
+#'   be named `fitted_values`, `residuals`, `abs_residuals` or
+#'   `squared_residuals`, which are appended to `details$data`.
 #' @param target Character. Name of the target (response) column, which must
 #'   exist in `data` and suit `brm_family` (numeric for `stats::gaussian()`,
 #'   0/1 or logical for `brms::bernoulli()`).
 #' @param predictors Character vector. Names of the candidate predictor
-#'   columns; at least one, all present in `data`.
+#'   columns; at least one, without duplicates, all present in `data`.
 #' @param date_col Character or NULL. Name of a date column. When provided, an
 #'   `iso_week_id` feature (ISO year * 100 + ISO week) is added to the
-#'   predictors. Note: `iso_week_id` enters the models as a continuous
+#'   predictors, so neither the target, a predictor, nor the date column may
+#'   itself be named `iso_week_id`. Note: `iso_week_id` enters the models as a continuous
 #'   covariate, which is a rough encoding of seasonality; a categorical or
 #'   cyclic encoding is deferred to a future version. Default NULL (no date
 #'   feature; the date column itself is never used as a predictor).
@@ -690,6 +784,8 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'   `cores` are respected when evaluating combinations sequentially (`cores`
 #'   is capped at the detected core count; the defaults are 4 chains on 1
 #'   core), but both are forced to 1 when `parallel_combinations = TRUE`.
+#'   The PSIS-LOO step uses the same core count, never
+#'   `getOption("mc.cores")`.
 #'   Default `list()`.
 #' @param rule Selection rule: `"1se"` (default) keeps the most parsimonious
 #'   model within one standard error of the best elpd; `"best"` keeps the raw
@@ -708,12 +804,15 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'   to a single MCMC chain, cross-chain convergence diagnostics such as R-hat
 #'   become unavailable; a warning says so. Default FALSE.
 #' @param seed Optional whole number (within the R integer range; fractional
-#'   values are an error rather than being truncated). When supplied, seeds
-#'   the random sampling of
-#'   combinations (see `sample_combinations`) locally; the previous RNG state
-#'   is restored on exit. Default NULL: fs_bayes() never seeds the RNG unless
-#'   asked. Note this does not seed the samplers; pass `seed` inside
-#'   `brm_args` to control brms itself.
+#'   values are an error rather than being truncated). When supplied, the
+#'   whole call runs on a local RNG stream and the caller's RNG state is
+#'   restored on exit. It seeds the random sampling of combinations (see
+#'   `sample_combinations`) and, unless `brm_args$seed` is given, also draws
+#'   one Stan seed per combination from that stream, so the MCMC fits are
+#'   reproducible too, including under `parallel_combinations = TRUE`. An
+#'   explicit `brm_args$seed` is used for every model instead. Default NULL:
+#'   fs_bayes() never seeds the RNG unless asked (brms/rstan then draw their
+#'   seeds from the global stream).
 #' @param verbose Logical. Print progress information, and show a progress bar
 #'   for sequential evaluation when the suggested pbapply package is
 #'   installed. Default FALSE.
@@ -728,8 +827,10 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'     combination models. `details$n_features` records how many candidate
 #'     predictors were offered.}
 #'   \item{method}{"bayes".}
-#'   \item{task}{"regression", or "classification" when `brm_family` is one of
-#'     the categorical brms families.}
+#'   \item{task}{"classification" when `brm_family` is a binary, categorical or
+#'     ordinal family (`bernoulli`, `binomial`, `beta_binomial`,
+#'     `categorical`, `multinomial`, `cumulative`, `sratio`, `cratio`,
+#'     `acat`), otherwise "regression".}
 #'   \item{model}{The selected `brmsfit`.}
 #'   \item{details}{A list with `data` (the complete-case modeling data.table:
 #'     `target`, `predictors`, `date_col` and `iso_week_id` where applicable,
@@ -737,11 +838,15 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'     `squared_residuals` columns), `mae` and `rmse` (in-sample,
 #'     post-selection errors computed on the same rows used to fit and select,
 #'     so they are optimistic), `formula` (the selected model's formula
-#'     string), `best_elpd` (the selected model's elpd_loo, possibly `NA`),
+#'     string), `best_elpd` (the selected model's elpd_loo, possibly `NA`;
+#'     optimistic because it was selected, see Details),
 #'     `loo_comparison` (the `loo::loo_compare()` table -- a matrix or
 #'     data.frame depending on the loo version -- or `NULL` when fewer than two
 #'     models could be compared or the comparison failed), `n_failed_fits`
-#'     (how many combinations failed to fit) and `n_features` (the number of
+#'     (how many combinations failed to fit), `n_loo_failed` (how many fitted
+#'     models were excluded because loo() failed), `n_compared` (how many
+#'     models with a finite elpd_loo competed in the selection) and
+#'     `n_features` (the number of
 #'     candidate predictors, including `iso_week_id` when `date_col` is
 #'     supplied).}
 #'   \item{call}{The matched call.}
@@ -826,6 +931,10 @@ fs_bayes <- function(data,
 
   fs_require(c("brms", "loo"), "Bayesian feature selection")
 
+  # With a seed, the whole call runs on a local RNG stream: the caller's
+  # state is restored on exit, and every Stan seed below is drawn from it.
+  local_seed(seed)
+
   # Normalize to data.table (always a copy; user data is never mutated)
   data <- as_dt(data)
 
@@ -846,6 +955,10 @@ fs_bayes <- function(data,
   if (nrow(data) == 0L) {
     stop("No complete cases in the data after removing missing values.")
   }
+  # na.omit() keeps Inf, which brms passes on to Stan unchanged; every fit
+  # then failed behind a generic "no valid models" error after the whole
+  # search had been compiled and sampled.
+  assert_finite_columns(data, req_cols, "fs_bayes")
 
   # Add ISO week feature if requested
   if (!is.null(date_col)) {
@@ -853,7 +966,11 @@ fs_bayes <- function(data,
     data <- week$data
     predictors <- week$predictors
     # Drop rows where iso_week_id could not be formed (should be rare)
-    data <- data[!is.na(data[["iso_week_id"]])]
+    # A single-symbol i is evaluated in the calling scope; the former call
+    # `data[!is.na(data[["iso_week_id"]])]` resolved `data` to a predictor
+    # column of that name and failed with "subscript out of bounds".
+    keep_rows <- !is.na(data[["iso_week_id"]])
+    data <- data[keep_rows]
     if (nrow(data) == 0L) {
       stop("No rows remain after constructing iso_week_id and removing NAs.")
     }
@@ -919,15 +1036,30 @@ fs_bayes <- function(data,
   safe_brm_args$chains <- brms_chains
   safe_brm_args$cores  <- brms_cores
 
+  # Per-combination Stan seeds. Without them brms passes seed = NA to rstan,
+  # which draws one from the global stream: a seeded call then advanced the
+  # caller's RNG once per fit and sampled differently on every run, and under
+  # mclapply the forked workers' streams were not reproducible at all. An
+  # explicit brm_args$seed still wins and is used for every model.
+  stan_seeds <- if (!is.null(seed) && is.null(brm_args$seed)) {
+    sample.int(.Machine$integer.max, length(combinations))
+  } else {
+    NULL
+  }
+
   # Evaluation function for one combination
-  eval_func <- function(preds) {
+  eval_func <- function(i) {
+    args_i <- safe_brm_args
+    if (!is.null(stan_seeds)) {
+      args_i$seed <- stan_seeds[[i]]
+    }
     bayes_evaluate_combination(
-      preds      = preds,
+      preds      = combinations[[i]],
       data       = data,
       target     = target,
       brm_family = brm_family,
       prior      = prior,
-      brm_args   = safe_brm_args,
+      brm_args   = args_i,
       verbose    = verbose
     )
   }
@@ -937,14 +1069,14 @@ fs_bayes <- function(data,
 
   # ---- Evaluate all combinations ----
   if (parallel_combinations) {
-    results_list <- parallel::mclapply(combinations, eval_func,
+    results_list <- parallel::mclapply(seq_along(combinations), eval_func,
                                        mc.cores = n_cores_outer)
   } else if (verbose && requireNamespace("pbapply", quietly = TRUE)) {
     old_pbo <- pbapply::pboptions(type = "txt")
     on.exit(pbapply::pboptions(old_pbo), add = TRUE)
-    results_list <- pbapply::pblapply(combinations, eval_func)
+    results_list <- pbapply::pblapply(seq_along(combinations), eval_func)
   } else {
-    results_list <- lapply(combinations, eval_func)
+    results_list <- lapply(seq_along(combinations), eval_func)
   }
 
   # End timer
@@ -966,11 +1098,48 @@ fs_bayes <- function(data,
     logical(1L)
   )
   n_failed_fits <- sum(failed)
+  # The first underlying error, quoted so that a long search need not be
+  # re-run with verbose = TRUE just to learn why fits failed.
+  fit_errors <- vapply(results_list, function(x) {
+    if (inherits(x, "try-error")) {
+      cond <- attr(x, "condition")
+      return(if (inherits(cond, "condition")) conditionMessage(cond) else
+        trimws(as.character(x)))
+    }
+    if (!is.list(x)) return(NA_character_)
+    if (is.null(x$model) && length(x$fit_error) == 1L) x$fit_error else
+      NA_character_
+  }, character(1L))
+  first_fit_error <- if (any(!is.na(fit_errors))) {
+    i <- which(!is.na(fit_errors))[1L]
+    sprintf(" First error (%s): %s",
+            if (is.list(results_list[[i]])) results_list[[i]]$formula_str else
+              "worker crash",
+            trimws(fit_errors[i]))
+  } else {
+    ""
+  }
   if (n_failed_fits > 0L) {
     warning(sprintf(
-      "%d of %d model fits failed and were excluded from selection.",
-      n_failed_fits, length(results_list)
-    ))
+      "%d of %d model fits failed and were excluded from selection.%s",
+      n_failed_fits, length(results_list), first_fit_error
+    ), call. = FALSE)
+  }
+
+  # Fitted models whose loo() failed (or gave no finite elpd) cannot be
+  # compared; they used to be dropped from selection without any notice.
+  loo_failed <- vapply(results_list, function(x) {
+    is.list(x) && !is.null(x$model) && !is.null(x$loo_error)
+  }, logical(1L))
+  n_loo_failed <- sum(loo_failed)
+  if (n_loo_failed > 0L) {
+    i <- which(loo_failed)[1L]
+    warning(sprintf(
+      paste0("%d of %d fitted model(s) have no finite elpd_loo because ",
+             "loo() failed, and were excluded from selection. First (%s): %s"),
+      n_loo_failed, sum(!failed), results_list[[i]]$formula_str,
+      trimws(results_list[[i]]$loo_error)
+    ), call. = FALSE)
   }
 
   usable <- vapply(
@@ -994,8 +1163,9 @@ fs_bayes <- function(data,
            "a Stan toolchain that brms cannot use (installing brms is not ",
            "enough; a working C++ compiler must be configured), invalid ",
            "'brm_args' such as a 'warmup' that is not smaller than 'iter', ",
-           "or a model specification the data cannot support. Re-run with ",
-           "verbose = TRUE to see the per-model failure messages.")
+           "or a model specification the data cannot support.",
+           first_fit_error, " Re-run with verbose = TRUE to see the ",
+           "per-model failure messages.", call. = FALSE)
     }
     warning("No finite LOO selection criterion was available; ",
             "returning the first successfully fitted model, which is an arbitrary choice.")
@@ -1040,16 +1210,12 @@ fs_bayes <- function(data,
 
   # NULL when the family has no single fitted value per row (see
   # bayes_add_metrics_to_data), in which case these metrics are undefined.
-  mae <- if (is.null(data_with_metrics$abs_residuals)) {
-    NA_real_
-  } else {
-    mean(data_with_metrics$abs_residuals, na.rm = TRUE)
-  }
-  rmse <- if (is.null(data_with_metrics$squared_residuals)) {
-    NA_real_
-  } else {
-    sqrt(mean(data_with_metrics$squared_residuals, na.rm = TRUE))
-  }
+  # [[ ]] matches exactly; `$` partial-matched a user column such as
+  # "abs_residuals_cm" when the metric columns were absent.
+  abs_res <- data_with_metrics[["abs_residuals"]]
+  sq_res <- data_with_metrics[["squared_residuals"]]
+  mae <- if (is.null(abs_res)) NA_real_ else mean(abs_res, na.rm = TRUE)
+  rmse <- if (is.null(sq_res)) NA_real_ else sqrt(mean(sq_res, na.rm = TRUE))
 
   if (verbose) {
     message("MAE: ", signif(mae, 6), " | RMSE: ", signif(rmse, 6))
@@ -1069,6 +1235,8 @@ fs_bayes <- function(data,
       best_elpd      = best$loo_val,
       loo_comparison = loo_comparison,
       n_failed_fits  = n_failed_fits,
+      n_loo_failed   = n_loo_failed,
+      n_compared     = length(usable_idx),
       n_features     = n_candidates
     ),
     call = cl_call

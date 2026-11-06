@@ -25,8 +25,11 @@ avoids it.
 
 * **Held-out splits.** `fs_randomforest()`, `fs_mars()`,
   `fs_recursivefeature()`, and `fs_svm()` split the data first and fit every
-  data-dependent step on the training rows only. The metrics in `details`
-  come from rows the selection never saw.
+  data-dependent step on the training rows only. Their held-out metrics
+  come from rows the selection never saw: `details$metrics` (`fs_randomforest()`,
+  `fs_mars()`), `details$test_metrics` (`fs_recursivefeature()`) and
+  `details$performance` (`fs_svm()`). Not everything in `details` is held
+  out, though; see the next point.
 * **Selection inside resampling.** `fs_svm()` repeats SVM-RFE inside every
   cross-validation fold when it chooses how many features to keep.
   `fs_elastic(use_pca = TRUE)` refits the PCA in every resample, and class
@@ -35,8 +38,15 @@ avoids it.
   rather than imputing them from the full data. If you opt in to
   `impute = "mean"`, it warns you.
 * **Labeled in-sample numbers.** Statistics computed on the data used for
-  selection are documented as such, for example `fs_stepwise()`'s p-values
-  and `fs_bayes()`'s `details$mae`.
+  selection are documented as such, and are optimistic: `fs_stepwise()`'s
+  p-values, `fs_bayes()`'s `details$mae`, `details$rmse` and
+  `details$best_elpd` (the LOO score of the winner of the search),
+  `fs_randomforest()`'s `details$oob` when a `control$feature_select` hook
+  chose the columns on the same training rows, `fs_svm()`'s
+  `details$selection$size_scores` entry for the chosen size,
+  `fs_recursivefeature()`'s `details$resampling_results`, `fs_elastic()`'s
+  `details$metric_value`, and the cross-validated tuning results in
+  `model$results` of any caret-based function.
 * **Known false-positive behavior is documented.** For example, `fs_boruta()`
   can confirm pure-noise features, especially after `TentativeRoughFix()`.
   The [wrapper methods](wrappers.html) guide shows a real case.

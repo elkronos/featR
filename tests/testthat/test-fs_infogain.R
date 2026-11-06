@@ -523,3 +523,62 @@ test_that("duplicated column names are rejected", {
                                 bad = d), "t"),
                "unique column names")
 })
+
+test_that("fs_infogain rejects list columns clearly", {
+  # REGRESSION: failed in the entropy code with "unimplemented type 'list' in
+  # 'orderVector1'".
+  d <- data.frame(x = rnorm(10), y = rep(c("a", "b"), 5))
+  d$l <- as.list(1:10)
+  expect_error(fs_infogain(d, "y"), "List columns are not supported: l")
+})
+
+test_that("empty or NA column names are rejected, not scored NA", {
+  # REGRESSION: df[[""]] / df[[NA]] is NULL, so such a predictor was
+  # silently reported with an NA score.
+  set.seed(1)
+  n <- 60
+  d <- data.frame(t = factor(sample(c("a", "b"), n, TRUE)),
+                  f = factor(sample(c("u", "v"), n, TRUE)),
+                  g = factor(sample(c("u", "v"), n, TRUE)),
+                  num = rnorm(n))
+  names(d)[3] <- ""
+  expect_error(fs_infogain(d, "t"), "empty or NA column names")
+  names(d)[3] <- NA
+  expect_error(fs_infogain(d, "t"), "empty or NA column names")
+  d2 <- d
+  names(d2)[3] <- "g"
+  expect_error(fs_infogain(list(d2, d), "t"), "empty or NA column names")
+})
+
+test_that("values differing only by round-off are binned as one value", {
+  # REGRESSION: 0.3 and 0.1 + 0.2 are two unique values, but the equal-width
+  # breaks between them coincide in double precision and cut() stopped with
+  # "'breaks' are not unique", aborting the whole call.
+  set.seed(1)
+  d <- data.frame(a = rnorm(20),
+                  roff = c(rep(0.3, 18), 0.1 + 0.2, 0.1 + 0.2),
+                  y = factor(rep(c("u", "v"), 10)))
+  res <- fs_infogain(d, "y")
+  expect_identical(unname(res$scores[["roff"]]), 0)
+  expect_identical(nlevels(ig_discretize(c(1, 1 + 4e-16, 1, 1 + 2e-16))), 1L)
+  f <- ig_discretize(c(1, 1 + 4e-16, Inf, NA))
+  expect_identical(nlevels(f), 2L)
+  expect_true(is.na(f[4L]))
+  # Numeric target through ig_categorical_target(): constant up to round-off.
+  d2 <- data.frame(a = rnorm(20), y = c(rep(0.3, 18), 0.1 + 0.2, 0.1 + 0.2))
+  expect_identical(unname(fs_infogain(d2, "y")$scores[["a"]]), 0)
+  # Ordinary columns are binned exactly as cut(breaks = <count>) does.
+  x <- c(rnorm(50), NA)
+  expect_identical(ig_discretize(x),
+                   cut(x, breaks = ig_bins(x), include.lowest = TRUE,
+                       ordered_result = TRUE))
+})
+
+test_that("resolvable large-magnitude values are not collapsed into one bin", {
+  # REGRESSION: a 1024*eps constant test merged nanosecond timestamps that
+  # differ by 1e5 (hundreds of ulps), scoring a perfect separator 0.
+  y <- factor(rep(c("a", "b"), each = 20))
+  d <- data.frame(t = 1.7e18 + ifelse(y == "a", 0, 1e5) , y = y)
+  res <- fs_infogain(d, "y")
+  expect_gt(res$scores[["t"]], 0.5)
+})

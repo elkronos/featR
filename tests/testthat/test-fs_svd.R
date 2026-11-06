@@ -489,3 +489,17 @@ test_that("an unconverged approximate solve falls back to the exact SVD", {
   expect_identical(dim(res$right_singular_vectors), c(150L, 10L))
   expect_equal(res$singular_values, svd(scale(X))$d[1:10])
 })
+
+test_that("scaling handles columns whose sd() would over- or underflow", {
+  set.seed(1)
+  d <- data.frame(a = rnorm(30), b = rnorm(30) * 1e-170,
+                  c = rnorm(30) * 1e170, e = rnorm(30))
+  ref <- transform(d, b = b * 1e170, c = c / 1e170)
+  res <- fs_svd(d)
+  expect_equal(res$singular_values, fs_svd(ref)$singular_values)
+  expect_equal(abs(res$right_singular_vectors),
+               abs(fs_svd(ref)$right_singular_vectors))
+  # Genuinely constant columns are still rejected.
+  expect_error(fs_svd(data.frame(a = rnorm(5), k = rep(1e-170, 5))),
+               "zero \\(or undefined\\) variance: k")
+})

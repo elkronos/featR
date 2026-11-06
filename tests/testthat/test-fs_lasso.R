@@ -16,8 +16,8 @@ test_that("fs_lasso signature and defaults are stable", {
   expect_identical(
     names(fx),
     c("data", "target", "alpha", "nfolds", "standardize", "custom_folds",
-      "impute", "return_model", "seed", "verbose", "parallel", "n_cores",
-      "lambda")
+      "impute", "return_model", "lambda", "seed", "verbose", "parallel",
+      "n_cores")
   )
   # lambda.min stays the default; "1se" is opt-in
   expect_identical(eval(fx$lambda), c("min", "1se"))
@@ -397,4 +397,140 @@ test_that("lambda = '1se' selects at lambda.1se and matches cv.glmnet", {
   expect_identical(res_min$details$lambda_used, "lambda.min")
   expect_true(all(selected(res) %in% selected(res_min)))
   expect_error(fs_lasso(d, "y", lambda = "max"), "should be one of")
+})
+
+test_that("unbacktick_names restores escaped control characters", {
+  # REGRESSION: deparse() writes a newline in a name as "\n"; the unescape
+  # dropped the backslash and reported "anb" instead of the column "a\nb".
+  nms <- c("a\nb", "a\tb", "a`b", "a\\b", "`ab")
+  d <- as.data.frame(stats::setNames(replicate(5, rnorm(4), simplify = FALSE),
+                                     nms), check.names = FALSE)
+  mm <- stats::model.matrix(~ . - 1, d)
+  expect_identical(featR:::unbacktick_names(colnames(mm)), nms)
+})
+
+test_that("fs_lasso handles a nonzero constant or tiny-unit predictor", {
+  # REGRESSION: the design matrix was handed to glmnet as a sparse matrix,
+  # whose standardization turns a constant column (or one whose squares
+  # underflow) into a NaN lambda path; cv.glmnet() then failed with
+  # "NA subscripts in x[i,j]" / "need at least two non-NA values to
+  # interpolate".
+  set.seed(11)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- 2 * d$x1 + rnorm(n)
+  d$xk <- 5
+  res <- fs_lasso(d, "y", nfolds = 3, seed = 1)
+  expect_s3_class(res, "fs_result")
+  expect_false("xk" %in% selected(res))
+  expect_true("x1" %in% selected(res))
+
+  d$xk <- rnorm(n) * 1e-300
+  expect_s3_class(fs_lasso(d, "y", nfolds = 3, seed = 1), "fs_result")
+})
+
+test_that("fs_lasso keeps its housekeeping arguments last", {
+  # REGRESSION: `lambda`, a method option, was appended after `n_cores`,
+  # contradicting the documented convention that seed, verbose, parallel and
+  # n_cores come last.
+  fx <- names(formals(fs_lasso))
+  expect_identical(utils::tail(fx, 4L),
+                   c("seed", "verbose", "parallel", "n_cores"))
+})
+
+test_that("fs_lasso rejects duplicated column names instead of dropping a copy", {
+  # REGRESSION: model.frame(~ .) kept one copy of a duplicated name, so the
+  # other (here the only informative column) silently vanished from the fit
+  # and the scores, and "x1" was reported with the noise copy's coefficient.
+  set.seed(12)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x1 = rnorm(n), x3 = rnorm(n),
+                  check.names = FALSE)
+  d$y <- 3 * d[[2]] + rnorm(n)
+  expect_error(fs_lasso(d, "y", nfolds = 3), "duplicated: x1")
+})
+
+test_that("a factor dummy colliding with another column name is a clear error", {
+  skip_if_not_installed("glmnet")
+  # factor g, level b -> dummy "gb", next to a numeric column "gb": selection
+  # and scores identify columns by name, so the old code selected "gb" twice
+  # (once on a zero coefficient)
+  i <- seq_len(60)
+  d <- data.frame(g = factor(rep(c("a", "b"), 30)), gb = sin(i), z = cos(i))
+  d$y <- 2 * (d$g == "b") + d$z + 0.1 * sin(7 * i)
+  expect_error(fs_lasso(d, "y", seed = 1), "collide with existing columns: gb")
+  # a dummy named like the target is ambiguous too
+  d2 <- data.frame(a = factor(rep(c("x", "y1"), 30)), b = sin(i), c = cos(i),
+                   ay1 = sin(i / 3))
+  expect_error(fs_lasso(d2, "ay1", seed = 1), "collide")
+})
+
+test_that("a single-level categorical predictor is a clear, named error", {
+  skip_if_not_installed("glmnet")
+  i <- seq_len(30)
+  d <- data.frame(y = sin(i), a = cos(i), b = sin(i / 3), f = "u")
+  expect_error(fs_lasso(d, "y"), "fewer than two observed levels: 'f'")
+  d$f <- factor("u")
+  expect_error(fs_lasso(d, "y"), "fewer than two observed levels: 'f'")
+})
+
+test_that("the redundant first-factor dummy is not selected on a residue", {
+  skip_if_not_installed("glmnet")
+  skip_on_cran()
+  set.seed(2)
+  n <- 150
+  d <- data.frame(g = factor(sample(c("lo", "hi"), n, TRUE)),
+                  x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- 1 * (d$g == "hi") + 0.3 * d$x1 + rnorm(n)
+  res <- fs_lasso(d, "y", seed = 1)
+  cf <- res$details$coefficients
+  # every reported non-zero coefficient is a real one, not ~1e-13 residue
+  nz <- cf$Coefficient[cf$Coefficient != 0]
+  expect_true(all(abs(nz) > 1e-8))
+  expect_setequal(selected(res), cf$Variable[cf$Coefficient != 0])
+  expect_false("glo" %in% selected(res))
+  expect_false(anyDuplicated(selected(res)) > 0L)
+})
+
+test_that("round-off-constant columns are never selected; overflow is an error", {
+  skip_if_not_installed("glmnet")
+  skip_on_cran()
+  set.seed(1)
+  n <- 100
+  d <- data.frame(a = rnorm(n), b = rnorm(n))
+  d$y <- d$a + rnorm(n)
+  # two values that both print as 0.3 (sd ~ 4e-17)
+  d$roff <- ifelse(d$y > 0, 0.1 + 0.2, 0.3)
+  res <- fs_lasso(d, "y", seed = 1)
+  expect_false("roff" %in% selected(res))
+  cf <- res$details$coefficients
+  expect_identical(cf$Coefficient[cf$Variable == "roff"], 0)
+  expect_true(all(abs(cf$Coefficient) < 1e6))
+  # exact constants keep coefficient 0 as before
+  d$k <- 5
+  expect_false("k" %in% selected(fs_lasso(d, "y", seed = 1,
+                                           standardize = FALSE)))
+
+  d2 <- data.frame(a = rnorm(n) * 1e170, b = rnorm(n))
+  d2$y <- d2$a / 1e170 + rnorm(n)
+  expect_error(fs_lasso(d2, "y", seed = 1), "variance overflows.*: a\\.")
+})
+
+test_that("lasso no longer needs a sparse helper or Matrix directly", {
+  expect_false(exists("lasso_sparse", envir = asNamespace("featR"),
+                      inherits = FALSE))
+  expect_identical(names(formals(featR:::lasso_fit))[1L], "x")
+})
+
+test_that("a large-offset predictor (epoch seconds) is not zeroed as constant", {
+  # REGRESSION: the near-constant screen used a sqrt(eps) tolerance and
+  # set a timestamp varying over ~20 s to 0, so it was never selected.
+  skip_if_not_installed("glmnet")
+  set.seed(11)
+  n <- 120
+  ts <- 1.7e9 + sample(0:20, n, replace = TRUE)
+  d <- data.frame(ts = ts, z = rnorm(n))
+  d$y <- (ts - 1.7e9) + rnorm(n, sd = 0.5)
+  res <- fs_lasso(d, "y", seed = 1)
+  expect_true("ts" %in% selected(res))
 })

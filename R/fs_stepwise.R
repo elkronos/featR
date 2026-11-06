@@ -32,11 +32,32 @@ step_fit_lm <- function(fml, fit_env) {
 #' @param dep_var Dependent variable name (character).
 #' @param direction One of "backward", "forward", "both".
 #' @param fit_env Environment holding `.fs_stepwise_data`.
+#' @param check_saturated Logical; when TRUE, a full model with no residual
+#'   degrees of freedom is an error (its AIC is -Inf, so the search cannot
+#'   proceed or is meaningless).
 #' @return A list with `start_model`, `scope` (list or NULL), and `direction`.
 #' @noRd
-step_build_models <- function(dep_var, direction, fit_env) {
+step_build_models <- function(dep_var, direction, fit_env,
+                              check_saturated = TRUE) {
   fml <- stats::as.formula(paste(backtick(dep_var), "~ ."), env = fit_env)
   full_model <- step_fit_lm(fml, fit_env)
+
+  # Design-matrix names must be unique: a factor dummy (g, level b -> "gb")
+  # that collides with another column (or the target) makes the coefficient
+  # names in `scores` and `details$coefficients` ambiguous.
+  mm_names <- unbacktick_names(colnames(stats::model.matrix(full_model)))
+  assert_unique_encoded_names(mm_names[mm_names != "(Intercept)"], dep_var,
+                              "fs_stepwise")
+
+  if (check_saturated && stats::df.residual(full_model) <= 0L) {
+    stop(sprintf(paste0(
+      "fs_stepwise(): the full model has no residual degrees of freedom ",
+      "(%d complete row(s) for %d model coefficient(s), intercept and factor ",
+      "dummies included), so it fits the data perfectly and its AIC is -Inf; ",
+      "stepwise selection is meaningless. Use more rows or fewer predictors."),
+      nrow(stats::model.frame(full_model)), length(stats::coef(full_model))),
+      call. = FALSE)
+  }
 
   if (direction == "backward") {
     return(list(start_model = full_model, scope = NULL,
@@ -140,6 +161,35 @@ step_abs_t <- function(coefs) {
   out
 }
 
+#' Per-term scores of the selected model
+#'
+#' Maps each coefficient's `|t|` to the model term it belongs to (via the
+#' design matrix's `assign` attribute) and scores each term by the largest
+#' `|t|` among its coefficients, so `scores` is keyed by the same term labels
+#' as `selected`. A term whose coefficients are all aliased (`NA`) scores
+#' `NA`.
+#'
+#' @param model The selected `lm`.
+#' @param coefs Its `summary()` coefficient matrix.
+#' @param term_labels Unbackticked term labels of `model`.
+#' @return Named numeric vector, one entry per term label.
+#' @noRd
+step_term_scores <- function(model, coefs, term_labels) {
+  if (length(term_labels) == 0L) {
+    return(stats::setNames(numeric(0), character(0)))
+  }
+  abs_t <- step_abs_t(coefs)
+  mm <- stats::model.matrix(model)
+  asg <- attr(mm, "assign")
+  coef_term <- stats::setNames(asg, unbacktick_names(colnames(mm)))
+  term_of <- coef_term[names(abs_t)]
+  out <- vapply(seq_along(term_labels), function(k) {
+    v <- abs_t[!is.na(term_of) & term_of == k]
+    if (length(v) == 0L || all(is.na(v))) NA_real_ else max(v, na.rm = TRUE)
+  }, numeric(1L))
+  stats::setNames(out, term_labels)
+}
+
 #' Stepwise linear-regression feature selection via AIC
 #'
 #' Answers "which subset of these columns does AIC keep in a linear model?"
@@ -193,9 +243,23 @@ step_abs_t <- function(coefs) {
 #' before the search, because `stepAIC()` cannot compare models fitted on
 #' differing row sets.
 #'
+#' For `direction = "backward"` or `"both"`, which start from the full
+#' model, the full model must leave residual degrees of freedom: with as many
+#' coefficients (intercept and factor dummies included) as complete rows it
+#' fits perfectly, its AIC is -Inf, and the call stops with an error naming
+#' the counts. A forward search starts from the intercept and may have more
+#' candidate predictors than rows; it warns if the model it ends on has no
+#' residual degrees of freedom (a perfect fit, so the selection is not
+#' meaningful). A factor or character predictor with fewer than two observed
+#' levels (after dropping incomplete rows) is an error, as is a factor dummy
+#' name that collides with another column or the target (factor `g` with
+#' level `b` next to a column `gb`).
+#'
 #' @param data A data.frame (or data.table) with at least two columns: the
-#'   numeric target and at least one candidate predictor. Every column other
-#'   than `target` is offered to the search.
+#'   numeric target and at least one candidate predictor, with unique,
+#'   non-empty column names and no infinite values. Every column other
+#'   than `target` is offered to the search. After incomplete rows are
+#'   dropped there must be more rows than coefficients in the full model.
 #' @param target Single string naming the numeric target column of `data`.
 #'   Unquoted symbols and column indices are not accepted. Non-syntactic names
 #'   are backticked into the formula, so they work.
@@ -213,11 +277,12 @@ step_abs_t <- function(coefs) {
 #' \describe{
 #'   \item{selected}{Character vector of the selected predictor terms
 #'     (excluding the intercept).}
-#'   \item{scores}{Named numeric vector of absolute t statistics from the
-#'     final model's coefficient table, excluding the intercept. Scores are
-#'     per coefficient, so a selected factor term appears here under its
-#'     dummy names (e.g. `grpb`, `grpc` for the term `grp`), not under the
-#'     term label reported in `selected`.
+#'   \item{scores}{Named numeric vector, one entry per selected term and
+#'     keyed by the same term labels as `selected`: the absolute t statistic
+#'     of the term's coefficient, or for a multi-coefficient term (a factor,
+#'     an interaction) the largest `|t|` among its coefficients (`NA` when all
+#'     of them are aliased). The per-coefficient `|t|` (e.g. `grpb`, `grpc`
+#'     for the term `grp`) are in `details$coefficient_scores`.
 #'     \strong{Caveat}: these statistics (and the p-values in
 #'     `details$coefficients`) are computed after selection on the same data,
 #'     so they are optimistically biased and are not valid for inference.}
@@ -227,6 +292,7 @@ step_abs_t <- function(coefs) {
 #'     complete-case data in a private environment (see Details).}
 #'   \item{details}{A list with `final_model` (the same `lm`), `coefficients`
 #'     (the `summary()` coefficient matrix, same caveat as `scores`),
+#'     `coefficient_scores` (named `|t|` per non-intercept coefficient),
 #'     `selected_terms` (the same term labels as `selected`), `direction` (the
 #'     search direction actually used), `n_features` (the number of candidate
 #'     predictors offered to the search, i.e. `ncol(data) - 1`) and
@@ -261,6 +327,7 @@ fs_stepwise <- function(data,
   direction <- match.arg(direction)
   assert_data_frame(data, "data")
   assert_target(data, target, arg = "target")
+  assert_column_names(data, "fs_stepwise")
   assert_flag(verbose, "verbose")
 
   dep_var <- target
@@ -290,6 +357,23 @@ fs_stepwise <- function(data,
       stop("No rows remain after removing missing values.", call. = FALSE)
     }
   }
+  # na.omit() leaves Inf/-Inf in place, which lm() rejects as "NA/NaN/Inf in
+  # 'x'" (or 'y').
+  inf_cols <- names(data)[vapply(data, function(col) {
+    is.numeric(col) && any(is.infinite(col))
+  }, logical(1L))]
+  if (length(inf_cols) > 0L) {
+    stop("Columns contain infinite values (Inf/-Inf): ",
+         paste(utils::head(inf_cols, 5L), collapse = ", "),
+         if (length(inf_cols) > 5L) ", ..." else "",
+         ". Remove or replace them before calling fs_stepwise().",
+         call. = FALSE)
+  }
+
+  # model.matrix()/lm() die with an unnamed "contrasts can be applied only to
+  # factors with 2 or more levels" otherwise. Checked after na.omit(), which
+  # can remove a level.
+  lasso_check_categorical_levels(data[setdiff(names(data), dep_var)], "fs_stepwise")
 
   if (verbose) {
     message(sprintf("Starting stepwise selection ('%s') for target '%s'.",
@@ -305,17 +389,29 @@ fs_stepwise <- function(data,
   fit_env <- new.env(parent = parent.frame())
   assign(".fs_stepwise_data", data, envir = fit_env)
 
+  dots <- list(...)
+  # Backward and both-direction searches start from the full `~ .` model, so
+  # a saturated full model (AIC = -Inf) makes them meaningless. A forward
+  # search starts from the intercept and only uses the full model as its upper
+  # scope, so p >= n is a legitimate forward use case.
   parts <- step_build_models(dep_var, direction = direction,
-                             fit_env = fit_env)
+                             fit_env = fit_env,
+                             check_saturated = direction != "forward")
 
   step_model <- step_run_stepwise(
     start_model = parts$start_model,
     scope = parts$scope,
     direction = parts$direction,
     verbose = verbose,
-    dots = list(...),
+    dots = dots,
     fit_env = fit_env
   )
+  if (stats::df.residual(step_model) <= 0L) {
+    warning("fs_stepwise(): the forward search ended on a model with no ",
+            "residual degrees of freedom (a perfect fit); the selection is ",
+            "not meaningful. Limit 'steps' or use fewer candidate predictors.",
+            call. = FALSE)
+  }
 
   coefficients <- step_coef_summary(step_model)
   # Term labels of non-syntactic columns come back backticked; report the
@@ -336,15 +432,17 @@ fs_stepwise <- function(data,
     ))
   }
 
+  coef_scores <- step_abs_t(coefficients)
   new_fs_result(
     selected = terms_selected,
-    scores   = step_abs_t(coefficients),
+    scores   = step_term_scores(step_model, coefficients, terms_selected),
     method   = "stepwise",
     task     = "regression",
     model    = step_model,
     details  = list(
       final_model     = step_model,
       coefficients    = coefficients,
+      coefficient_scores = coef_scores,
       selected_terms  = terms_selected,
       direction       = direction,
       n_features      = n_candidates,

@@ -51,11 +51,20 @@ foreach_backend_snapshot <- function() {
 
 #' Restore a foreach backend captured by `foreach_backend_snapshot()`
 #'
-#' With nothing captured, the sequential backend is registered, which is what
-#' an unregistered session behaves as.
+#' With nothing captured, the backend is unregistered again, so the session is
+#' left exactly as it was (`foreach::getDoParRegistered()` is `FALSE`).
 #' @noRd
 foreach_backend_restore <- function(prev) {
-  if (is.null(prev) || !is.function(prev$fun)) {
+  g <- get0(".foreachGlobals", envir = asNamespace("foreach"),
+            inherits = FALSE)
+  if ((is.null(prev) || !is.function(prev$fun)) && is.environment(g)) {
+    # Return to "never registered" exactly: registerDoSEQ() would instead
+    # flip getDoParRegistered() to TRUE (so user code that registers a
+    # backend only when none is registered would skip it) and also
+    # overwrite any custom %do% backend.
+    rm(list = intersect(c("fun", "data", "info"), ls(g, all.names = TRUE)),
+       envir = g)
+  } else if (is.null(prev) || !is.function(prev$fun)) {
     foreach::registerDoSEQ()
   } else {
     foreach::setDoPar(prev$fun, prev$data, prev$info)

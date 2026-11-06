@@ -1,8 +1,8 @@
 # Tests for fs_boruta().
 #
 # All argument validation in fs_boruta() runs before fs_require("Boruta"),
-# so validation tests need no skips. Target-content checks and real Boruta
-# runs require the suggested Boruta package. Correlation pruning is now built
+# and so do the target/predictor content checks, so validation tests need no
+# skips. Real Boruta runs require the suggested Boruta package. Correlation pruning is now built
 # from stats::cor() alone, so no caret skip is needed anywhere.
 
 test_that("fs_boruta validates arguments before requiring Boruta", {
@@ -28,6 +28,33 @@ test_that("fs_boruta validates arguments before requiring Boruta", {
                "'resolve_tentative' must be TRUE or FALSE")
   expect_error(fs_boruta(d, "y", verbose = "yes"),
                "'verbose' must be TRUE or FALSE")
+})
+
+test_that("fs_boruta rejects duplicated column names before requiring Boruta", {
+  d <- data.frame(y = factor(c(1, 2, 1, 2, 1)), a = 1:5, a = c(5, 3, 1, 2, 2),
+                  check.names = FALSE)
+  expect_error(fs_boruta(d, "y"), "unique column names; duplicated: a")
+  # A second column sharing the target's name must not vanish silently.
+  d2 <- data.frame(a = 1:5, y = factor(c(1, 2, 1, 2, 1)), y = 6:10,
+                   check.names = FALSE)
+  expect_error(fs_boruta(d2, "y"), "unique column names; duplicated: y")
+  # The helper itself selects by position, so it cannot drop a copy.
+  expect_identical(ncol(featR:::boruta_preprocess_predictors(d, "y")), 2L)
+})
+
+test_that("fs_boruta validates target and predictor content before requiring Boruta", {
+  set.seed(1)
+  d <- data.frame(a = rnorm(20), b = rnorm(20))
+  d$y <- d$a + rnorm(20)
+  d$y[3] <- Inf
+  expect_error(fs_boruta(d, "y"), "`target` contains infinite values")
+
+  d1 <- data.frame(a = rnorm(20), b = rnorm(20),
+                   y = factor(rep("A", 20), levels = c("A", "B")))
+  expect_error(fs_boruta(d1, "y"), "fewer than two observed classes")
+
+  d0 <- data.frame(y = factor(rep(c("a", "b"), 10)))
+  expect_error(fs_boruta(d0, "y"), "at least one predictor column besides 'y'")
 })
 
 test_that("fs_boruta signature and defaults are stable", {
@@ -168,7 +195,6 @@ test_that("boruta_median_importance ignores -Inf history entries", {
 })
 
 test_that("fs_boruta validates target content", {
-  skip_if_not_installed("Boruta")
 
   d_chr <- data.frame(y = c("a", "b", "a", "b"), x = c(1, 2, 3, 4),
                       stringsAsFactors = FALSE)

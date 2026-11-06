@@ -418,3 +418,72 @@ test_that("summary() ranks lasso's signed coefficients by magnitude", {
                 function(f) grep(paste0("^ *", f, " "), out)[1L], integer(1L))
   expect_true(all(diff(pos) > 0))
 })
+
+test_that("local_parallel_cluster leaves a never-registered session unregistered", {
+  skip_if_not_installed("foreach")
+  skip_if_not_installed("doParallel")
+  skip_on_cran()
+
+  # REGRESSION: restoring "nothing registered" called registerDoSEQ(), which
+  # flipped getDoParRegistered() to TRUE, so user code of the form
+  # `if (!getDoParRegistered()) registerDoParallel(...)` silently stayed
+  # sequential after any parallel featR call.
+  prev <- foreach_backend_snapshot()
+  withr::defer(foreach_backend_restore(prev))
+  foreach_backend_restore(NULL)
+  expect_false(foreach::getDoParRegistered())
+
+  f <- function() {
+    local_parallel_cluster(2L)
+    foreach::getDoParRegistered()
+  }
+  expect_true(f())
+  expect_false(foreach::getDoParRegistered())
+  expect_error((function() {
+    local_parallel_cluster(2L)
+    stop("boom")
+  })(), "boom")
+  expect_false(foreach::getDoParRegistered())
+})
+
+test_that("fs_split_index explains a one-row split in featR terms", {
+  # REGRESSION: one-row data reached caret, whose "y must have at least 2
+  # data points" surfaced from fs_randomforest(), fs_mars() and
+  # fs_recursivefeature().
+  skip_if_not_installed("caret")
+  expect_error(featR:::fs_split_index(1), "At least 2 rows are needed")
+  skip_if_not_installed("randomForest")
+  expect_error(
+    fs_randomforest(data.frame(x1 = 1, x2 = 2, y = 3), "y",
+                    task = "regression", control = list(ntree = 5)),
+    "At least 2 rows are needed"
+  )
+})
+
+test_that("as_dt keeps a matrix's own column names", {
+  m <- cbind(y = 1:3, V3 = 4:6, 7:9)
+  colnames(m)[3] <- ""
+  expect_identical(names(as_dt(m)), c("y", "V3", ""))
+  expect_identical(names(as_dt(unname(m))), c("V1", "V2", "V3"))
+})
+
+test_that("safe_col_spread is immune to sd() over- and underflow", {
+  set.seed(1)
+  x <- rnorm(20)
+  for (k in c(1e-170, 1, 1e170)) {
+    sp <- safe_col_spread(x * k)
+    expect_equal(sp$rel, sd(x) / max(abs(x)))
+    expect_identical(sp$representable, k == 1)
+  }
+  expect_identical(safe_col_spread(rep(0, 5))$rel, 0)
+})
+
+test_that("is_numerically_constant flags round-off only, not large-offset data", {
+  # REGRESSION: a sqrt(eps) default treated epoch timestamps varying by
+  # seconds as constant, so several wrappers silently dropped them.
+  expect_true(featR:::is_numerically_constant(c(0.3, 0.1 + 0.2, 0.3)))
+  expect_true(featR:::is_numerically_constant(1 + 1e-16 * (1:10)))
+  expect_false(featR:::is_numerically_constant(1.7e9 + 0:20))
+  expect_false(featR:::is_numerically_constant(1.7e18 + 1e5 * (0:5)))
+  expect_false(featR:::is_numerically_constant(1e-300 * (1:10)))
+})

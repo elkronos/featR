@@ -17,6 +17,7 @@
 svm_validate <- function(data, target, task, train_ratio, nfolds) {
   assert_data_frame(data, arg = "data")
   assert_target(data, target)
+  assert_column_names(data, "fs_svm")
   assert_number(train_ratio, "train_ratio")
   if (train_ratio <= 0 || train_ratio >= 1) {
     stop("'train_ratio' must be a single numeric value in (0, 1).",
@@ -42,6 +43,8 @@ svm_validate <- function(data, target, task, train_ratio, nfolds) {
     stop("Predictor columns contain missing values; please handle them before modeling.",
          call. = FALSE)
   }
+  # Inf reaches caret/kernlab as cryptic engine errors otherwise.
+  assert_finite_columns(data, c(predictor_names, target), "fs_svm")
 
   if (task == "regression" && !is.numeric(data[[target]])) {
     stop("For regression, the target must be numeric.", call. = FALSE)
@@ -49,6 +52,9 @@ svm_validate <- function(data, target, task, train_ratio, nfolds) {
   if (task == "classification" && length(unique(data[[target]])) < 2L) {
     stop("For classification, the target must have at least two classes.",
          call. = FALSE)
+  }
+  if (task == "classification") {
+    assert_class_labels(data[[target]], target)
   }
 
   invisible(TRUE)
@@ -87,7 +93,8 @@ svm_coerce_target <- function(data, target, task) {
         target, n_unique
       ))
     }
-    data[[target]] <- as.factor(y)
+    # Unused levels would make createDataPartition() warn on every call.
+    data[[target]] <- droplevels(as.factor(y))
   } else {
     data[[target]] <- as.numeric(y)
   }
@@ -113,8 +120,11 @@ svm_align_levels <- function(train_set, test_set, target) {
     if (!is.factor(col_train) && !is.character(col_train)) {
       next
     }
+    # Levels OBSERVED in the training rows: subsetting keeps every level of a
+    # factor, so levels(col_train) would let unseen test levels through and
+    # produce all-zero training dummies for unused or test-only levels.
     train_levels <- if (is.factor(col_train)) {
-      levels(col_train)
+      levels(droplevels(col_train))
     } else {
       sort(unique(as.character(col_train)))
     }
@@ -174,9 +184,10 @@ svm_encode <- function(dv, data) {
   out <- as.data.frame(stats::predict(dv, newdata = data))
   # svm_dummy_encoder() backticks non-syntactic names so the formula parses,
   # and dummyVars() copies those backticks into its column names ("`a b`",
-  # "`f g`v"). Strip them so encoded names match the user's column names.
-  # A literal backtick cannot occur in a name that survived the formula.
-  names(out) <- gsub("`", "", names(out), fixed = TRUE)
+  # "`f g`v"). Unquote them so encoded names match the user's column names.
+  # backtick() escapes literal backticks and backslashes, so deleting every
+  # backtick would misname "a`b" as "a\b" (the name of a different column).
+  names(out) <- unbacktick_names(names(out))
   out
 }
 
@@ -187,9 +198,15 @@ svm_encode <- function(dv, data) {
 #' Center and scale an encoded predictor matrix
 #'
 #' SVM-RFE compares squared weights across features, which is only meaningful
-#' when the features share a scale. Columns with zero (or undefined) standard
-#' deviation are centered but not rescaled, so they collapse to zeros instead
-#' of producing NaNs.
+#' when the features share a scale. Columns of `ref` that are numerically
+#' constant (`is_numerically_constant()`: a spread negligible relative to the
+#' magnitude, so round-off such as `0.1 + 0.2` vs `0.3` counts as constant)
+#' are centered but not rescaled (so they collapse to round-off-sized values)
+#' instead of being divided by a round-off-sized standard deviation, which
+#' would blow them up to full weight. The standard
+#' deviation of the other columns is computed after dividing by the column's
+#' largest absolute value, so columns in tiny units (e.g. `1e-170`) do not
+#' underflow to `sd == 0` and are still standardized.
 #'
 #' When `ref` is supplied, the centers and standard deviations are estimated
 #' on `ref` and applied to `x`; this is how a cross-validation fold's held-out
@@ -207,9 +224,16 @@ svm_center_scale <- function(x, ref = x) {
     stop("SVM-RFE requires a numeric (dummy-encoded) predictor matrix.",
          call. = FALSE)
   }
+  const <- apply(ref, 2L, is_numerically_constant)
   centers <- colMeans(ref)
-  sds <- apply(ref, 2L, stats::sd)
-  sds[!is.finite(sds) | sds == 0] <- 1
+  sds <- apply(ref, 2L, function(v) {
+    m <- max(abs(v))
+    if (!is.finite(m) || m == 0) return(NA_real_)
+    stats::sd(v / m) * m
+  })
+  bad <- const | !is.finite(sds) | sds == 0
+  sds[bad] <- 1
+  centers[!is.finite(centers)] <- 0
   out <- scale(x, center = centers, scale = sds)
   attr(out, "scaled:center") <- NULL
   attr(out, "scaled:scale") <- NULL
@@ -528,10 +552,12 @@ svm_rfe_fold_scores <- function(x, y, task, sizes, idx) {
 #' to the smaller size, and the final subset is the top of the ranking computed
 #' on all rows. The folds are drawn once and shared by every candidate size,
 #' so the comparison is paired, and drawing them consumes the RNG. Because the
-#' held-out rows never inform the ranking they score, the size scores are
-#' honest cross-validated estimates for the RFE procedure at each size. If no
-#' candidate size could be scored at all (every fold failed), the full feature
-#' set is kept.
+#' held-out rows never inform the ranking they score, each size score is an
+#' honest cross-validated estimate for the RFE procedure at that size; the
+#' score of the WINNING size is not, because it is the maximum (or minimum
+#' RMSE) over the ladder and so is optimistically biased. If no candidate
+#' size could be scored at all (every fold failed), the full feature set is
+#' kept with a warning.
 #'
 #' @param x Data frame or matrix of encoded (numeric) predictors. It is
 #'   centered and scaled internally.
@@ -594,6 +620,15 @@ svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
     size_metric <- if (task == "classification") "accuracy" else "RMSE"
 
     if (all(is.na(size_scores))) {
+      warning(sprintf(
+        paste0(
+          "SVM-RFE size search could not score any candidate size (every ",
+          "fold failed, e.g. too few rows or a single class per fold); ",
+          "keeping all %d features. Supply 'n_features' to choose the size ",
+          "explicitly."
+        ),
+        p
+      ), call. = FALSE)
       best_size <- p
     } else if (task == "classification") {
       best_size <- sizes[order(-size_scores, sizes, na.last = TRUE)][1L]
@@ -624,7 +659,11 @@ svm_rfe_rank <- function(x, y, task, nfolds = 5L, n_features = NULL,
 #' Mean random-forest importance recorded by caret::rfe()
 #'
 #' `rfe()` stores the per-resample importance of every variable it considered
-#' in `$variables`; averaging over resamples and subset sizes gives one
+#' in `$variables`, once per subset size the variable survived to. Averaging
+#' all of those rows would weight each resample by how far the variable
+#' survived there -- that is, by how important it looked in that resample --
+#' which inflates the scores of marginal predictors. Only the full-size rows
+#' (every predictor present, once per resample) are averaged, giving one
 #' comparable score per encoded predictor.
 #'
 #' @param rfe_obj An object returned by `caret::rfe()`.
@@ -635,6 +674,9 @@ svm_rf_importance <- function(rfe_obj, features) {
   out <- stats::setNames(rep(NA_real_, length(features)), features)
   vars <- rfe_obj$variables
   if (is.data.frame(vars) && all(c("Overall", "var") %in% names(vars))) {
+    if ("Variables" %in% names(vars) && nrow(vars) > 0L) {
+      vars <- vars[vars$Variables == max(vars$Variables), , drop = FALSE]
+    }
     agg <- tapply(vars$Overall, as.character(vars$var), mean, na.rm = TRUE)
     common <- intersect(features, names(agg))
     if (length(common) > 0L) {
@@ -651,21 +693,27 @@ svm_rf_importance <- function(rfe_obj, features) {
 #' from 1 to `ncol(x_enc)` is offered to `rfe()`, and the reported scores are
 #' the per-resample importances it recorded, averaged per predictor.
 #'
+#' Numerically constant columns are removed first (randomForest never returns
+#' on a constant size-1 subset); they get an `NA` score and are never
+#' selected.
+#'
 #' When `rfe()` errors or selects nothing, it falls back with a warning to a
-#' plain `randomForest` fit and keeps the `min_keep` most important predictors
-#' by mean decrease in node impurity (`randomForest::importance(type = 2)`);
-#' the scores reported in that case are those impurity values, not the
-#' resampled ones.
+#' plain `randomForest` fit and keeps every predictor with positive
+#' permutation importance (`randomForest::importance(type = 1)`), or the
+#' `min_keep` top-ranked predictors if fewer than `min_keep` qualify. The
+#' scores reported in that case are those permutation importances, not the
+#' resampled ones. Positive permutation importance is a weak screen (about
+#' half of pure-noise predictors pass it).
 #'
 #' @param x_enc Data frame of encoded (numeric) predictors.
 #' @param y Outcome vector.
 #' @param rfe_folds Number of CV folds for RFE. Default 10; `fs_svm()` does
 #'   not pass its own `nfolds` here.
-#' @param min_keep Number of predictors the fallback keeps: the top `min_keep`
-#'   by importance, capped at the number available. It is a FLOOR, not a quota:
-#'   the fallback keeps every predictor with positive impurity importance, and
-#'   only drops back to `min_keep` top-ranked predictors when fewer than that
-#'   many qualify. It does not constrain the `rfe()` path, which ignores it.
+#' @param min_keep Minimum number of predictors the fallback keeps (a FLOOR,
+#'   not a quota), capped at the number available: the fallback keeps every
+#'   predictor with positive permutation importance, and only drops back to
+#'   the `min_keep` top-ranked predictors when fewer than that many qualify.
+#'   It does not constrain the `rfe()` path, which ignores it.
 #' @param allow_parallel Logical; let RFE use a registered foreach backend.
 #' @return A list with `selected` (character), `scores` (named numeric aligned
 #'   to the encoded predictors, `NA` where no importance was recorded) and
@@ -681,13 +729,32 @@ svm_feature_selection <- function(x_enc,
   }
   feature_names <- colnames(x_enc)
 
+  # randomForest never returns when a size-1 subset (or the whole matrix) is
+  # a constant column, and no error is raised for tryCatch to catch. Constant
+  # columns carry no information, so they are screened out before rfe() and
+  # the fallback; their score is NA and they are never selected.
+  x_enc <- as.data.frame(x_enc, check.names = FALSE)
+  is_const <- vapply(x_enc, is_numerically_constant, logical(1L))
+  if (all(is_const)) {
+    stop(
+      "Every encoded predictor is constant on the training split; there is nothing for feature selection to rank.",
+      call. = FALSE
+    )
+  }
+  x_enc <- x_enc[, !is_const, drop = FALSE]
+
   sizes <- seq_len(ncol(x_enc))
   ctrl <- caret::rfeControl(
-    functions = caret::rfFuncs,
+    # Guarded: a column constant inside one CV fold would hang randomForest.
+    functions = rfe_guard_rf_funcs(caret::rfFuncs),
     method = "cv",
     number = rfe_folds,
     verbose = FALSE,
-    allowParallel = allow_parallel
+    allowParallel = allow_parallel,
+    # In parallel, resamples go to whichever worker is free, so per-worker RNG
+    # streams alone are not reproducible; seeds = NULL (not the default NA)
+    # makes caret draw a seed per resample from the master RNG.
+    seeds = if (allow_parallel) NULL else NA
   )
 
   rfe_obj <- tryCatch(
@@ -711,7 +778,12 @@ svm_feature_selection <- function(x_enc,
   }
 
   rf_fit <- randomForest::randomForest(x = x_enc, y = y, importance = TRUE)
-  imp <- as.data.frame(randomForest::importance(rf_fit, type = 2))
+  # Permutation importance (type = 1: mean decrease in accuracy, or %IncMSE
+  # for regression). Impurity importance (type = 2) is positive for every
+  # predictor used in any split, noise included, so "positive" would keep
+  # practically everything; permutation importance is centred near zero for
+  # an uninformative predictor.
+  imp <- as.data.frame(randomForest::importance(rf_fit, type = 1))
   imp$Feature <- rownames(imp)
   score_col <- utils::tail(names(imp)[vapply(imp, is.numeric, logical(1L))], 1L)
   ord <- order(imp[[score_col]], decreasing = TRUE, na.last = NA)
@@ -719,17 +791,19 @@ svm_feature_selection <- function(x_enc,
   # `min_keep` is a FLOOR, not a quota. With rfe() failed there is no
   # cross-validated size estimate, so reducing to a fixed count (formerly 1)
   # threw away usable predictors for no stated reason. Keep everything that
-  # earned positive impurity importance, and only fall back to a fixed count
-  # if that leaves too few.
+  # earned positive permutation importance, and only fall back to a fixed
+  # count if that leaves too few. This is a weak screen: roughly half of
+  # pure-noise predictors still clear zero.
   keep_n <- max(as.integer(min_keep), 1L)
   ranked <- imp$Feature[ord]
   ranked_imp <- imp[[score_col]][ord]
   selected <- ranked[is.finite(ranked_imp) & ranked_imp > 0]
+  n_pos <- length(selected)
   if (length(selected) < keep_n) {
     selected <- utils::head(ranked, min(keep_n, length(ranked)))
   }
   if (length(selected) == 0L) {
-    selected <- feature_names[seq_len(min(keep_n, length(feature_names)))]
+    selected <- colnames(x_enc)[seq_len(min(keep_n, ncol(x_enc)))]
   }
 
   scores <- stats::setNames(as.numeric(imp[[score_col]]), imp$Feature)
@@ -738,8 +812,19 @@ svm_feature_selection <- function(x_enc,
 
   warning(
     sprintf(
-      "feature selection failed (%s); falling back to top random-forest importance features (n = %d)",
-      reason, length(selected)
+      paste0(
+        "feature selection failed (%s); falling back to %d of %d ",
+        "predictor(s): %s ",
+        "(a weak screen, not a cross-validated selection)"
+      ),
+      reason, length(selected), length(feature_names),
+      if (length(selected) > n_pos) {
+        sprintf(paste0("the %d with positive random-forest permutation ",
+                       "importance plus the next top-ranked to reach ",
+                       "min_keep = %d"), n_pos, keep_n)
+      } else {
+        "those with positive random-forest permutation importance"
+      }
     ),
     call. = FALSE
   )
@@ -853,31 +938,69 @@ svm_performance <- function(predictions, actuals, task) {
 #'     candidate size. Inside each fold the standardization and the whole
 #'     elimination are re-run on that fold's training rows only, and the top
 #'     features of that fold's own ranking are scored on its held-out rows, so
-#'     the size search is free of the selection bias of scoring a ranking that
-#'     has already seen the held-out rows. The winner is the size with the
+#'     no candidate size is scored by a ranking that has already seen its
+#'     held-out rows. The winner is the size with the
 #'     highest mean accuracy (classification) or the lowest mean RMSE
 #'     (regression), ties going to the smaller size, and the kept features are
 #'     the top of the ranking computed on the whole training split; if no size
-#'     could be scored, all features are kept.
+#'     could be scored, all features are kept with a warning. Each entry of
+#'     \code{details$selection$size_scores} is an honest estimate for its own
+#'     size, but the entry of the \emph{chosen} size is the best of up to six
+#'     noisy estimates and is therefore optimistic (on pure noise it typically
+#'     sits a few points above chance); use \code{details$performance} for an
+#'     unbiased estimate.
 #'   \item \code{select_method = "rf_rfe"} keeps the older random-forest
 #'     screening (\code{caret::rfFuncs}) and works with every kernel. It runs
 #'     its own 10-fold cross-validation over subset sizes 1 to p, independent
-#'     of \code{nfolds}. If \code{rfe()} fails or selects nothing, a plain
-#'     random forest is fitted instead, with a warning, and every predictor
-#'     with a positive mean decrease in node impurity is kept -- or, if fewer
-#'     than \code{n_features} (1 when \code{n_features = NULL}) qualify, the
-#'     top \code{n_features} by that importance. With \code{n_features}
-#'     supplied the result is then truncated to \code{n_features}, so the
-#'     fallback keeps exactly that many (capped at the number available).
+#'     of \code{nfolds}. Numerically constant encoded predictors are removed
+#'     before screening (score \code{NA}, never selected). If \code{rfe()}
+#'     fails or selects nothing, a plain random forest is fitted instead, with
+#'     a warning, and every predictor with a positive permutation importance
+#'     (mean decrease in accuracy, or \code{\%IncMSE} for regression) is kept
+#'     -- or, if fewer than \code{n_features} (1 when
+#'     \code{n_features = NULL}) qualify, the top \code{n_features} by that
+#'     importance. This fallback is a weak screen: roughly half of pure-noise
+#'     predictors have positive permutation importance. With
+#'     \code{n_features} supplied the selection is truncated to the
+#'     \code{n_features} selected predictors with the highest reported
+#'     \code{scores}, so the fallback keeps exactly that many (capped at the
+#'     number available).
 #'   \item Selection always runs on the training split only, so the test set
-#'     never informs which features survive.
+#'     never informs which features survive. The final model's tuning
+#'     cross-validation, however, reuses the training rows the selector has
+#'     already seen, so with \code{feature_select = TRUE} the resampled
+#'     metrics in \code{model$results} and \code{model$resample} (what
+#'     printing \code{model} shows) are optimistically biased -- on pure noise
+#'     they can approach perfect accuracy -- and the maximum over
+#'     \code{tune_grid} adds further optimism. Only \code{details$performance},
+#'     computed on the untouched test split, is an honest estimate.
+#'   \item Regression performance (\code{details$performance}) comes from
+#'     \code{caret::postResample()}: \code{RMSE}, \code{MAE}, and
+#'     \code{Rsquared}, which is the \emph{squared Pearson correlation}
+#'     between test predictions and observations -- not
+#'     \code{1 - SSE/SST}. It is therefore never negative and ignores bias
+#'     and scale errors (predictions of \code{2 * y} score 1), so it is not
+#'     comparable with an \code{R2} defined as \code{1 - SSE/SST} (for example
+#'     \code{fs_randomforest()}'s). Classification performance is a
+#'     \code{caret::confusionMatrix}, whose \code{overall} element holds
+#'     \code{Accuracy} and Cohen's \code{Kappa}.
 #'   \item Class-imbalance handling (\code{class_imbalance = TRUE},
 #'     classification only) up-samples \emph{within} each cross-validation
 #'     resample via \code{caret::trainControl(sampling = "up")}, so no
 #'     resampled rows leak across folds.
 #'   \item After the train/test split, factor (and character) predictor
-#'     levels in the test set are aligned to the training levels; test rows
-#'     containing levels unseen in training are dropped with a warning.
+#'     levels in the test set are aligned to the levels observed in the
+#'     training rows (unused factor levels are dropped, so they produce no
+#'     all-zero dummy columns); test rows containing levels unseen in
+#'     training are dropped with a warning. If a dummy column name
+#'     (\code{<factor><level>}) coincides with another column or the target,
+#'     for example factor \code{g} with level \code{"1"} next to a numeric
+#'     \code{g1}, the call stops and asks for a rename. A factor or
+#'     character predictor with fewer than two distinct non-missing values
+#'     is an error naming the column, and so is one left with a single level
+#'     in the training rows because its other levels fell only into the
+#'     held-out rows. Non-finite
+#'     (\code{Inf}) values in the predictors or target are an error.
 #'   \item A numeric target with \code{task = "classification"} is coerced
 #'     to a factor (with a message) only when it has at most 10 unique
 #'     values; more than 10 unique values is an error suggesting
@@ -889,8 +1012,10 @@ svm_performance <- function(predictions, actuals, task) {
 #' \code{feature_select = TRUE} and \code{select_method = "rf_rfe"}, and
 #' \pkg{doParallel}/\pkg{foreach} when \code{n_cores > 1}.
 #'
-#' @param data A data frame containing predictors and the target.
-#' @param target A string naming the target variable.
+#' @param data A data frame containing predictors and the target, with
+#'   unique, non-empty column names.
+#' @param target A string naming the target variable. For classification, no
+#'   class label may be the empty string.
 #' @param task Either \code{"classification"} or \code{"regression"}.
 #'   Required; there is no default, because guessing it from the target is
 #'   exactly the mistake this argument exists to prevent.
@@ -917,7 +1042,8 @@ svm_performance <- function(predictions, actuals, task) {
 #'   number of encoded predictors. For \code{"svm_rfe"} the top
 #'   \code{n_features} ranked features are kept and the cross-validated size
 #'   search is skipped; for \code{"rf_rfe"} it truncates the selection to its
-#'   first \code{n_features} entries and is the minimum number of features
+#'   \code{n_features} highest-scoring entries and is the minimum number of
+#'   features
 #'   the random-forest fallback keeps (see Details). Ignored when
 #'   \code{feature_select = FALSE}. Default \code{NULL} (the size is chosen
 #'   automatically).
@@ -927,9 +1053,13 @@ svm_performance <- function(predictions, actuals, task) {
 #' @param seed Optional whole-number seed (within the R integer range;
 #'   fractional values are an error, not truncated), applied locally for the
 #'   duration of the call
-#'   and restored afterwards; also used to set reproducible RNG streams on
-#'   parallel workers when \code{n_cores > 1}. Default \code{NULL} (never
-#'   seeds by default).
+#'   and restored afterwards. When \code{n_cores > 1}, caret's resampling
+#'   controls get \code{seeds = NULL}, so caret draws one seed per
+#'   resample from the locally seeded RNG; that is what makes two seeded
+#'   parallel runs agree. The workers also get L'Ecuyer-CMRG streams, but
+#'   those alone would not, because foreach hands resamples to whichever
+#'   worker is free. A seeded parallel run need not equal a seeded sequential
+#'   one. Default \code{NULL} (never seeds by default).
 #' @param verbose Logical; if \code{TRUE}, report progress (including each
 #'   SVM-RFE elimination step). Default \code{FALSE}.
 #' @param n_cores Number of parallel workers (default \code{1}, sequential).
@@ -942,7 +1072,8 @@ svm_performance <- function(predictions, actuals, task) {
 #'     \code{feature_select = FALSE} this is every encoded predictor. With
 #'     \code{"svm_rfe"} it is the surviving subset, ordered from most to least
 #'     important; with \code{"rf_rfe"} it is the subset in the order
-#'     \code{caret::rfe()} reports it.}
+#'     \code{caret::rfe()} reports it, or, when \code{n_features} truncated
+#'     it, ordered by decreasing \code{scores}.}
 #'   \item{scores}{Named numeric vector covering every encoded predictor, not
 #'     just the survivors: the SVM-RFE criterion (the squared primal weights
 #'     \code{w^2} of the first, full-feature fit) or, for
@@ -955,11 +1086,17 @@ svm_performance <- function(predictions, actuals, task) {
 #'     \code{"svm_linear"}. The selector that ran, if any, is reported in
 #'     \code{details$selection$method}.}
 #'   \item{task}{\code{"classification"} or \code{"regression"}.}
-#'   \item{model}{The fitted \code{caret::train} object.}
+#'   \item{model}{The fitted \code{caret::train} object. With
+#'     \code{feature_select = TRUE} its resampled metrics are optimistic
+#'     (see Details); use \code{details$performance}.}
 #'   \item{details}{A list with \code{test_set} (the test split with its
 #'     coerced target and aligned factor levels), \code{predictions} (test-set
-#'     predictions), \code{performance} (a \code{caret::confusionMatrix} for
-#'     classification, or a named RMSE/Rsquared/MAE vector for regression),
+#'     predictions in the row order of \code{test_set}: a factor for
+#'     classification, an unnamed numeric vector for regression),
+#'     \code{performance} (a \code{caret::confusionMatrix} for
+#'     classification, or a named \code{RMSE}/\code{Rsquared}/\code{MAE}
+#'     vector from \code{caret::postResample()} for regression, where
+#'     \code{Rsquared} is the squared correlation; see Details),
 #'     \code{selection} (\code{NULL} when no selection ran, otherwise a list
 #'     with \code{method}, \code{ranking} from most to least important,
 #'     \code{scores}, and the size search's \code{sizes}, \code{size_scores}
@@ -1067,6 +1204,13 @@ fs_svm <- function(data,
   n_cores <- resolve_cores(n_cores)
   use_parallel <- n_cores > 1L
 
+  # A single-level factor/character predictor cannot be dummy-coded; without
+  # this check it failed inside model.matrix() with "contrasts can be applied
+  # only to factors with 2 or more levels".
+  lasso_check_categorical_levels(
+    data[, setdiff(names(data), target), drop = FALSE], "fs_svm"
+  )
+
   pkgs <- c("caret", "kernlab")
   if (task == "classification") {
     pkgs <- c(pkgs, "e1071")
@@ -1128,6 +1272,22 @@ fs_svm <- function(data,
   aligned <- svm_align_levels(train_set, test_set, target)
   train_set <- aligned$train_set
   test_set <- aligned$test_set
+  # A factor can have two levels in 'data' but only one in the training rows
+  # (the other level fell entirely into the held-out rows, which were dropped
+  # above). Dummy coding then fails the same way, so say so here.
+  one_level <- names(train_set)[vapply(names(train_set), function(nm) {
+    nm != target && is.factor(train_set[[nm]]) &&
+      length(unique(train_set[[nm]][!is.na(train_set[[nm]])])) < 2L
+  }, logical(1L))]
+  if (length(one_level) > 0L) {
+    stop(sprintf(paste0(
+      "fs_svm(): categorical predictor(s) with fewer than two levels in the ",
+      "training rows: %s. The other level(s) occur only in held-out rows, so ",
+      "the column cannot be dummy-coded; merge rare levels, remove the ",
+      "column, or change 'train_ratio' or 'seed'."),
+      paste0("'", utils::head(one_level, 5L), "'", collapse = ", ")),
+      call. = FALSE)
+  }
 
   # Optional parallel backend, created early so feature selection and
   # training can share it, and always cleaned up on exit.
@@ -1141,6 +1301,10 @@ fs_svm <- function(data,
   dv <- svm_dummy_encoder(train_set, target, full_rank = TRUE)
   train_x <- svm_encode(dv, train_set)
   test_x <- svm_encode(dv, test_set)
+  # A dummy named <factor><level> can coincide with another column (factor g
+  # with level 1 -> "g1" next to a numeric "g1"); name-based selection would
+  # then silently keep the wrong copy.
+  assert_unique_encoded_names(colnames(train_x), target, "fs_svm")
   n_encoded <- ncol(train_x)
 
   if (verbose) {
@@ -1182,10 +1346,16 @@ fs_svm <- function(data,
         allow_parallel = use_parallel
       )
       selected_features <- rf_res$selected
-      if (!is.null(n_features) && length(selected_features) > n_features) {
-        selected_features <- utils::head(selected_features, n_features)
-      }
       scores <- rf_res$scores
+      if (!is.null(n_features) && length(selected_features) > n_features) {
+        # Truncate by the reported (full-size, once-per-resample) scores, not
+        # by caret's optVariables order, which weights each resample by how
+        # far the variable survived; otherwise a lower-scored feature could
+        # be kept over a higher-scored one.
+        sel_scores <- scores[selected_features]
+        ord <- order(-sel_scores, seq_along(sel_scores), na.last = TRUE)
+        selected_features <- utils::head(selected_features[ord], n_features)
+      }
       selection <- list(
         method      = "rf_rfe",
         ranking     = names(scores)[order(scores, decreasing = TRUE,
@@ -1228,7 +1398,10 @@ fs_svm <- function(data,
     method = "cv",
     number = nfolds,
     allowParallel = use_parallel,
-    sampling = sampling
+    sampling = sampling,
+    # See svm_feature_selection(): per-resample seeds from the master RNG
+    # make a seeded parallel run reproducible.
+    seeds = if (use_parallel) NULL else NA
   )
 
   svm_fit <- caret::train(
@@ -1241,6 +1414,11 @@ fs_svm <- function(data,
   )
 
   preds <- stats::predict(svm_fit, newdata = test_df)
+  if (task == "regression") {
+    # kernlab names regression predictions by test row; return a plain
+    # numeric aligned with details$test_set, like the other wrappers.
+    preds <- unname(as.numeric(preds))
+  }
   perf <- svm_performance(preds, test_df[[target]], task)
 
   new_fs_result(

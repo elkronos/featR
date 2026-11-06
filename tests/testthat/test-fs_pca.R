@@ -441,3 +441,44 @@ test_that("the bigstatsr branch reports variance against TOTAL variance", {
   # of the same total, not of whatever was retained.
   expect_equal(ve4[1:2], ve2, tolerance = 1e-6)
 })
+
+test_that("fs_pca reports infinite values instead of dropping the column", {
+  # REGRESSION: complete.cases() keeps Inf, the column's sd became NaN, and
+  # the column was removed with the warning "Removed 1 zero-variance
+  # column(s)" -- one infinite entry silently discarded a whole feature.
+  set.seed(21)
+  d <- data.frame(a = rnorm(20), b = rnorm(20), c = rnorm(20))
+  d$c[4] <- Inf
+  expect_error(fs_pca(d), "infinite values.*c")
+})
+
+test_that("fs_pca rejects duplicated column names instead of dropping a copy", {
+  set.seed(1)
+  dd <- data.frame(a = rnorm(10), b = rnorm(10), c = rnorm(10))
+  names(dd)[3] <- "a"
+  expect_error(fs_pca(dd), "unique column names; duplicated: a")
+})
+
+test_that("a label column named like a score column is an error, not shadowed", {
+  set.seed(1)
+  d <- data.frame(PC1 = sample(c("u", "v"), 30, TRUE), x = rnorm(30),
+                  z = rnorm(30))
+  expect_error(fs_pca(d, label_col = "PC1"), "clash with the principal-component")
+  expect_error(fs_pca(d), "'PC1' clash")
+  # A PC name beyond the retained components does not clash.
+  names(d)[1] <- "PC3"
+  res <- fs_pca(d, label_col = "PC3")
+  expect_identical(names(res$pca_df), c("PC1", "PC2", "PC3"))
+})
+
+test_that("columns in extreme units are not mistaken for zero-variance ones", {
+  set.seed(1)
+  d <- data.frame(a = rnorm(30), b = rnorm(30) * 1e-170,
+                  c = rnorm(30) * 1e170, e = rnorm(30))
+  ref <- transform(d, b = b * 1e170, c = c / 1e170)
+  expect_no_warning(res <- fs_pca(d))
+  expect_identical(res$meta$numeric_cols, c("a", "b", "c", "e"))
+  expect_equal(res$pc_scores, fs_pca(ref)$pc_scores)
+  expect_equal(res$var_explained, fs_pca(ref)$var_explained)
+  expect_error(fs_pca(d, scale_data = FALSE), "not representable in double")
+})

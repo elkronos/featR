@@ -296,3 +296,120 @@ test_that("duplicated column names are rejected, not silently mis-tested", {
   d_chr[] <- lapply(d_chr, as.character)
   expect_error(fs_chi(d_chr, "t"), "unique column names; duplicated: a")
 })
+
+test_that("a simulated p-value that cannot reach significance is flagged", {
+  # REGRESSION: a Monte-Carlo p-value is never below 1 / (simulation_B + 1).
+  # With 121 tested features and Bonferroni the smallest attainable adjusted
+  # p-value was 121 / 2001 = 0.06, so a feature that separates the classes
+  # perfectly (but has a rare level, hence a simulated test) was silently
+  # never selected, whatever its association.
+  set.seed(5)
+  n <- 60
+  y <- factor(rep(c("a", "b"), each = n / 2))
+  sig <- as.character(y)
+  sig[1:2] <- "r"
+  noise <- as.data.frame(lapply(seq_len(120), function(i) {
+    factor(sample(c("u", "v"), n, TRUE))
+  }))
+  names(noise) <- paste0("n", seq_len(120))
+  d <- data.frame(sig = factor(sig), noise, y = y)
+  expect_warning(res <- fs_chi(d, "y", seed = 1),
+                 "cannot reach sig_level.*sig.*simulation_B")
+  expect_false("sig" %in% selected(res))
+  # The remedy the warning names works.
+  res2 <- fs_chi(d, "y", seed = 1, simulation_B = 5000)
+  expect_true("sig" %in% selected(res2))
+  # No warning when the floor is not binding.
+  expect_no_warning(fs_chi(d[c("sig", "n1", "y")], "y", seed = 1))
+})
+
+test_that("empty or NA column names are rejected, not silently skipped", {
+  # REGRESSION: dt[[""]] / dt[[NA]] is NULL, so such a factor column failed
+  # the is.factor() filter and was left out of testing without a word.
+  set.seed(1)
+  n <- 60
+  d <- data.frame(t = factor(sample(c("a", "b"), n, TRUE)),
+                  f = factor(sample(c("u", "v"), n, TRUE)),
+                  g = factor(sample(c("u", "v"), n, TRUE)))
+  names(d)[3] <- ""
+  expect_error(fs_chi(d, "t"), "empty or NA column names")
+  names(d)[3] <- NA
+  expect_error(fs_chi(d, "t"), "empty or NA column names")
+})
+
+test_that("an invalid p_adjust_method fails before testing, even with no features", {
+  # REGRESSION: the method was only checked inside the p-value adjustment,
+  # after every test had run, and never when there was nothing to test (the
+  # bad name was then stored in details).
+  d0 <- data.frame(y = rep(c("a", "b"), 10), z = rnorm(20))
+  expect_error(fs_chi(d0, "y", p_adjust_method = "nonsense"),
+               "Invalid p_adjust_method 'nonsense'")
+  d1 <- data.frame(y = factor(rep(c("a", "b"), 10)),
+                   f = factor(rep(c("u", "v", "w", "x"), 5)))
+  testthat::local_mocked_bindings(
+    .fs_test_feature = function(...) stop("feature was tested")
+  )
+  expect_error(fs_chi(d1, "y", p_adjust_method = "nonsense"),
+               "Invalid p_adjust_method 'nonsense'")
+  # Valid names are still matched case-insensitively and stored as supplied.
+  expect_identical(fs_chi(d0, "y", p_adjust_method = "bh")$details$p_adjust_method,
+                   "bh")
+})
+
+test_that("parallel = TRUE never leaks its plan or replaces the caller's plan", {
+  # REGRESSION: the restore was registered only after plan(multisession)
+  # returned, so a failed worker start-up left featR's plan installed; and a
+  # caller's own plan was replaced and then rebuilt, killing its workers.
+  skip_if_not_installed("future")
+  skip_if_not_installed("furrr")
+  d <- data.frame(y = factor(rep(c("a", "b"), 20)),
+                  f = factor(rep(c("u", "v"), 20)))
+  real_plan <- future::plan
+  old <- real_plan("list")
+  on.exit(real_plan(old, substitute = FALSE), add = TRUE)
+
+  # (1) Worker start-up fails: the sequential plan must survive.
+  real_plan(future::sequential, substitute = FALSE)
+  testthat::local_mocked_bindings(
+    plan = function(strategy = NULL, ...) {
+      if (identical(strategy, future::multisession)) {
+        # what future does before launching workers: install, then fail
+        real_plan(future::multisession, workers = 1L, substitute = FALSE,
+                  .init = FALSE)
+        stop("2 of 2 workers failed to connect")
+      }
+      real_plan(strategy, ..., substitute = FALSE)
+    },
+    .package = "future"
+  )
+  expect_error(fs_chi(d, "y", parallel = TRUE, n_cores = 2L),
+               "workers failed")
+  expect_true(inherits(real_plan(), "sequential"))
+
+  # (2) A caller's non-sequential plan is used as is, never re-set.
+  set_calls <- 0L
+  testthat::local_mocked_bindings(
+    plan = function(strategy = NULL, ...) {
+      if (is.function(strategy) || is.list(strategy)) {
+        set_calls <<- set_calls + 1L
+      }
+      real_plan(strategy, ..., substitute = FALSE)
+    },
+    .package = "future"
+  )
+  real_plan(future::sequential, substitute = FALSE)
+  set_calls <- 0L
+  # multicore silently falls back to sequential where forking is unsupported
+  # (Windows), and fs_chi() would then correctly install its own plan; use
+  # multisession there instead (its workers need featR installed, as under
+  # R CMD check).
+  user_strategy <- if (future::supportsMulticore()) future::multicore else
+    future::multisession
+  real_plan(user_strategy, workers = 2L, substitute = FALSE)
+  expect_false(inherits(real_plan(), "sequential"))
+  before <- real_plan()
+  res <- fs_chi(d, "y", parallel = TRUE, n_cores = 2L)
+  expect_identical(set_calls, 0L)
+  expect_identical(real_plan(), before)
+  expect_true("f" %in% selected(res))
+})

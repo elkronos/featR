@@ -4,8 +4,9 @@
 
 #' Is a numeric vector (numerically) constant?
 #'
-#' Scale-invariant: the spread is compared to the magnitude of the values, so
-#' a column measured on a tiny scale (say, values around 1e-10) is not
+#' Scale-invariant: the spread is measured on `x / max(abs(x))`, so a column
+#' measured on a tiny or huge scale (values around 1e-170 or 1e170, where
+#' `stats::sd(x)` itself underflows to 0 or overflows to `Inf`) is not
 #' mistaken for a constant one, while a constant column carrying only
 #' floating-point noise still is.
 #'
@@ -16,11 +17,12 @@ sup_is_degenerate <- function(x) {
   if (length(x) < 2L) {
     return(TRUE)
   }
-  s <- stats::sd(x)
-  if (!is.finite(s)) {
+  m <- max(abs(x))
+  if (!is.finite(m) || m == 0) {
     return(TRUE)
   }
-  s <= 64 * .Machine$double.eps * max(abs(x))
+  s <- stats::sd(x / m)
+  !is.finite(s) || s <= 64 * .Machine$double.eps
 }
 
 #' Absolute Pearson correlation of each feature with a numeric target
@@ -56,7 +58,9 @@ sup_score_correlation <- function(dt, y, na_rm) {
       if (sup_is_degenerate(col2) || sup_is_degenerate(y2)) {
         return(NA_real_)
       }
-      val <- stats::cor(col2, y2)
+      # Pearson r is scale-invariant; dividing by the magnitudes keeps the
+      # sums of squares inside double range for extreme units.
+      val <- stats::cor(col2 / max(abs(col2)), y2 / max(abs(y2)))
       if (is.na(val) || !is.finite(val)) {
         return(NA_real_)
       }
@@ -111,6 +115,9 @@ sup_score_anova <- function(dt, y, na_rm) {
       # separates the groups perfectly (no within-group spread) scores Inf --
       # the strongest possible score -- instead of a ~1e30 value whose size
       # is rounding noise. A constant feature (no spread at all) is NA.
+      # F is scale-invariant; work on col2 / max|col2| so the sums of squares
+      # cannot over- or underflow for features in extreme units.
+      col2 <- col2 / max(abs(col2))
       grand <- mean(col2)
       grp_mean <- tapply(col2, y2, mean)
       grp_n <- tabulate(y2, nbins = k)
@@ -118,7 +125,7 @@ sup_score_anova <- function(dt, y, na_rm) {
       ssw <- sum((col2 - grp_mean[as.integer(y2)])^2)
       # Within-group spread at or below the rounding floor of the residuals
       # themselves counts as none at all.
-      if (ssw <= n * (64 * .Machine$double.eps * max(abs(col2)))^2) {
+      if (ssw <= n * (64 * .Machine$double.eps)^2) {
         return(Inf)
       }
       (ssb / (k - 1L)) / (ssw / (n - k))
@@ -260,8 +267,10 @@ sup_scores <- function(dt,
 #' both \code{action = "keep"} and \code{action = "remove"}; a warning
 #' reports how many such features were excluded.
 #'
-#' Columns are subset by integer index, never by name, so duplicated column
-#' names cannot select the wrong columns.
+#' Columns are subset by integer index, never by name, so duplicated feature
+#' names cannot select the wrong columns. The target's name must be unique,
+#' and every column must have a non-empty, non-NA name (a matrix keeps its own
+#' column names; `V1`, `V2`, ... are used only when it has none).
 #'
 #' @param data A data.frame, data.table, or matrix containing `target` and
 #'   the candidate feature columns. Every column other than `target` must be
@@ -275,7 +284,12 @@ sup_scores <- function(dt,
 #' @param threshold Non-negative, finite numeric scalar threshold applied to
 #'   the feature scores (not to the target directly). Default 0. Note that the
 #'   two methods put scores on different scales: \code{[0, 1]} for
-#'   \code{"correlation"} and \code{[0, Inf]} for \code{"anova"}.
+#'   \code{"correlation"} and \code{[0, Inf]} for \code{"anova"}. With the
+#'   defaults (\code{threshold = 0}, \code{direction = "above"},
+#'   \code{action = "keep"}) nothing is filtered in practice: any
+#'   non-constant feature has a sample \eqn{|r| > 0} or \eqn{F > 0}, even
+#'   when it is pure noise, so every feature with a defined score is kept.
+#'   Choose a threshold to make an actual selection.
 #' @param direction One of \code{"above"} (default), \code{"below"}; compares
 #'   scores to \code{threshold}.
 #' @param action One of \code{"keep"} (default), \code{"remove"}; determines
@@ -391,10 +405,18 @@ fs_supervised <- function(data,
   assert_string(target, "target")
 
   dt <- as_dt(data, arg = "data")
+  assert_nonempty_names(names(dt), "fs_supervised")
   assert_target(dt, target)
+  # Only the first `target` column is consumed below; a second copy would
+  # otherwise become a candidate feature and leak the target into the
+  # selection under the target's own name.
+  if (sum(names(dt) == target) > 1L) {
+    stop(sprintf("Column name '%s' (the target) appears more than once in 'data'; rename the duplicates.",
+                 target), call. = FALSE)
+  }
 
-  # Index-based, so a data source with duplicated column names keeps every
-  # candidate feature and only the first `target` column is consumed.
+  # Index-based, so a data source with duplicated feature names keeps every
+  # candidate feature.
   target_idx <- match(target, names(dt))
   y <- dt[[target_idx]]
 

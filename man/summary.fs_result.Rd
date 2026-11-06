@@ -40,6 +40,22 @@ same ascending order is used for the threshold filters
 the low side of the threshold (\code{direction = "below"} with
 \code{action = "keep"}, or \code{"above"} with \code{"remove"}), so the
 kept features come first.
+
+Two methods select features by something other than a cut on the score,
+and for them the selected features are listed first (each group ordered
+by score), so a kept feature is never ranked below, or truncated out
+behind, a dropped one. \code{\link{fs_mars}} selects every predictor the
+final model uses, which can have a zero or negative GCV importance while
+pruned predictors score 0. \code{\link{fs_correlation}} with
+\code{prune = TRUE} scores each variable by its largest absolute
+correlation with any other (larger = more redundant) and keeps one member
+of each redundant pair; its rows are ordered ascending within each group,
+least redundant first. With \code{prune = FALSE} the selection is the
+redundant set, ordered by decreasing score.
+
+The \code{selected} marks are matched by position when the result records a
+per-feature keep-mask (\code{details$mask}, as the threshold filters do),
+so features sharing a name are marked individually; otherwise by name.
 }
 \examples{
 res <- fs_unsupervised(

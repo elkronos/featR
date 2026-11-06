@@ -16,8 +16,10 @@ fs_randomforest(
 }
 \arguments{
 \item{data}{A data.frame or data.table with at least one row and one column,
-holding the target and the candidate predictors (every other column).
-\code{Date} columns are converted to numeric before modeling.}
+holding the target and the candidate predictors (every other column),
+with unique, non-empty column names and no infinite predictor values.
+\code{Date} columns are converted to numeric before modeling. An ordered
+factor target is modeled as an unordered one.}
 
 \item{target}{Single string naming the target column of \code{data}; a column
 index is not accepted.}
@@ -28,8 +30,12 @@ when \code{task} is left at its default and the target is numeric, a warning
 says so, since every distinct value would become a class. A
 classification target is coerced with
 \code{as.factor()} and must retain at least two levels; a regression target is
-coerced with \code{as.numeric()}. Either way, rows whose target is \code{NA} after
-coercion are dropped with a warning.}
+coerced with \code{as.numeric()} -- a factor through its labels
+(\code{as.numeric(as.character(y))}), never its internal level codes. Either
+way, rows whose target is \code{NA} after coercion are dropped with a warning;
+an infinite regression target is an error. With
+\code{control$drop_zerovar = FALSE}, training rows in which every predictor
+is constant are an error (there is nothing to split on).}
 
 \item{control}{List of method-specific options; every accepted entry and its
 default is listed under Details. Unknown entries are an error, not a
@@ -144,14 +150,23 @@ whole number >= 2, or \code{NULL} for no limit.
 \item \code{sampsize = NULL} -- rows drawn to grow each tree, passed to
 \code{randomForest}. A single number for regression (a vector is an
 error); one number per class is allowed for classification. Entries
-must be whole numbers >= 1 (anything else is an error). Values are
-clamped to the training row count, and \code{NA} entries are replaced by
+must be whole numbers >= 1 (anything else is an error). A single value
+is clamped to the training row count; a per-class (or, with
+\code{strata}, per-stratum) vector has each entry clamped to that
+class's (stratum's) frequency in the training rows, with a warning,
+since \code{randomForest} refuses larger entries and the training
+split is chosen inside the function. \code{NA} entries are replaced by
 the full training size when \code{replace = TRUE} and by
-\code{ceiling(0.632 * n)} otherwise.
+\code{ceiling(0.632 * n)} otherwise (and then clamped likewise).
 \item \code{classwt = NULL} -- class priors for classification, forwarded
 to \code{randomForest} unchanged and unvalidated.
-\item \code{strata = NULL} -- stratification variable for the per-tree
-sampling, forwarded to \code{randomForest} unchanged and unvalidated.
+\item \code{strata = NULL} -- name of a column of \code{data} used as the
+stratification variable for the per-tree sampling (with
+\code{sampsize}). Its values are read from the training rows, so they
+stay aligned with the rows the forest is grown on; a vector is an
+error, because the training rows are chosen inside the function. The
+column must not contain \code{NA} (an error). The
+column is still used as a predictor unless removed.
 \item \code{replace = TRUE} -- sample rows with replacement when growing
 each tree.
 \item \code{preprocess = NULL} -- function \code{dt -> dt}, applied to the
@@ -167,13 +182,15 @@ predictor and applied to NAs in train and test.
 \code{caret::nearZeroVar()}, using training data only.
 \item \code{oob = TRUE} -- include out-of-bag metrics in
 \code{details$oob} (\code{accuracy} for classification, \code{RMSE} for
-regression); see the note below about parallel training.
+regression); see the notes below about parallel training and about
+\code{control$feature_select}, which makes these optimistic.
 \item \code{return_test_data = FALSE} -- when \code{TRUE}, the held-out
 rows are returned in \code{details$test_data}.
 \item \code{positive_class = NULL} -- optional level name treated as the
-positive class for binary AUC. Falls back to the second factor level
-both by default and, silently, when the string does not name a level of
-the target.
+positive class for binary AUC; \code{NULL} means the second factor
+level. A string that does not name a level of the (cleaned)
+classification target is an error. ROC AUC itself does not depend on
+which class is called positive.
 }
 Unknown \code{control} entries are rejected, so typos and arguments that moved
 out of \code{control} (\code{seed}, \code{n_cores}, the former \code{split_ratio}) fail loudly.
@@ -188,6 +205,13 @@ data before the split -- subject to the caveat in the next paragraph.
 Near-zero-variance removal happens after the hook, so
 \code{details$feature_names} (the predictors the forest actually used) can be
 a subset of \code{selected}.
+
+\strong{OOB metrics are not honest after a supervised hook}: the forest is
+grown on the same training rows the hook selected on, so an out-of-bag row
+was out of the bag for the trees but \emph{not} out of the selection.
+With a hook that consults the target, \code{details$oob} is optimistic (on
+pure noise it can read well above chance); only \code{details$metrics},
+computed on the held-out rows, is free of the selection step.
 
 \strong{What still sees the full data}: \code{control$preprocess} runs
 before the split by design, so any quantity it learns -- an imputation
@@ -206,15 +230,29 @@ case \code{details$oob} is \code{NULL} and a warning is emitted if
 \code{control$oob = TRUE}. The held-out metrics in \code{details$metrics}
 are unaffected; use \code{n_cores = 1} when you want the OOB numbers.
 
-Character predictors are converted to factors, with the levels learned on
-the training split. Test values unseen in training become NA and are imputed
+Character predictors are converted to factors, and unused levels are
+dropped from factor predictors, so the levels are those seen in the
+training split. Test values unseen in training become NA and are imputed
 when \code{control$impute = TRUE}; with \code{control$impute = FALSE} those
 NAs survive into \code{predict()}, which \code{randomForest} cannot handle.
 \code{details$metrics$auc} is filled in only when the classification target
 has exactly two levels \emph{and} the suggested package 'pROC' is installed;
-it is \code{NA} otherwise, which includes every multi-class fit. Regression
-fits report RMSE, MAE, and R2 instead, and R2 is \code{NA} when the held-out
-target has no variance.
+it is \code{NA} otherwise, which includes every multi-class fit and (with a
+warning) a held-out split that contains only one of the two classes.
+For a binary target the positive class is \code{control$positive_class}
+or, by default, the \emph{second} factor level (after unused levels are
+dropped), which is the class whose predicted probability is scored.
+\code{fs_mars()} uses the \emph{first} level instead. ROC AUC is the same
+whichever class is called positive, so \code{auc} does not depend on this
+choice, but the two functions' class-specific quantities (such as
+\code{fs_mars()}'s PR AUC or sensitivity) are not directly comparable.
+\code{kappa} is Cohen's kappa computed from the held-out confusion table
+(\code{NA} when it is undefined, i.e. chance agreement is 1). Regression
+fits report RMSE, MAE, and R2 instead. R2 is \code{1 - SSE/SST} on the
+held-out rows (so it can be negative), not the squared correlation that
+\code{\link{fs_mars}} reports, and it is \code{NA} when the held-out
+target has no variance (including variance that is only floating-point
+round-off, relative to the target's magnitude).
 }
 \examples{
 \donttest{

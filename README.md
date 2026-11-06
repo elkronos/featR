@@ -87,7 +87,7 @@ These reduce dimensions rather than select features, so they return their own de
 | Function | What it does |
 |---|---|
 | `fs_pca()` | PCA (prcomp, or bigstatsr for large data) with loadings, scores, variance explained, optional plot. |
-| `fs_svd()` | Exact or approximate (RSpectra) truncated SVD. Pass `n_singular_values < min(dim(x))` to enable the approximate solver. |
+| `fs_svd()` | Exact or approximate (RSpectra) truncated SVD. The approximate solver is used when `n_singular_values < min(dim(x))` and `min(dim(x))` exceeds `svd_threshold` (default 100). |
 
 ## Notes on honesty
 
@@ -96,7 +96,8 @@ Several methods can silently flatter themselves. featR tries not to:
 - Class upsampling happens **inside** resampling folds (`fs_mars()`, `fs_svm()`), never before.
 - `fs_recursivefeature()` evaluates on rows the selection never saw, and its final model trains on training rows only.
 - `fs_elastic()` fits PCA per fold; `fs_lasso()` refuses to mean-impute by default (`impute = "none"`) because full-data imputation leaks across folds.
-- `fs_randomforest()`'s `feature_select` hook runs on the training split only.
+- `fs_randomforest()`'s `feature_select` hook runs on the training split only, so the held-out `details$metrics` stay honest; the out-of-bag `details$oob` is grown on those same rows and is optimistic when the hook looks at the outcome.
+- Numbers computed on rows that also chose the features or tuning values are optimistic and documented as such: `model$results` of caret-based fits, `fs_svm()`'s chosen-size `size_scores`, `fs_recursivefeature()`'s `resampling_results`, `fs_elastic()`'s `metric_value`, `fs_bayes()`'s `best_elpd`.
 - Post-selection statistics (`fs_stepwise()` p-values) are labeled as invalid for inference rather than presented as if they were not.
 
 ## License

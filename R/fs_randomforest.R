@@ -10,7 +10,10 @@ rf_message <- function(msg, verbose) {
 #'
 #' For every training column that is a factor, the corresponding test column
 #' is re-leveled to the training levels. Test values unseen in training become
-#' NA (and are later imputed when `control$impute = TRUE`).
+#' NA (and are later imputed when `control$impute = TRUE`). The caller drops
+#' unused levels from the training factors first, so a level that occurs only
+#' in the test rows is unseen here even when the column was a factor in
+#' `data`.
 #'
 #' @param train,test data.frames.
 #' @return A list with the aligned `train` and `test` data.frames.
@@ -23,6 +26,20 @@ rf_align_levels <- function(train, test) {
     }
   }
   list(train = train, test = test)
+}
+
+#' Cohen's kappa from a square confusion table
+#'
+#' @param tab Observed x Predicted table with matching levels.
+#' @return Kappa, or `NA` when it is undefined (chance agreement of 1).
+#' @noRd
+rf_cohen_kappa <- function(tab) {
+  n <- sum(tab)
+  if (n == 0L || nrow(tab) != ncol(tab)) return(NA_real_)
+  po <- sum(diag(tab)) / n
+  pe <- sum(rowSums(tab) * colSums(tab)) / n^2
+  if (!is.finite(pe) || pe >= 1) return(NA_real_)
+  (po - pe) / (1 - pe)
 }
 
 #' Order features by decreasing importance
@@ -141,8 +158,10 @@ rf_pool_importance_sd <- function(forests) {
 #' credit between correlated predictors, so treat close scores as ties.
 #'
 #' @param data A data.frame or data.table with at least one row and one column,
-#'   holding the target and the candidate predictors (every other column).
-#'   `Date` columns are converted to numeric before modeling.
+#'   holding the target and the candidate predictors (every other column),
+#'   with unique, non-empty column names and no infinite predictor values.
+#'   `Date` columns are converted to numeric before modeling. An ordered
+#'   factor target is modeled as an unordered one.
 #' @param target Single string naming the target column of `data`; a column
 #'   index is not accepted.
 #' @param task One of `"classification"` (the default) or `"regression"`,
@@ -151,8 +170,12 @@ rf_pool_importance_sd <- function(forests) {
 #'   says so, since every distinct value would become a class. A
 #'   classification target is coerced with
 #'   `as.factor()` and must retain at least two levels; a regression target is
-#'   coerced with `as.numeric()`. Either way, rows whose target is `NA` after
-#'   coercion are dropped with a warning.
+#'   coerced with `as.numeric()` -- a factor through its labels
+#'   (`as.numeric(as.character(y))`), never its internal level codes. Either
+#'   way, rows whose target is `NA` after coercion are dropped with a warning;
+#'   an infinite regression target is an error. With
+#'   `control$drop_zerovar = FALSE`, training rows in which every predictor
+#'   is constant are an error (there is nothing to split on).
 #' @param control List of method-specific options; every accepted entry and its
 #'   default is listed under Details. Unknown entries are an error, not a
 #'   silent no-op. Default `list()`, i.e. all defaults.
@@ -206,14 +229,23 @@ rf_pool_importance_sd <- function(forests) {
 #'   \item \code{sampsize = NULL} -- rows drawn to grow each tree, passed to
 #'     \code{randomForest}. A single number for regression (a vector is an
 #'     error); one number per class is allowed for classification. Entries
-#'     must be whole numbers >= 1 (anything else is an error). Values are
-#'     clamped to the training row count, and \code{NA} entries are replaced by
+#'     must be whole numbers >= 1 (anything else is an error). A single value
+#'     is clamped to the training row count; a per-class (or, with
+#'     \code{strata}, per-stratum) vector has each entry clamped to that
+#'     class's (stratum's) frequency in the training rows, with a warning,
+#'     since \code{randomForest} refuses larger entries and the training
+#'     split is chosen inside the function. \code{NA} entries are replaced by
 #'     the full training size when \code{replace = TRUE} and by
-#'     \code{ceiling(0.632 * n)} otherwise.
+#'     \code{ceiling(0.632 * n)} otherwise (and then clamped likewise).
 #'   \item \code{classwt = NULL} -- class priors for classification, forwarded
 #'     to \code{randomForest} unchanged and unvalidated.
-#'   \item \code{strata = NULL} -- stratification variable for the per-tree
-#'     sampling, forwarded to \code{randomForest} unchanged and unvalidated.
+#'   \item \code{strata = NULL} -- name of a column of `data` used as the
+#'     stratification variable for the per-tree sampling (with
+#'     \code{sampsize}). Its values are read from the training rows, so they
+#'     stay aligned with the rows the forest is grown on; a vector is an
+#'     error, because the training rows are chosen inside the function. The
+#'     column must not contain \code{NA} (an error). The
+#'     column is still used as a predictor unless removed.
 #'   \item \code{replace = TRUE} -- sample rows with replacement when growing
 #'     each tree.
 #'   \item \code{preprocess = NULL} -- function \code{dt -> dt}, applied to the
@@ -229,13 +261,15 @@ rf_pool_importance_sd <- function(forests) {
 #'     \code{caret::nearZeroVar()}, using training data only.
 #'   \item \code{oob = TRUE} -- include out-of-bag metrics in
 #'     \code{details$oob} (\code{accuracy} for classification, \code{RMSE} for
-#'     regression); see the note below about parallel training.
+#'     regression); see the notes below about parallel training and about
+#'     \code{control$feature_select}, which makes these optimistic.
 #'   \item \code{return_test_data = FALSE} -- when \code{TRUE}, the held-out
 #'     rows are returned in \code{details$test_data}.
 #'   \item \code{positive_class = NULL} -- optional level name treated as the
-#'     positive class for binary AUC. Falls back to the second factor level
-#'     both by default and, silently, when the string does not name a level of
-#'     the target.
+#'     positive class for binary AUC; \code{NULL} means the second factor
+#'     level. A string that does not name a level of the (cleaned)
+#'     classification target is an error. ROC AUC itself does not depend on
+#'     which class is called positive.
 #' }
 #' Unknown `control` entries are rejected, so typos and arguments that moved
 #' out of `control` (`seed`, `n_cores`, the former `split_ratio`) fail loudly.
@@ -250,6 +284,13 @@ rf_pool_importance_sd <- function(forests) {
 #' Near-zero-variance removal happens after the hook, so
 #' \code{details$feature_names} (the predictors the forest actually used) can be
 #' a subset of `selected`.
+#'
+#' \strong{OOB metrics are not honest after a supervised hook}: the forest is
+#' grown on the same training rows the hook selected on, so an out-of-bag row
+#' was out of the bag for the trees but \emph{not} out of the selection.
+#' With a hook that consults the target, \code{details$oob} is optimistic (on
+#' pure noise it can read well above chance); only \code{details$metrics},
+#' computed on the held-out rows, is free of the selection step.
 #'
 #' \strong{What still sees the full data}: \code{control$preprocess} runs
 #' before the split by design, so any quantity it learns -- an imputation
@@ -268,15 +309,29 @@ rf_pool_importance_sd <- function(forests) {
 #' \code{control$oob = TRUE}. The held-out metrics in \code{details$metrics}
 #' are unaffected; use \code{n_cores = 1} when you want the OOB numbers.
 #'
-#' Character predictors are converted to factors, with the levels learned on
-#' the training split. Test values unseen in training become NA and are imputed
+#' Character predictors are converted to factors, and unused levels are
+#' dropped from factor predictors, so the levels are those seen in the
+#' training split. Test values unseen in training become NA and are imputed
 #' when \code{control$impute = TRUE}; with \code{control$impute = FALSE} those
 #' NAs survive into \code{predict()}, which \code{randomForest} cannot handle.
 #' \code{details$metrics$auc} is filled in only when the classification target
 #' has exactly two levels \emph{and} the suggested package 'pROC' is installed;
-#' it is \code{NA} otherwise, which includes every multi-class fit. Regression
-#' fits report RMSE, MAE, and R2 instead, and R2 is \code{NA} when the held-out
-#' target has no variance.
+#' it is \code{NA} otherwise, which includes every multi-class fit and (with a
+#' warning) a held-out split that contains only one of the two classes.
+#' For a binary target the positive class is \code{control$positive_class}
+#' or, by default, the \emph{second} factor level (after unused levels are
+#' dropped), which is the class whose predicted probability is scored.
+#' \code{fs_mars()} uses the \emph{first} level instead. ROC AUC is the same
+#' whichever class is called positive, so \code{auc} does not depend on this
+#' choice, but the two functions' class-specific quantities (such as
+#' \code{fs_mars()}'s PR AUC or sensitivity) are not directly comparable.
+#' \code{kappa} is Cohen's kappa computed from the held-out confusion table
+#' (\code{NA} when it is undefined, i.e. chance agreement is 1). Regression
+#' fits report RMSE, MAE, and R2 instead. R2 is \code{1 - SSE/SST} on the
+#' held-out rows (so it can be negative), not the squared correlation that
+#' \code{\link{fs_mars}} reports, and it is \code{NA} when the held-out
+#' target has no variance (including variance that is only floating-point
+#' round-off, relative to the target's magnitude).
 #'
 #' @return An object of class `fs_result` with:
 #' \describe{
@@ -346,6 +401,7 @@ fs_randomforest <- function(data,
   task <- match.arg(task)
   assert_data_frame(data, "data")
   assert_target(data, target, arg = "target")
+  assert_column_names(data, "fs_randomforest")
   if (task_defaulted && is.numeric(data[[target]])) {
     warning(sprintf(paste(
       "Target '%s' is numeric but 'task' defaulted to \"classification\",",
@@ -426,12 +482,24 @@ fs_randomforest <- function(data,
   if (!is.null(ctrl$positive_class)) {
     assert_string(ctrl$positive_class, "control$positive_class")
   }
+  # randomForest() reads `strata` positionally against the rows it is given
+  # and does not check its length. Those rows are the training split (after
+  # NA removal and downsampling), which the caller cannot know in advance, so
+  # a vector supplied for `data` would be silently misaligned. Take a column
+  # name instead and read it from the training rows.
+  if (!is.null(ctrl$strata) &&
+      !(is.character(ctrl$strata) && length(ctrl$strata) == 1L &&
+        !is.na(ctrl$strata))) {
+    stop("'control$strata' must be the name of a column of 'data' (a single ",
+         "string). A vector cannot be aligned with the training rows, which ",
+         "are only chosen inside fs_randomforest().", call. = FALSE)
+  }
 
   # ---- Worker count (sequential by default; capped at cores and ntree) -------
   n_cores <- resolve_cores(n_cores, arg = "n_cores")
   n_cores <- min(n_cores, ntree)
 
-  # caret is used for splitting, near-zero variance filtering, and Kappa.
+  # caret is used for splitting and near-zero variance filtering.
   fs_require(c("randomForest", "caret"), "random forest modeling")
 
   # ---- Seed (restored when this function exits) ------------------------------
@@ -465,7 +533,11 @@ fs_randomforest <- function(data,
 
   # ---- Target type and NA handling -------------------------------------------
   if (task == "classification") {
-    dt[[target]] <- as.factor(dt[[target]])
+    # Unordered: predict() returns a plain factor, and comparing it with an
+    # ordered test target fails ("comparison of these types is not
+    # implemented").
+    dt[[target]] <- factor(dt[[target]], ordered = FALSE)
+    assert_class_labels(dt[[target]], target)
 
     if (anyNA(dt[[target]])) {
       warning("Rows with NA in the classification target were removed before training.",
@@ -480,8 +552,21 @@ fs_randomforest <- function(data,
       stop("Classification target must have at least 2 classes after preprocessing and NA removal.",
            call. = FALSE)
     }
+    if (!is.null(ctrl$positive_class) &&
+        !ctrl$positive_class %in% levels(dt[[target]])) {
+      stop(sprintf(
+        "'control$positive_class' (\"%s\") is not a level of target '%s'; levels are: %s.",
+        ctrl$positive_class, target,
+        paste(utils::head(levels(dt[[target]]), 10L), collapse = ", ")
+      ), call. = FALSE)
+    }
   } else {
-    dt[[target]] <- suppressWarnings(as.numeric(dt[[target]]))
+    # A factor goes through its labels: as.numeric() on a factor returns the
+    # internal level codes 1..k, which have nothing to do with the values.
+    y_raw <- dt[[target]]
+    if (is.factor(y_raw)) y_raw <- as.character(y_raw)
+    dt[[target]] <- suppressWarnings(as.numeric(y_raw))
+    assert_finite_columns(dt, target, "fs_randomforest")
 
     if (anyNA(dt[[target]])) {
       warning("Rows with NA in the regression target (including from coercion) were removed before training.",
@@ -505,16 +590,24 @@ fs_randomforest <- function(data,
       # by = c(target) forces evaluation of `target` to the user's column
       # name; a bare `by = target` would grab a column literally named
       # "target" whenever one exists.
-      dt <- dt[
-        , {
-          desired_class <- floor((.N / total_n) * desired_total)
-          size_class <- max(1L, min(.N, desired_class))
-          .SD[sample(.N, size = size_class)]
-        },
-        by = c(target)
-      ]
+      # Done in base R, outside data.table's j scope: inside j a predictor
+      # column named `total_n` or `desired_total` would shadow the locals.
+      # Groups are visited in order of first appearance and the target is
+      # moved first, matching the former grouped data.table call.
+      y_ds <- dt[[target]]
+      grp_rows <- split(seq_len(total_n),
+                        factor(as.character(y_ds),
+                               levels = unique(as.character(y_ds))))
+      keep_ds <- unlist(lapply(grp_rows, function(rows) {
+        n_g <- length(rows)
+        size_g <- max(1L, min(n_g, floor((n_g / total_n) * desired_total)))
+        rows[sample.int(n_g, size = size_g)]
+      }), use.names = FALSE)
+      dt <- dt[keep_ds]
+      data.table::setcolorder(dt, c(target, setdiff(names(dt), target)))
     } else {
-      dt <- dt[sample(.N, size = desired_total)]
+      keep_ds <- sample.int(total_n, size = desired_total)
+      dt <- dt[keep_ds]
     }
   }
 
@@ -526,6 +619,25 @@ fs_randomforest <- function(data,
   df_all <- as.data.frame(dt)
   train_df <- df_all[index, , drop = FALSE]
   test_df <- df_all[-index, , drop = FALSE]
+
+  # Per-tree sampling strata, read from the training rows themselves (before
+  # any hook or filter can drop the column).
+  strata_train <- NULL
+  if (!is.null(ctrl$strata)) {
+    if (!ctrl$strata %in% names(train_df)) {
+      stop(sprintf("'control$strata' names column '%s', which is not in the data%s.",
+                   ctrl$strata,
+                   if (is.null(ctrl$preprocess)) "" else " after control$preprocess"),
+           call. = FALSE)
+    }
+    if (anyNA(df_all[[ctrl$strata]])) {
+      stop(sprintf(paste(
+        "'control$strata' column '%s' contains NA; randomForest cannot",
+        "sample from an unknown stratum. Remove or recode those rows first."
+      ), ctrl$strata), call. = FALSE)
+    }
+    strata_train <- droplevels(as.factor(train_df[[ctrl$strata]]))
+  }
 
   if (nrow(test_df) == 0L) {
     stop("Test split is empty; adjust 'control$train_ratio'.", call. = FALSE)
@@ -550,6 +662,11 @@ fs_randomforest <- function(data,
   for (nm in predictor_cols) {
     if (is.character(train_df[[nm]])) {
       train_df[[nm]] <- factor(train_df[[nm]])
+    } else if (is.factor(train_df[[nm]])) {
+      # Row subsetting keeps the full-data levels; drop those with no training
+      # rows so a test-only level becomes NA (and is imputed) exactly as it
+      # does for a character predictor.
+      train_df[[nm]] <- droplevels(train_df[[nm]])
     }
   }
 
@@ -634,6 +751,20 @@ fs_randomforest <- function(data,
     }
   }
 
+  # ---- Infinite values (imputation only replaces NA/NaN) ----------------------
+  inf_cols <- names(train_df)[vapply(names(train_df), function(nm) {
+    nm != target && is.numeric(train_df[[nm]]) &&
+      (any(is.infinite(train_df[[nm]])) ||
+         (nm %in% names(test_df) && any(is.infinite(test_df[[nm]]))))
+  }, logical(1L))]
+  if (length(inf_cols) > 0L) {
+    stop("Predictors contain infinite values (Inf/-Inf) in: ",
+         paste(utils::head(inf_cols, 5L), collapse = ", "),
+         if (length(inf_cols) > 5L) ", ..." else "",
+         ". Remove or replace them before calling fs_randomforest().",
+         call. = FALSE)
+  }
+
   # ---- Prepare X/Y for training ----------------------------------------------
   if (!target %in% names(train_df)) {
     stop("Target column missing from training data after preprocessing.",
@@ -648,6 +779,15 @@ fs_randomforest <- function(data,
   if (is.na(n_pred) || n_pred < 1L) {
     stop("No predictor columns left after preprocessing/feature selection/NZV removal.",
          call. = FALSE)
+  }
+  # randomForest never terminates on a classification fit in which no
+  # predictor can be split (reachable with control$drop_zerovar = FALSE).
+  all_constant <- all(vapply(x_train, function(x) {
+    length(unique(x[!is.na(x)])) <= 1L
+  }, logical(1L)))
+  if (all_constant) {
+    stop("Every predictor is constant in the training rows, so the forest ",
+         "has nothing to split on.", call. = FALSE)
   }
 
   # ---- Compute mtry safely ----------------------------------------------------
@@ -687,7 +827,31 @@ fs_randomforest <- function(data,
     if (length(sampsize_eff) == 1L) {
       sampsize_eff <- min(sampsize_eff, nrow(x_train))
     } else {
-      sampsize_eff <- pmin(sampsize_eff, nrow(x_train))
+      # randomForest checks each entry against the frequency of its class (or
+      # stratum) in the rows it is given, i.e. the internal training split,
+      # which the caller cannot know in advance.
+      group_freq <- if (!is.null(strata_train)) {
+        table(strata_train)
+      } else {
+        table(y_train)
+      }
+      if (length(sampsize_eff) == length(group_freq)) {
+        freq <- as.integer(group_freq)
+        over <- sampsize_eff > freq
+        if (any(over)) {
+          warning(sprintf(paste(
+            "'control$sampsize' clamped to the %s frequencies in the training",
+            "split: %s."
+          ),
+          if (is.null(strata_train)) "class" else "stratum",
+          paste(sprintf("%s %d -> %d", names(group_freq)[over],
+                        sampsize_eff[over], freq[over]), collapse = ", ")),
+          call. = FALSE)
+          sampsize_eff <- pmin(sampsize_eff, freq)
+        }
+      } else {
+        sampsize_eff <- pmin(sampsize_eff, nrow(x_train))
+      }
     }
   }
 
@@ -721,7 +885,7 @@ fs_randomforest <- function(data,
     nodesize = ctrl$nodesize,
     maxnodes = ctrl$maxnodes,
     sampsize = sampsize_eff,
-    strata = ctrl$strata,
+    strata = strata_train,
     classwt = ctrl$classwt,
     replace = isTRUE(ctrl$replace),
     do.trace = FALSE,
@@ -785,20 +949,22 @@ fs_randomforest <- function(data,
 
     acc <- mean(preds == y_test)
 
-    kappa <- try(caret::confusionMatrix(preds, y_test)$overall[["Kappa"]],
-                 silent = TRUE)
-    if (inherits(kappa, "try-error") || is.null(kappa)) kappa <- NA_real_
-
     confusion <- table(Observed = y_test, Predicted = preds)
+    # Cohen's kappa from the confusion table directly (the same quantity
+    # caret::confusionMatrix() reports, without its hidden e1071 dependency).
+    kappa <- rf_cohen_kappa(confusion)
 
     auc <- NA_real_
-    if (nlevels(y_test) == 2L && !is.null(probs)) {
+    if (nlevels(y_test) == 2L && !is.null(probs) &&
+        any(table(y_test) == 0L)) {
+      warning("The held-out rows contain only one of the two classes, so ",
+              "AUC is undefined and reported as NA.", call. = FALSE)
+    } else if (nlevels(y_test) == 2L && !is.null(probs)) {
       if (requireNamespace("pROC", quietly = TRUE)) {
         levels_y <- levels(y_test)
 
         # Determine positive class and level ordering for pROC.
-        if (!is.null(ctrl$positive_class) &&
-            ctrl$positive_class %in% levels_y) {
+        if (!is.null(ctrl$positive_class)) {
           positive <- ctrl$positive_class
           negative <- setdiff(levels_y, positive)
           roc_levels <- c(negative, positive)
@@ -833,7 +999,13 @@ fs_randomforest <- function(data,
     rmse <- sqrt(mean(err^2))
     mae <- mean(abs(err))
     sst <- sum((y_test - mean(y_test))^2)
-    r2 <- if (sst > 0) 1 - sum(err^2) / sst else NA_real_
+    # Relative test: a target that is constant up to round-off has a tiny
+    # positive SST, and 1 - SSE/SST would then be a ratio of round-off.
+    r2 <- if (sst > 0 && !is_numerically_constant(y_test, tol = 1e-12)) {
+      1 - sum(err^2) / sst
+    } else {
+      NA_real_
+    }
     metrics <- list(RMSE = rmse, MAE = mae, R2 = r2)
   }
 

@@ -33,7 +33,12 @@ other type is an error.}
 \item{threshold}{Non-negative, finite numeric scalar threshold applied to
 the feature scores (not to the target directly). Default 0. Note that the
 two methods put scores on different scales: \code{[0, 1]} for
-\code{"correlation"} and \code{[0, Inf]} for \code{"anova"}.}
+\code{"correlation"} and \code{[0, Inf]} for \code{"anova"}. With the
+defaults (\code{threshold = 0}, \code{direction = "above"},
+\code{action = "keep"}) nothing is filtered in practice: any
+non-constant feature has a sample \eqn{|r| > 0} or \eqn{F > 0}, even
+when it is pure noise, so every feature with a defined score is kept.
+Choose a threshold to make an actual selection.}
 
 \item{direction}{One of \code{"above"} (default), \code{"below"}; compares
 scores to \code{threshold}.}
@@ -140,8 +145,10 @@ Features whose score is undefined (\code{NA}) are never selected, under
 both \code{action = "keep"} and \code{action = "remove"}; a warning
 reports how many such features were excluded.
 
-Columns are subset by integer index, never by name, so duplicated column
-names cannot select the wrong columns.
+Columns are subset by integer index, never by name, so duplicated feature
+names cannot select the wrong columns. The target's name must be unique,
+and every column must have a non-empty, non-NA name (a matrix keeps its own
+column names; \code{V1}, \code{V2}, ... are used only when it has none).
 }
 \examples{
 df <- data.frame(

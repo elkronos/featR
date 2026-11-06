@@ -1,6 +1,6 @@
 # Lasso / elastic-net feature selection for featR.
-# Suggests: glmnet, Matrix (always); doParallel + foreach (only when
-# parallel = TRUE and more than one worker resolves).
+# Suggests: glmnet (always); doParallel + foreach (only when parallel = TRUE
+# and more than one worker resolves).
 
 #' Validate fs_lasso() input parameters
 #'
@@ -162,8 +162,9 @@ lasso_handle_missing <- function(x, impute) {
 #' comes back as "`my var`" (and a factor "my grp" as "`my grp`b"). That
 #' leading backticked segment is replaced by the name it quotes, so reported
 #' names match the caller's columns. Names without a leading backtick are
-#' returned unchanged. Shared by fs_lasso(), fs_elastic(), fs_stepwise() and
-#' fs_mars().
+#' returned unchanged. Shared by fs_lasso(), fs_elastic(), fs_stepwise(),
+#' fs_mars() and fs_svm() (via svm_encode()), so a change here affects all of
+#' them.
 #'
 #' @param x Character vector of names (NULL passes through).
 #' @return `x` with the leading quoted segment unquoted.
@@ -181,11 +182,41 @@ unbacktick_names <- function(x) {
     if (length(m) == 0L) {
       return(nm)
     }
-    inner <- substr(m, 2L, nchar(m) - 1L)
-    inner <- gsub("\\\\(.)", "\\1", inner, perl = TRUE)
+    # Let the parser undo deparse()'s escaping, so "\\n" becomes a newline
+    # again rather than a literal "n".
+    inner <- tryCatch(as.character(str2lang(m)), error = function(e) {
+      gsub("\\\\(.)", "\\1", substr(m, 2L, nchar(m) - 1L), perl = TRUE)
+    })
     paste0(inner, substr(nm, nchar(m) + 1L, nchar(nm)))
   }, character(1L), USE.NAMES = FALSE)
   x
+}
+
+#' Stop when a categorical predictor has fewer than two observed levels
+#'
+#' `stats::model.matrix()` (and `lm()`) cannot build contrasts for a factor or
+#' character column with a single distinct non-missing value and fails with
+#' the cryptic "contrasts can be applied only to factors with 2 or more
+#' levels", which never names the column. Shared by fs_lasso() and
+#' fs_stepwise().
+#'
+#' @param x A data frame of predictors.
+#' @param fn Name of the calling function, for the message.
+#' @return `x`, invisibly; errors naming the offending columns otherwise.
+#' @noRd
+lasso_check_categorical_levels <- function(x, fn) {
+  bad <- names(x)[vapply(x, function(col) {
+    (is.factor(col) || is.character(col)) &&
+      length(unique(col[!is.na(col)])) < 2L
+  }, logical(1L))]
+  if (length(bad) > 0L) {
+    stop(sprintf(
+      "%s(): categorical predictor(s) with fewer than two observed levels: %s%s. A single-level factor/character column carries no information and cannot be dummy-coded; remove it before calling %s().",
+      fn, paste0("'", utils::head(bad, 5L), "'", collapse = ", "),
+      if (length(bad) > 5L) ", ..." else "", fn
+    ), call. = FALSE)
+  }
+  invisible(x)
 }
 
 #' Prepare predictors as a numeric dense matrix without missing values
@@ -193,16 +224,21 @@ unbacktick_names <- function(x) {
 #' Builds the design matrix through `stats::model.frame(na.action =
 #' stats::na.pass)` so rows with NA survive to the missing-value policy:
 #' `stats::model.matrix()` alone silently ignores its `na.action` argument
-#' and would drop those rows.
+#' and would drop those rows. Design-matrix names must be unique (a factor
+#' dummy such as `gb` for factor `g`, level `b`, can collide with a column
+#' `gb`, or with the target), because `selected` and `scores` identify columns
+#' by name; a collision is an error.
 #'
 #' @param x A data frame of predictors (target column already removed).
 #' @param impute Either "none" or "mean".
+#' @param target Name of the target column, checked for collisions too.
 #' @return A purely numeric dense matrix with no missing values.
 #' @noRd
-lasso_prepare <- function(x, impute) {
+lasso_prepare <- function(x, impute, target = NULL) {
   if (!is.data.frame(x)) {
     stop("Internal error: 'lasso_prepare' expects a data.frame.")
   }
+  lasso_check_categorical_levels(x, "fs_lasso")
 
   mm <- stats::model.matrix(
     ~ . - 1,
@@ -214,6 +250,7 @@ lasso_prepare <- function(x, impute) {
   }
   # Report the caller's column names, not model.matrix()'s backticked labels.
   colnames(mm) <- unbacktick_names(colnames(mm))
+  assert_unique_encoded_names(colnames(mm), target, "fs_lasso")
 
   if (ncol(mm) < 2L) {
     stop("fs_lasso() needs at least two design-matrix columns (glmnet cannot ",
@@ -242,15 +279,10 @@ lasso_prepare <- function(x, impute) {
   mm
 }
 
-#' Convert a numeric dense matrix to a sparse matrix
-#' @noRd
-lasso_sparse <- function(x) {
-  Matrix::Matrix(x, sparse = TRUE)
-}
-
 #' Fit a lasso/elastic-net model with cross-validation
 #'
-#' @param x_sparse A sparse matrix of predictors.
+#' @param x A dense numeric matrix of predictors (from `lasso_prepare()`;
+#'   sparse input is deliberately avoided, see the note in `fs_lasso()`).
 #' @param y A numeric response vector.
 #' @param alpha Numeric in (0, 1].
 #' @param nfolds Integer number of CV folds.
@@ -264,7 +296,7 @@ lasso_sparse <- function(x) {
 #'   `glmnet::cv.glmnet()` so prevalidated fits are retained.
 #' @return The fitted cv.glmnet object.
 #' @noRd
-lasso_fit <- function(x_sparse, y, alpha, nfolds, standardize,
+lasso_fit <- function(x, y, alpha, nfolds, standardize,
                       use_parallel, n_cores, custom_folds, seed, verbose,
                       return_model) {
   local_seed(seed)
@@ -282,7 +314,7 @@ lasso_fit <- function(x_sparse, y, alpha, nfolds, standardize,
   }
 
   args <- list(
-    x = x_sparse,
+    x = x,
     y = y,
     alpha = alpha,
     nfolds = nfolds,
@@ -388,6 +420,22 @@ lasso_importance <- function(coefs) {
 #' those raw coefficients are kept in `details$coefficients`. With
 #' `standardize = FALSE`, `scores` is the raw table and the two are identical.
 #'
+#' Constant columns get a coefficient of exactly 0 and are never selected.
+#' The same holds for columns that are constant up to floating-point
+#' round-off (spread negligible relative to magnitude): standardization would
+#' otherwise blow that round-off up to a full-scale predictor with a raw
+#' coefficient around 1e15, so such columns are held at 0 during the fit. A
+#' column whose variance overflows (values around 1e154 or larger) is an
+#' error; rescale it first. Coefficients that are floating-point residue
+#' (below `1e-10` times the largest standardized coefficient) are reported as
+#' exactly 0: with all-level dummy coding of the first factor, the redundant
+#' level otherwise kept a coefficient around 1e-13 and was selected.
+#'
+#' Design-matrix names must be unique, because `selected` and `scores` name
+#' columns: a factor dummy that collides with another column or the target
+#' (factor `g` with level `b` next to a column `gb`) is an error, as is a
+#' factor or character predictor with fewer than two observed levels.
+#'
 #' Raw coefficient magnitude is a scale-dependent notion of importance: a
 #' predictor measured in small units earns a large coefficient for the same
 #' effect. That applies to `details$coefficients` always, and to `scores` when
@@ -401,7 +449,7 @@ lasso_importance <- function(coefs) {
 #' that this leaks. Columns that are entirely NA are an error either way.
 #'
 #' @param data A data.frame or data.table holding the target and the candidate
-#'   predictors. A numeric matrix with column names is also accepted;
+#'   predictors, with unique, non-empty column names. A numeric matrix with column names is also accepted;
 #'   non-numeric matrices are not (supply a data.frame so factors and
 #'   characters can be expanded by `model.matrix()`).
 #' @param target Single string naming the outcome column in `data`. It must be
@@ -437,12 +485,11 @@ lasso_importance <- function(coefs) {
 #' @param lambda Which cross-validated penalty to select at: `"min"`
 #'   (default, `lambda.min`) or `"1se"` (`lambda.1se`, sparser). See Details.
 #' @return An `fs_result` object with:
-#'   \item{selected}{Design-matrix columns whose raw coefficient at the
-#'     chosen lambda (`lambda.min` by default) is non-zero, ordered by
-#'     decreasing `scores` magnitude.
-#'     (Selection reads the raw coefficients, so a constant column that glmnet
-#'     nonetheless gave a non-zero coefficient is reported even though its
-#'     standardized score is 0.)}
+#'   \item{selected}{Design-matrix columns whose coefficient at the chosen
+#'     lambda (`lambda.min` by default) is non-zero, ordered by decreasing
+#'     `scores` magnitude. Constant (and numerically constant) columns always
+#'     have coefficient 0, so they are never selected; floating-point residue
+#'     coefficients are zeroed (see Details).}
 #'   \item{scores}{data.frame with columns Variable, Coefficient and
 #'     AbsCoefficient, one row per design-matrix column (including those
 #'     shrunk to zero), ordered by decreasing AbsCoefficient, on the
@@ -460,8 +507,7 @@ lasso_importance <- function(coefs) {
 #'   \item{call}{The matched call.}
 #' @examples
 #' \donttest{
-#' if (requireNamespace("glmnet", quietly = TRUE) &&
-#'     requireNamespace("Matrix", quietly = TRUE)) {
+#' if (requireNamespace("glmnet", quietly = TRUE)) {
 #'   n <- 100
 #'   df <- data.frame(
 #'     x1 = rnorm(n),
@@ -477,9 +523,9 @@ lasso_importance <- function(coefs) {
 #' @export
 fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
                      custom_folds = NULL, impute = c("none", "mean"),
-                     return_model = FALSE, seed = NULL, verbose = FALSE,
-                     parallel = FALSE, n_cores = 2L,
-                     lambda = c("min", "1se")) {
+                     return_model = FALSE, lambda = c("min", "1se"),
+                     seed = NULL, verbose = FALSE,
+                     parallel = FALSE, n_cores = 2L) {
 
   mc <- match.call()
 
@@ -493,6 +539,9 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
   data <- as.data.frame(data)
 
   assert_target(data, target)
+  # model.frame(~ .) keeps only one copy of a duplicated name, so the other
+  # copy silently vanished from the design matrix and from the scores.
+  assert_column_names(data, "fs_lasso")
   impute <- match.arg(impute)
   lambda <- match.arg(lambda)
   lambda_s <- paste0("lambda.", lambda)
@@ -508,50 +557,72 @@ fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
                  return_model, seed, verbose, parallel)
   n_cores <- resolve_cores(n_cores, "n_cores")
 
-  fs_require(c("glmnet", "Matrix"), "lasso feature selection")
+  fs_require("glmnet", "lasso feature selection")
   if (parallel && n_cores > 1L) {
     fs_require(c("doParallel", "foreach"), "parallel cross-validation")
   }
 
   # Prepare predictors -> dense numeric matrix with names, no NA
-  x_dense <- lasso_prepare(data[, predictor_names, drop = FALSE], impute)
+  x_dense <- lasso_prepare(data[, predictor_names, drop = FALSE], impute,
+                           target = target)
 
   # Sanity check: row alignment
   if (nrow(x_dense) != length(y)) {
     stop("Internal error: prepared predictor matrix and the target have different numbers of rows.")
   }
 
-  # Convert to sparse for glmnet
-  x_sparse <- lasso_sparse(x_dense)
+  # Fit on the dense matrix. glmnet's sparse-input standardization computes
+  # the variance as E[x^2] - E[x]^2, which for a nonzero constant column (or
+  # one in units small enough that x^2 underflows) is rounding noise or 0:
+  # the lambda path becomes NaN and cv.glmnet() fails with "NA subscripts in
+  # x[i,j]" or "need at least two non-NA values to interpolate". The dense
+  # path handles such columns (their coefficient is simply 0), and x_dense is
+  # already in memory, so a sparse copy saved nothing.
+  sds <- apply(x_dense, 2L, stats::sd)
+  if (any(!is.finite(sds))) {
+    bad <- colnames(x_dense)[!is.finite(sds)]
+    stop("Predictor column(s) whose variance overflows double precision: ",
+         paste(utils::head(bad, 5L), collapse = ", "),
+         if (length(bad) > 5L) ", ..." else "",
+         ". glmnet would silently give them a zero coefficient; rescale them ",
+         "before calling fs_lasso().", call. = FALSE)
+  }
+  # Columns constant up to round-off: glmnet's standardization would divide
+  # by an sd of ~1e-17 and fit the round-off as a full-scale predictor (raw
+  # coefficient ~1e15). Hold them at an exact constant so the fit gives them
+  # coefficient 0, like a truly constant column.
+  near_const <- vapply(seq_len(ncol(x_dense)), function(j) {
+    is_numerically_constant(x_dense[, j])
+  }, logical(1L))
+  x_fit <- x_dense
+  if (any(near_const)) {
+    x_fit[, near_const] <- 0
+    sds[near_const] <- 0
+  }
 
   # Fit model
-  lasso_model <- lasso_fit(x_sparse, y, alpha, nfolds, standardize,
+  lasso_model <- lasso_fit(x_fit, y, alpha, nfolds, standardize,
                            parallel, n_cores, custom_folds, seed, verbose,
                            return_model)
 
-  # Coefficients at the chosen lambda, on the raw and the standardized scale
+  # Coefficients at the chosen lambda, in design-matrix column order
   coefs_raw <- lasso_coefficients(lasso_model, colnames(x_dense), s = lambda_s)
+  coefs_raw[is.na(coefs_raw)] <- 0
+  # Zero out floating-point residue: the first factor is dummy-coded with all
+  # of its levels, which are collinear with glmnet's intercept, and the
+  # redundant level is often left at ~1e-13. The tolerance is relative to the
+  # largest coefficient on the unit-free standardized scale.
+  coefs_std <- coefs_raw * unname(sds)
+  tol <- 1e-10 * max(abs(coefs_std), 0)
+  coefs_raw[abs(coefs_std) <= tol] <- 0
+  coefs_std[abs(coefs_std) <= tol] <- 0
+
   importance_raw <- lasso_importance(coefs_raw)
+  scores_df <- if (isTRUE(standardize)) lasso_importance(coefs_std) else importance_raw
 
-  if (isTRUE(standardize)) {
-    sds <- apply(x_dense, 2L, stats::sd)
-    sds[!is.finite(sds)] <- 0
-    # Multiply positionally, not by name: model.matrix() can emit duplicate
-    # column names (a factor's level dummy colliding with another column), and
-    # sds[names(coefs_raw)] would then hand the first match's SD to every
-    # duplicate. Both vectors are in design-matrix column order by
-    # construction, so position is the reliable key.
-    if (length(sds) != length(coefs_raw)) {
-      stop("Internal error: standard-deviation and coefficient vectors have different lengths.")
-    }
-    scores_df <- lasso_importance(coefs_raw * unname(sds))
-  } else {
-    scores_df <- importance_raw
-  }
-
-  # Selection is decided on the raw coefficients (a constant column has a
-  # standardized coefficient of 0 even when its raw coefficient is not).
-  nonzero <- names(coefs_raw)[!is.na(coefs_raw) & coefs_raw != 0]
+  # Design-matrix names are unique (lasso_prepare() enforces it), so the
+  # name-based lookup below is unambiguous.
+  nonzero <- names(coefs_raw)[coefs_raw != 0]
   selected_features <- scores_df$Variable[scores_df$Variable %in% nonzero]
 
   if (isTRUE(verbose)) {

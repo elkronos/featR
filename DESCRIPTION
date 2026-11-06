@@ -1,13 +1,14 @@
 Package: featR
 Title: A Unified Toolkit for Feature Selection
-Version: 0.1.0
+Version: 0.2.0
 Authors@R:
     person("Justin", "Chase", email = "jchase.msu@gmail.com",
            role = c("aut", "cre", "cph"))
 Description: Filter, wrapper, and embedded feature-selection methods behind a
     consistent set of functions that share one calling convention and one
-    return type: correlation and chi-squared filters, information gain, LASSO
-    and elastic net, Bayesian model comparison, Boruta, recursive feature
+    return type: univariate threshold filters, correlation and chi-squared
+    filters, information gain, LASSO and elastic net, Bayesian model
+    comparison, Boruta, recursive feature
     elimination, random forest importance, multivariate adaptive regression
     splines, support vector machine recursive feature elimination, stepwise
     selection, and principal component / singular value decomposition
@@ -30,6 +31,7 @@ Depends:
     R (>= 4.1.0)
 Imports:
     data.table,
+    methods,
     parallel,
     stats,
     utils,

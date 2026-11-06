@@ -64,7 +64,8 @@ test_that("stepwise selection returns an fs_result that keeps the true signal", 
 
   # documented details, all present and named
   expect_named(out$details,
-               c("final_model", "coefficients", "selected_terms", "direction",
+               c("final_model", "coefficients", "coefficient_scores",
+                 "selected_terms", "direction",
                  "n_features", "dropped_na_rows"))
   expect_identical(out$details$final_model, out$model)
   expect_identical(out$details$selected_terms, out$selected)
@@ -290,4 +291,91 @@ test_that("a user-supplied scope replaces the default instead of colliding", {
   res <- fs_stepwise(d, "y", direction = "both",
                      scope = list(lower = ~ noise1, upper = ~ x1 + x2 + noise1 + noise2))
   expect_true(all(c("x1", "x2", "noise1") %in% selected(res)))
+})
+
+test_that("fs_stepwise rejects duplicated column names clearly", {
+  # REGRESSION: failed inside terms.formula() with "duplicated name 'x1' in
+  # data frame using '.'".
+  set.seed(14)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x1 = rnorm(n), y = rnorm(n),
+                  check.names = FALSE)
+  expect_error(fs_stepwise(d, "y"), "duplicated: x1")
+})
+
+test_that("fs_stepwise reports infinite values by column", {
+  # REGRESSION: Inf survived na.omit() and lm() failed with "NA/NaN/Inf in 'x'".
+  set.seed(15)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n), y = rnorm(n))
+  d$x2[3] <- Inf
+  expect_error(fs_stepwise(d, "y"), "infinite values.*x2")
+})
+
+test_that("scores are keyed by the selected term labels (factor terms too)", {
+  skip_if_not_installed("MASS")
+  i <- seq_len(120)
+  grp <- factor(c("a", "b", "c")[(i %% 3) + 1L])
+  df <- data.frame(x1 = sin(i), grp = grp, x3 = cos(i / 5))
+  df$y <- df$x1 + 2 * (df$grp == "b") + 0.3 * sin(7 * i)
+  res <- fs_stepwise(df, "y")
+  expect_true("grp" %in% selected(res))
+  expect_identical(names(res$scores), selected(res))
+  cs <- res$details$coefficient_scores
+  expect_true(all(c("grpb", "grpc") %in% names(cs)))
+  expect_equal(res$scores[["grp"]], max(cs[c("grpb", "grpc")]))
+  expect_equal(res$scores[["x1"]], cs[["x1"]])
+  # summary() stars every row, because every scored term is selected
+  out <- capture.output(summary(res))
+  expect_false(any(grepl("^\\s*grp[bc]\\b", out)))
+  expect_true(any(grepl("^\\s*grp\\s.*\\*", out)))
+})
+
+test_that("a factor dummy colliding with another column name is an error", {
+  skip_if_not_installed("MASS")
+  i <- seq_len(60)
+  d <- data.frame(g = factor(rep(c("a", "b"), 30)), gb = sin(i), z = cos(i))
+  d$y <- 2 * (d$g == "b") + d$z + 0.1 * sin(7 * i)
+  expect_error(fs_stepwise(d, "y"), "collide with existing columns: gb")
+})
+
+test_that("a single-level categorical predictor is a clear, named error", {
+  skip_if_not_installed("MASS")
+  i <- seq_len(30)
+  d <- data.frame(y = sin(i), a = cos(i), b = sin(i / 3), f = "u")
+  expect_error(fs_stepwise(d, "y"), "fewer than two observed levels: 'f'")
+  # a level that disappears with the incomplete rows counts too
+  d$f <- rep(c("u", "v"), 15)
+  d$a[d$f == "v"] <- NA
+  expect_error(suppressWarnings(fs_stepwise(d, "y")),
+               "fewer than two observed levels: 'f'")
+})
+
+test_that("a saturated full model is a clear error in every direction", {
+  skip_if_not_installed("MASS")
+  i <- seq_len(5)
+  d <- data.frame(y = sin(i), a = cos(i), b = sin(2 * i), c = cos(3 * i),
+                  e = sin(5 * i))
+  for (dir in c("both", "backward")) {
+    expect_error(fs_stepwise(d, "y", direction = dir),
+                 "no residual degrees of freedom")
+  }
+  # Forward starts from the intercept; walking into a perfect fit warns.
+  expect_warning(fs_stepwise(d, "y", direction = "forward"),
+                 "no residual degrees of freedom")
+})
+
+test_that("forward selection with more predictors than rows is allowed", {
+  # REGRESSION: the saturated-full-model check also fired for forward
+  # searches, which start from the intercept and are the usual p >= n tool.
+  skip_if_not_installed("MASS")
+  set.seed(3)
+  n <- 15
+  d <- as.data.frame(matrix(rnorm(n * 20), n))
+  d$y <- 2 * d$V1 + rnorm(n, sd = 0.3)
+  res <- suppressWarnings(fs_stepwise(d, "y", direction = "forward",
+                                      steps = 3))
+  expect_true("V1" %in% selected(res))
+  expect_error(fs_stepwise(d, "y", direction = "backward"),
+               "no residual degrees of freedom")
 })

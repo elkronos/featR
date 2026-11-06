@@ -24,7 +24,8 @@ boruta_preprocess_predictors <- function(data, target) {
   assert_string(target, "target")
 
   # Exclude the target variable from predictors (if present)
-  predictors <- data[, setdiff(names(data), target), drop = FALSE]
+  # (by position: setdiff() on names would silently de-duplicate them)
+  predictors <- data[, names(data) != target, drop = FALSE]
 
   # Validate supported variable types before transformation:
   # numeric, factor, character, logical, Date, POSIXt (POSIXct/POSIXlt)
@@ -289,10 +290,14 @@ boruta_prune_correlated <- function(predictors,
 #'   character and logical columns are converted to factors and Date/POSIXt
 #'   columns to numeric, and any other type is an error. Neither the target
 #'   nor the predictors may contain missing values, since Boruta's underlying
-#'   random forest cannot fit them.
+#'   random forest cannot fit them. Column names must be unique and
+#'   non-empty, and `data` must hold at least one predictor besides the
+#'   target.
 #' @param target Name of the target column in `data`. A factor target is
 #'   treated as classification, a numeric target as regression; any other type
-#'   is an error, as is a target containing NAs.
+#'   is an error, as is a target containing NAs or infinite values. Unused
+#'   factor levels are dropped, and a factor target with fewer than two
+#'   observed classes is an error.
 #' @param maxRuns Whole number of at least 11 (the minimum Boruta itself
 #'   accepts). Maximum number of Boruta iterations.
 #'   Default 250.
@@ -368,6 +373,9 @@ fs_boruta <- function(data,
   # Coerce to base data.frame
   data <- as.data.frame(data)
 
+  # Predictors are selected by name below, so a duplicated name (including a
+  # second column sharing the target's name) would silently drop a column.
+  assert_column_names(data, "fs_boruta")
   assert_target(data, target, "target")
   # Boruta::Boruta.default() itself stops below 11 runs; validate here so the
   # error names the featR argument instead of surfacing from the dependency.
@@ -381,12 +389,7 @@ fs_boruta <- function(data,
   assert_flag(resolve_tentative, "resolve_tentative")
   assert_flag(verbose, "verbose")
 
-  fs_require("Boruta", "Boruta feature selection")
-
-  # Optional local seeding; the previous RNG state is restored on exit
-  local_seed(seed)
-
-  # Prepare y (target)
+  # ---- Data validation (needs no Boruta, so it runs before fs_require) ----
   y <- data[[target]]
 
   # Validate target type
@@ -396,15 +399,37 @@ fs_boruta <- function(data,
   if (anyNA(y)) {
     stop("`target` contains missing values; please impute or remove them before calling `fs_boruta()`.")
   }
+  # anyNA() does not catch Inf; an infinite regression target makes every
+  # ranger permutation importance NaN, so Boruta's shadow tests are undefined.
+  if (is.numeric(y) && any(is.infinite(y))) {
+    stop("`target` contains infinite values (Inf/-Inf); please remove or replace them before calling `fs_boruta()`.",
+         call. = FALSE)
+  }
+  if (is.factor(y)) {
+    # Unused levels would otherwise be dropped by ranger on every run; a
+    # single observed class gives all-zero importances and no error.
+    y <- assert_two_classes(y, target, "fs_boruta")
+  }
   task <- if (is.factor(y)) "classification" else "regression"
 
   # Prepare predictors
   predictors <- boruta_preprocess_predictors(data, target)
 
+  # Boruta's shadow-padding loop never terminates on a zero-column frame.
+  if (ncol(predictors) == 0L) {
+    stop(sprintf("'data' must contain at least one predictor column besides '%s'.",
+                 target), call. = FALSE)
+  }
+
   # Enforce NA-free predictors for Boruta/randomForest
   if (anyNA(predictors)) {
     stop("Predictors contain missing values; please impute or remove them before calling `fs_boruta()`.")
   }
+
+  fs_require("Boruta", "Boruta feature selection")
+
+  # Optional local seeding; the previous RNG state is restored on exit
+  local_seed(seed)
 
   # Run Boruta (no `seed` argument supported by Boruta itself). Boruta
   # forwards `...` to its importance source, and both default sources accept

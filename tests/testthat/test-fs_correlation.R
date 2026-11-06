@@ -387,3 +387,22 @@ test_that("a character NA diag_value is rejected up front", {
                "single numeric value or NA")
   expect_no_error(fs_correlation(d, 0.9, diag_value = NA))
 })
+
+test_that("fs_correlation rejects empty column names clearly", {
+  # REGRESSION: a column named "" could not be looked up in the correlation
+  # matrix's dimnames and pruning failed with "subscript out of bounds".
+  set.seed(3)
+  d <- data.frame(a = rnorm(20), b = rnorm(20), c = rnorm(20))
+  names(d)[2] <- ""
+  expect_error(fs_correlation(d, 0.5), "empty or NA column names")
+})
+
+test_that("fs_correlation validates seed even when no sampling happens", {
+  # REGRESSION: the seed was only checked inside the row-sampling helper, so
+  # with the default sample_frac = 1 a fractional or non-numeric seed was
+  # silently accepted, unlike every other seeded featR function.
+  d <- data.frame(a = c(1, 2, 3, 4), b = c(2, 4, 5, 9), c = c(4, 1, 3, 2))
+  expect_error(fs_correlation(d, 0.9, seed = 1.5), "whole number")
+  expect_error(fs_correlation(d, 0.9, seed = "a"), "single finite number")
+  expect_no_error(suppressMessages(fs_correlation(d, 0.9, seed = 1)))
+})

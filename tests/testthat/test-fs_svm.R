@@ -724,3 +724,338 @@ test_that("fs_svm rejects a fractional seed before any work", {
     "'seed' must be a whole number"
   )
 })
+
+test_that("encoded names keep literal backticks and backslashes (svm_encode)", {
+  # REGRESSION: svm_encode() deleted every backtick from dummyVars()'s names,
+  # but backtick() escapes a literal backtick as \`, so column "a`b" was
+  # reported as "a\b" -- the name of a different column.
+  d <- data.frame(y = rnorm(20), `a\`b` = rnorm(20), `a\\b` = rnorm(20),
+                  `\`ab` = rnorm(20), check.names = FALSE)
+  dv <- svm_dummy_encoder(d, "y")
+  enc <- svm_encode(dv, d)
+  expect_identical(names(enc), c("a`b", "a\\b", "`ab"))
+})
+
+test_that("fs_svm rejects empty class labels and empty column names clearly", {
+  # REGRESSION: an empty-string class failed inside caret with "subscript out
+  # of bounds", and an empty column name with "undefined columns selected".
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  set.seed(41)
+  n <- 40
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- factor(ifelse(d$x1 > 0, "", "b"))
+  expect_error(fs_svm(d, "y", task = "classification", nfolds = 2),
+               "empty-string class label")
+  d$y <- factor(ifelse(d$x1 > 0, "a", "b"))
+  names(d)[2] <- ""
+  expect_error(fs_svm(d, "y", task = "classification", nfolds = 2),
+               "empty or NA column names")
+})
+
+test_that("rf_rfe scores average each resample once, not once per surviving subset size", {
+  # Second-round statistical review: caret::rfe() records a variable's
+  # importance once for every subset size it survived to. Averaging all rows
+  # weighted each resample by how far the variable survived there, i.e. by
+  # how important it looked, inflating marginal predictors. "a" is worth 10
+  # in Fold1 (survives sizes 1-3) and 0 in Fold2 (only the full size): its
+  # mean importance across the two resamples is 5, not (3 * 10 + 0) / 4.
+  rfe_obj <- list(variables = data.frame(
+    Overall   = c(10, 10, 10, 1, 1, 0, 4),
+    var       = c("a", "a", "a", "b", "b", "a", "b"),
+    Variables = c(1L, 2L, 3L, 2L, 3L, 3L, 3L),
+    Resample  = c("Fold1", "Fold1", "Fold1", "Fold1", "Fold1", "Fold2", "Fold2"),
+    stringsAsFactors = FALSE
+  ))
+  out <- featR:::svm_rf_importance(rfe_obj, c("a", "b", "z"))
+  expect_equal(out[["a"]], 5)
+  expect_equal(out[["b"]], 2.5)
+  expect_true(is.na(out[["z"]]))
+})
+
+test_that("seeded runs with n_cores > 1 are reproducible", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("doParallel")
+  skip_if_not_installed("foreach")
+  skip_on_cran()
+  skip_if(parallel::detectCores() < 2L, "needs 2 cores")
+
+  # REGRESSION: caret's default seeds = NA left each resample on whatever
+  # worker stream it landed on (foreach load-balances), so the rf_rfe
+  # importances and the tuning results changed between identical seeded runs.
+  set.seed(1)
+  n <- 150
+  d <- data.frame(matrix(rnorm(n * 6), n))
+  d$y <- factor(ifelse(d$X1 + 0.5 * d$X2 + rnorm(n) > 0, "a", "b"))
+  run <- function() {
+    r <- fs_svm(d, "y", "classification", feature_select = TRUE,
+                select_method = "rf_rfe", seed = 7, n_cores = 2,
+                tune_grid = data.frame(C = c(0.1, 1)))
+    list(r$scores, r$model$results)
+  }
+  first <- run()
+  for (i in 1:3) {
+    expect_identical(run(), first)
+  }
+})
+
+test_that("fs_svm rejects Inf in predictors or target before any engine runs", {
+  # REGRESSION: only NA was checked, so Inf surfaced as caret's "missing value
+  # where TRUE/FALSE needed", a misleading "near-constant" SVM-RFE error, or
+  # kernlab's "No Support Vectors found".
+  d <- svm_toy_regression()
+  d1 <- d
+  d1$x2[3] <- Inf
+  expect_error(fs_svm(d1, "y", "regression"), "finite values.*x2")
+  expect_error(fs_svm(d1, "y", "regression", feature_select = TRUE),
+               "finite values.*x2")
+  d2 <- d
+  d2$y[3] <- -Inf
+  expect_error(fs_svm(d2, "y", "regression"), "finite values.*y")
+})
+
+test_that("svm_coerce_target drops unused target levels before the split", {
+  # REGRESSION: an unused level reached createDataPartition(), which warned
+  # "Some classes have no records" on every call.
+  d <- svm_toy_classification()
+  d$y <- factor(as.character(d$y), levels = c("a", "b", "unused"))
+  out <- featR:::svm_coerce_target(d, "y", "classification")
+  expect_identical(levels(out$y), c("a", "b"))
+
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  skip_on_cran()
+  expect_no_warning(fs_svm(d, "y", "classification", nfolds = 3,
+                           tune_grid = data.frame(C = 1), seed = 1))
+})
+
+test_that("svm_align_levels uses the factor levels observed in training", {
+  # REGRESSION: levels(col_train) of a subset factor is the FULL level set, so
+  # a test-only level was not dropped and unused levels became all-zero
+  # training dummies (selected, and warned about by caret/kernlab).
+  f <- factor(c("p", "q", "p", "q", "rare"), levels = c("p", "q", "rare", "zz"))
+  full <- data.frame(y = 1:5, g = f)
+  train <- full[1:4, , drop = FALSE]
+  test <- full[c(2, 5), , drop = FALSE]
+  expect_warning(
+    out <- featR:::svm_align_levels(train, test, "y"),
+    "Dropped 1 test row"
+  )
+  expect_identical(levels(out$train_set$g), c("p", "q"))
+  expect_identical(levels(out$test_set$g), c("p", "q"))
+  expect_identical(nrow(out$test_set), 1L)
+
+  # factor and character predictors now behave the same
+  train_chr <- train
+  train_chr$g <- as.character(train_chr$g)
+  test_chr <- test
+  test_chr$g <- as.character(test_chr$g)
+  out_chr <- suppressWarnings(featR:::svm_align_levels(train_chr, test_chr, "y"))
+  expect_identical(out_chr$test_set, out$test_set)
+})
+
+test_that("svm_center_scale treats round-off constants as constant and survives tiny units", {
+  # REGRESSION: only sd == 0 was neutralised, so a column constant up to
+  # round-off (0.3 vs 0.1 + 0.2, sd ~ 4e-17) was divided by its round-off sd
+  # and became a full-weight indicator; a column in units of 1e-170 had sd
+  # underflow to exactly 0 and was left unscaled.
+  x <- cbind(k = rep(c(0.3, 0.1 + 0.2), 10), a = seq_len(20) * 1e-170,
+             b = seq_len(20))
+  out <- featR:::svm_center_scale(x)
+  expect_lt(max(abs(out[, "k"])), 1e-10)
+  expect_equal(unname(stats::sd(out[, "a"])), 1)
+  expect_equal(unname(out[, "a"]), unname(out[, "b"]))
+
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+  set.seed(2)
+  n <- 40
+  y <- factor(rep(c("a", "b"), each = 20))
+  xx <- cbind(sig = stats::rnorm(n) + as.integer(y) * 2,
+              z1 = stats::rnorm(n), z2 = stats::rnorm(n),
+              const = ifelse(y == "b", 0.1 + 0.2, 0.3))
+  r <- featR:::svm_rfe_rank(xx, y, "classification", n_features = 1)
+  expect_identical(r$ranking[length(r$ranking)], "const")
+  expect_identical(r$selected, "sig")
+})
+
+test_that("fs_svm stops when a dummy name collides with another column", {
+  # REGRESSION: factor g with level "1" encodes to "g1" next to a numeric
+  # "g1"; selection by name then kept the noise dummy and dropped the real
+  # predictor (test R^2 0.04 instead of 0.99), and `selected` named the wrong
+  # column.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  set.seed(1)
+  n <- 60
+  d <- data.frame(g = factor(sample(c("0", "1"), n, TRUE)),
+                  g1 = stats::rnorm(n), w = stats::rnorm(n))
+  d$y <- 3 * d$g1 + stats::rnorm(n, sd = 0.3)
+  expect_error(
+    fs_svm(d, "y", "regression", feature_select = TRUE, n_features = 1,
+           seed = 1, nfolds = 3),
+    "collide with existing columns: g1"
+  )
+  d2 <- data.frame(g = factor(sample(c("a", "b"), n, TRUE)),
+                   gb = stats::rnorm(n))
+  d2$y <- 3 * (d2$g == "b") + stats::rnorm(n, sd = 0.3)
+  expect_error(fs_svm(d2, "y", "regression", seed = 1, nfolds = 3),
+               "collide with existing columns: gb")
+})
+
+test_that("regression predictions are an unnamed numeric vector", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+  res <- fs_svm(svm_toy_regression(), "y", "regression", nfolds = 3,
+                tune_grid = data.frame(C = 1), seed = 1)
+  expect_null(names(res$details$predictions))
+  expect_type(res$details$predictions, "double")
+  expect_length(res$details$predictions, nrow(res$details$test_set))
+})
+
+test_that("SVM-RFE warns when no candidate size could be scored", {
+  # REGRESSION: when every fold failed, all p features were kept silently.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+  x <- matrix(c(0.1, 0.9, -0.4, 0.3, 0.8, -0.6, 0.2, 0.5), 2,
+              dimnames = list(NULL, paste0("v", 1:4)))
+  expect_warning(
+    r <- featR:::svm_rfe_rank(x, factor(c("a", "b")), "classification",
+                              nfolds = 5),
+    "could not score any candidate size.*keeping all 4"
+  )
+  expect_true(all(is.na(r$size_scores)))
+  expect_length(r$selected, 4L)
+})
+
+test_that("rf_rfe truncation by n_features follows the reported scores", {
+  # REGRESSION: truncation used caret's optVariables order (survivorship-
+  # weighted), so a lower-scored feature could be kept over a higher one.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  skip_if_not_installed("randomForest")
+  skip_on_cran()
+  local_mocked_bindings(
+    svm_feature_selection = function(x_enc, y, ...) {
+      list(selected = c("x3", "x1", "x2"),
+           scores = c(x1 = 3, x2 = 2, x3 = 1), fallback = FALSE)
+    },
+    .package = "featR"
+  )
+  res <- fs_svm(svm_toy_classification(), "y", "classification",
+                nfolds = 3, tune_grid = data.frame(C = 1),
+                feature_select = TRUE, select_method = "rf_rfe",
+                n_features = 2, seed = 1)
+  expect_identical(res$selected, c("x1", "x2"))
+  expect_identical(res$details$selection$ranking[1:2], res$selected)
+})
+
+test_that("rf_rfe screens out constant predictors instead of hanging", {
+  # REGRESSION: randomForest never returns on a constant size-1 subset, so
+  # rf_rfe hung on a data set with a constant column.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_on_cran()
+  set.seed(1)
+  x <- data.frame(x1 = stats::rnorm(60), x2 = stats::rnorm(60), k = 0)
+  y <- factor(ifelse(x$x1 + stats::rnorm(60, sd = 0.3) > 0, "a", "b"))
+  out <- featR:::svm_feature_selection(x, y, rfe_folds = 3)
+  expect_false("k" %in% out$selected)
+  expect_identical(names(out$scores), c("x1", "x2", "k"))
+  expect_true(is.na(out$scores[["k"]]))
+  expect_error(featR:::svm_feature_selection(x["k"], y),
+               "Every encoded predictor is constant")
+})
+
+test_that("rf_rfe fallback screens by permutation importance, not impurity", {
+  # REGRESSION: the fallback kept every predictor with positive impurity
+  # importance, which every predictor used in a split has -- no screening.
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_on_cran()
+  local_mocked_bindings(rfe = function(...) stop("simulated rfe failure"),
+                        .package = "caret")
+  set.seed(5)
+  n <- 200
+  x <- as.data.frame(matrix(stats::rnorm(n * 22), n))
+  y <- factor(ifelse(x$V1 + x$V2 + stats::rnorm(n, sd = 0.5) > 0, "a", "b"))
+  expect_warning(
+    out <- featR:::svm_feature_selection(x, y),
+    "permutation importance"
+  )
+  expect_true(out$fallback)
+  expect_true(all(c("V1", "V2") %in% out$selected))
+  expect_lt(length(out$selected), 22L)
+  expect_true(any(out$scores <= 0))
+})
+
+test_that("rf_rfe fallback warning says when min_keep padded the selection", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_on_cran()
+  local_mocked_bindings(rfe = function(...) stop("simulated rfe failure"),
+                        .package = "caret")
+  set.seed(6)
+  n <- 80
+  x <- as.data.frame(matrix(stats::rnorm(n * 6), n))
+  y <- factor(sample(c("a", "b"), n, TRUE))
+  expect_warning(
+    out <- featR:::svm_feature_selection(x, y, min_keep = 6),
+    "plus the next top-ranked to reach min_keep = 6"
+  )
+  expect_length(out$selected, 6L)
+})
+
+test_that("a one-level categorical predictor is a clear featR error (C69)", {
+  # Previously failed inside model.matrix(): "contrasts can be applied only
+  # to factors with 2 or more levels". Checked before any package is needed.
+  d <- svm_toy_classification()
+  d$k <- "same"
+  expect_error(fs_svm(d, "y", task = "classification"),
+               "fs_svm\\(\\): categorical predictor\\(s\\) with fewer than two observed levels: 'k'")
+  d$k <- factor("same")
+  d$y <- seq_len(nrow(d)) / 10
+  expect_error(fs_svm(d, "y", task = "regression"),
+               "fewer than two observed levels: 'k'")
+})
+
+test_that("a factor left with one level in the training rows is a clear error (C69)", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("kernlab")
+  skip_if_not_installed("e1071")
+  d <- svm_toy_classification()
+  d$k <- c(rep("common", nrow(d) - 1L), "rare")
+  # Force the split: every row but the last is training, so 'rare' exists
+  # only in the held-out rows (and that row is dropped as unseen).
+  local_mocked_bindings(
+    fs_split_index = function(y, p, ...) seq_len(length(y) - 2L)
+  )
+  expect_error(
+    suppressWarnings(fs_svm(d, "y", task = "classification",
+                            tune_grid = data.frame(C = 1), nfolds = 3)),
+    "fewer than two levels in the training rows: 'k'"
+  )
+})
+
+test_that("rf_rfe does not hang on a predictor constant inside one CV fold", {
+  skip_if_not_installed("caret")
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("kernlab")
+  skip_on_cran()
+  set.seed(1)
+  n <- 60
+  d <- data.frame(y = factor(sample(c("a", "b"), n, TRUE)), x1 = rnorm(n),
+                  x2 = rnorm(n), k = c(1, rep(0, n - 1)))
+  res <- suppressWarnings(fs_svm(d, "y", "classification",
+                                 feature_select = TRUE,
+                                 select_method = "rf_rfe",
+                                 tune_grid = data.frame(C = 1), seed = 1))
+  expect_s3_class(res, "fs_result")
+})

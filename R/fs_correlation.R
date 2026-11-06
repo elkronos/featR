@@ -30,8 +30,8 @@
 #' message (not a warning) is emitted when no pair at all exceeds
 #' \code{threshold}, whatever \code{verbose} is set to.
 #'
-#' @param data A data frame or matrix with at least 2 columns and unique
-#'   column names (a correlation matrix with duplicated dimnames is ambiguous,
+#' @param data A data frame or matrix with at least 2 columns and unique,
+#'   non-empty column names (a correlation matrix with duplicated dimnames is ambiguous,
 #'   so duplicates are rejected rather than silently resolved to the first
 #'   match). For \code{"pearson"}, \code{"spearman"},
 #'   \code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:
@@ -78,7 +78,10 @@
 #'   diagonal of the reported correlation matrix. It is cosmetic: the diagonal
 #'   never takes part in flagging, scoring, or pruning. Default \code{0}.
 #' @param seed Optional integer seed for reproducible sampling, applied
-#'   locally; the previous RNG state is restored afterwards. Default
+#'   locally; the previous RNG state is restored afterwards. It only matters
+#'   for the row down-sampling, which happens in the main R process; the
+#'   point-biserial computations run under \code{parallel = TRUE} use no
+#'   random numbers, so no worker RNG streams are set or needed. Default
 #'   \code{NULL} (never seeds).
 #' @param verbose Logical. Emit progress messages (row sampling, the
 #'   correlation method used, and any variables dropped by pruning). Default
@@ -153,6 +156,11 @@ fs_correlation <- function(data, threshold, method = "pearson", prune = TRUE,
     parallel      = parallel,
     n_cores       = n_cores
   )
+  # Validate the seed even when sample_frac = 1 leaves it unused, so a
+  # fractional or non-numeric seed is an error here as everywhere else.
+  if (!is.null(seed)) {
+    assert_count(seed, "seed", lower = -.Machine$integer.max)
+  }
 
   # Method-specific suggested packages (fail early with a clear error)
   if (identical(method, "polychoric")) {
@@ -280,6 +288,12 @@ corr_validate_inputs <- function(data, threshold, method, prune, na.rm,
          if (length(dupes) > 5L) ", ..." else "",
          ". Rename the duplicates before calling fs_correlation().",
          call. = FALSE)
+  }
+  # An empty or NA name cannot be looked up in the correlation matrix's
+  # dimnames (indexing by "" matches nothing), so pruning failed with
+  # "subscript out of bounds".
+  if (anyNA(nms) || any(!nzchar(nms))) {
+    stop("`data` must not have empty or NA column names.", call. = FALSE)
   }
 
   assert_string(method, "method")

@@ -81,14 +81,15 @@ svd_scale_matrix <- function(mat, scale_input = TRUE, verbose = FALSE) {
   }
 
   if (do_scale) {
-    sds <- apply(mat, 2L, stats::sd)
     # The tolerance is relative to each column's magnitude: an absolute cut-off
     # would reject legitimately small-scale columns (values around 1e-9 have
     # standard deviations far below sqrt(eps)) while accepting constant
-    # columns whose round-off leaves a tiny non-zero sd.
-    max_abs <- apply(abs(mat), 2L, max)
-    zero_var <- which(!is.finite(sds) |
-                        sds <= 1000 * .Machine$double.eps * max_abs)
+    # columns whose round-off leaves a tiny non-zero sd. The spread is
+    # measured on col / max(abs(col)), so stats::sd() overflow (|x| beyond
+    # ~1e154) or underflow (|x| below ~1e-154) cannot fake a zero variance.
+    spreads <- lapply(seq_len(ncol(mat)), function(j) safe_col_spread(mat[, j]))
+    rel_sds <- vapply(spreads, `[[`, numeric(1L), "rel")
+    zero_var <- which(rel_sds <= 1000 * .Machine$double.eps)
     if (length(zero_var) > 0L) {
       offenders <- colnames(mat)[zero_var]
       if (is.null(colnames(mat))) {
@@ -108,6 +109,17 @@ svd_scale_matrix <- function(mat, scale_input = TRUE, verbose = FALSE) {
         ),
         call. = FALSE
       )
+    }
+  }
+
+  if (do_scale) {
+    # Both scale() modes (sd after centering, root mean square without) are
+    # invariant to multiplying a column by a constant, so a column whose
+    # variance is not representable in double precision is first divided by
+    # its largest absolute value; the scaled result is unchanged.
+    extreme <- which(!vapply(spreads, `[[`, logical(1L), "representable"))
+    for (j in extreme) {
+      mat[, j] <- mat[, j] / spreads[[j]]$scale
     }
   }
 

@@ -21,11 +21,15 @@ columns may be numeric, factor, character, logical, Date or POSIXt;
 character and logical columns are converted to factors and Date/POSIXt
 columns to numeric, and any other type is an error. Neither the target
 nor the predictors may contain missing values, since Boruta's underlying
-random forest cannot fit them.}
+random forest cannot fit them. Column names must be unique and
+non-empty, and \code{data} must hold at least one predictor besides the
+target.}
 
 \item{target}{Name of the target column in \code{data}. A factor target is
 treated as classification, a numeric target as regression; any other type
-is an error, as is a target containing NAs.}
+is an error, as is a target containing NAs or infinite values. Unused
+factor levels are dropped, and a factor target with fewer than two
+observed classes is an error.}
 
 \item{maxRuns}{Whole number of at least 11 (the minimum Boruta itself
 accepts). Maximum number of Boruta iterations.

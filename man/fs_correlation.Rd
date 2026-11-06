@@ -20,8 +20,8 @@ fs_correlation(
 )
 }
 \arguments{
-\item{data}{A data frame or matrix with at least 2 columns and unique
-column names (a correlation matrix with duplicated dimnames is ambiguous,
+\item{data}{A data frame or matrix with at least 2 columns and unique,
+non-empty column names (a correlation matrix with duplicated dimnames is ambiguous,
 so duplicates are rejected rather than silently resolved to the first
 match). For \code{"pearson"}, \code{"spearman"},
 \code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:
@@ -76,7 +76,10 @@ diagonal of the reported correlation matrix. It is cosmetic: the diagonal
 never takes part in flagging, scoring, or pruning. Default \code{0}.}
 
 \item{seed}{Optional integer seed for reproducible sampling, applied
-locally; the previous RNG state is restored afterwards. Default
+locally; the previous RNG state is restored afterwards. It only matters
+for the row down-sampling, which happens in the main R process; the
+point-biserial computations run under \code{parallel = TRUE} use no
+random numbers, so no worker RNG streams are set or needed. Default
 \code{NULL} (never seeds).}
 
 \item{verbose}{Logical. Emit progress messages (row sampling, the

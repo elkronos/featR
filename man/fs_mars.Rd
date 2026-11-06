@@ -23,8 +23,10 @@ fs_mars(
 )
 }
 \arguments{
-\item{data}{data.frame or data.table with predictors and the target. A
-data.table is copied, never modified in place.}
+\item{data}{data.frame or data.table with predictors and the target, with
+unique, non-empty column names and no infinite values. A data.table is
+copied, never modified in place. Unused levels of a factor target are
+dropped.}
 
 \item{target}{Character. Name of the target column in \code{data}. A factor or
 character target is treated as classification, a numeric one as
@@ -58,8 +60,12 @@ highly correlated numeric predictors (default 0.95; 0 disables).}
 (default TRUE).}
 
 \item{seed}{Optional whole number for reproducibility, applied locally and
-restored on exit. Default NULL (never seeds by default). When NULL, no
-deterministic resampling seed lists are constructed either.}
+restored on exit. Default NULL (never seeds by default). With a seed,
+one seed per resample (and tuning candidate) is drawn from the locally
+seeded RNG and passed to \code{caret::trainControl(seeds = )}, which is what
+keeps a seeded \code{n_cores > 1} run reproducible; the parallel workers
+themselves are not given seeded RNG streams. When NULL, no deterministic
+resampling seed lists are constructed either.}
 
 \item{verbose}{Logical. Print progress messages, caret's per-fold iteration
 log, and the small-class notice (default FALSE).}
@@ -67,19 +73,23 @@ log, and the small-class notice (default FALSE).}
 \item{n_cores}{Integer >= 1. Number of parallel workers for model training
 (default 1 = sequential; no cluster is created and caret's
 \code{allowParallel} stays FALSE). Values above the detected core count are
-capped; requires 'doParallel' and 'foreach' when greater than 1.}
+capped; requires 'doParallel' and 'foreach' when greater than 1. The
+workers need 'caret' and 'earth' installed, not attached.}
 }
 \value{
 An object of class \code{fs_result} with:
 \describe{
 \item{selected}{Character vector of the predictors earth retained
-(strictly positive \code{caret::varImp()} importance), ordered by
-decreasing importance. Empty when no importance is available.}
+(those appearing in a term of the final earth model), ordered by
+decreasing importance. If \code{caret::varImp()} fails (with a
+warning), the predictors in the final earth model are still
+reported, in model order.}
 \item{scores}{Named numeric vector of unscaled variable importance, one
-entry per candidate predictor that entered training, floored at 0
-(predictors earth pruned away score 0). \code{NULL} when caret cannot
-compute variable importance for the fitted model, in which case
-\code{selected} is empty.}
+entry per candidate predictor that entered training. Predictors
+earth pruned away score 0; a predictor in the final model keeps its
+importance even when that is zero or negative. \code{NULL} when caret cannot
+compute variable importance for the fitted model (a warning carrying
+caret's error message is raised).}
 \item{method}{"mars".}
 \item{task}{"classification" for a factor or character target (characters
 are coerced to factor), "regression" for a numeric one.}
@@ -88,7 +98,8 @@ are coerced to factor), "regression" for a numeric one.}
 carrying the training levels for classification), \code{metrics}
 (RMSE/MAE/R2 for regression; Accuracy/Kappa plus ROC_AUC/PR_AUC when
 the optional 'pROC'/'PRROC' packages are installed for binary
-classification), \code{confusion_matrix} (classification only, else
+classification; \code{ROC_AUC} is \code{NA} and \code{PR_AUC} absent when the
+held-out rows contain only one class), \code{confusion_matrix} (classification only, else
 NULL), \code{varimp} (the \code{caret::varImp()} object, or NULL when
 unsupported), \code{removed_predictors} (a list with \code{nzv} and \code{corr}
 naming the dropped predictors), \code{train_index} (integer row indices
@@ -122,9 +133,11 @@ rows only and dropped from both halves; then \code{caret::train()} fits earth
 under repeated cross-validation with \code{preProcess = c("center", "scale")}.
 
 Selection is read off the fitted model: \code{caret::varImp(model, scale = FALSE)}
-is computed on the caret \code{train} object and every predictor with a strictly
-positive importance is reported in \code{selected}. Predictors earth pruned away
-score 0 and are not selected. caret expands factors into dummy columns
+is computed on the caret \code{train} object, and every predictor that appears in
+a term of the final (pruned) earth model is reported in \code{selected}.
+Predictors earth pruned away score 0 and are not selected. earth's GCV
+importance can be zero or negative for a predictor the final model still
+uses; such a predictor is selected and keeps its signed importance. caret expands factors into dummy columns
 before fitting, so each importance row is attributed back to the source
 predictor by name (the longest candidate name it starts with) and a
 predictor keeps the largest importance of its encoded columns; that
@@ -136,10 +149,18 @@ attributed like any other.
 For classification, class imbalance is handled by \code{sampling = "up"} inside
 \code{caret::trainControl()}, i.e. upsampling happens within each resample; the
 data are never upsampled before cross-validation (which would leak
-duplicated rows across folds). The FIRST factor level is treated as the
-positive class for ROC/PR AUC, and the test-set ROC AUC is computed with a
-fixed direction, so a worse-than-chance model scores below 0.5 rather than
-being silently flipped. Factor levels are sanitized with
+duplicated rows across folds). The FIRST factor level (after unused levels
+are dropped and labels sanitized) is treated as the positive class for
+ROC/PR AUC and for the sensitivity/specificity (\code{Sens}/\code{Spec}) that
+\code{caret::twoClassSummary()} reports in \code{model$results}; there is no
+override, so reorder the target's levels with \code{stats::relevel()} to
+change it. This differs from \code{fs_randomforest()}, whose default positive
+class is the second level. ROC AUC does not depend on which class is
+positive, but PR AUC, sensitivity and specificity do. The test-set ROC AUC
+is computed with a fixed direction, so a worse-than-chance model scores
+below 0.5 rather than being silently flipped. Classification requires the 'e1071' package
+(used by \code{caret::confusionMatrix()} and caret's resampling summaries),
+which is checked before any training. Factor levels are sanitized with
 \code{make.names(unique = TRUE)}, so distinct labels can never be merged.
 
 For regression, the reported \code{R2} comes from \code{caret::R2()}, which is the

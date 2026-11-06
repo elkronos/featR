@@ -23,6 +23,12 @@ fs_split_index <- function(y, p = 0.8, seed = NULL) {
   if (p <= 0 || p >= 1) {
     stop("'p' must be strictly between 0 and 1.", call. = FALSE)
   }
+  # caret's own message for this ("y must have at least 2 data points") names
+  # an argument the user never passed.
+  if (length(y) < 2L) {
+    stop("At least 2 rows are needed to split the data into training and ",
+         "test sets.", call. = FALSE)
+  }
   local_seed(seed)
   as.vector(caret::createDataPartition(y = y, p = p, list = FALSE))
 }

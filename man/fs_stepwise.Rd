@@ -14,8 +14,10 @@ fs_stepwise(
 }
 \arguments{
 \item{data}{A data.frame (or data.table) with at least two columns: the
-numeric target and at least one candidate predictor. Every column other
-than \code{target} is offered to the search.}
+numeric target and at least one candidate predictor, with unique,
+non-empty column names and no infinite values. Every column other
+than \code{target} is offered to the search. After incomplete rows are
+dropped there must be more rows than coefficients in the full model.}
 
 \item{target}{Single string naming the numeric target column of \code{data}.
 Unquoted symbols and column indices are not accepted. Non-syntactic names
@@ -38,11 +40,12 @@ An object of class \code{fs_result} with:
 \describe{
 \item{selected}{Character vector of the selected predictor terms
 (excluding the intercept).}
-\item{scores}{Named numeric vector of absolute t statistics from the
-final model's coefficient table, excluding the intercept. Scores are
-per coefficient, so a selected factor term appears here under its
-dummy names (e.g. \code{grpb}, \code{grpc} for the term \code{grp}), not under the
-term label reported in \code{selected}.
+\item{scores}{Named numeric vector, one entry per selected term and
+keyed by the same term labels as \code{selected}: the absolute t statistic
+of the term's coefficient, or for a multi-coefficient term (a factor,
+an interaction) the largest \verb{|t|} among its coefficients (\code{NA} when all
+of them are aliased). The per-coefficient \verb{|t|} (e.g. \code{grpb}, \code{grpc}
+for the term \code{grp}) are in \code{details$coefficient_scores}.
 \strong{Caveat}: these statistics (and the p-values in
 \code{details$coefficients}) are computed after selection on the same data,
 so they are optimistically biased and are not valid for inference.}
@@ -52,6 +55,7 @@ so they are optimistically biased and are not valid for inference.}
 complete-case data in a private environment (see Details).}
 \item{details}{A list with \code{final_model} (the same \code{lm}), \code{coefficients}
 (the \code{summary()} coefficient matrix, same caveat as \code{scores}),
+\code{coefficient_scores} (named \verb{|t|} per non-intercept coefficient),
 \code{selected_terms} (the same term labels as \code{selected}), \code{direction} (the
 search direction actually used), \code{n_features} (the number of candidate
 predictors offered to the search, i.e. \code{ncol(data) - 1}) and
@@ -111,6 +115,18 @@ them; check your argument names against the list below.
 Rows containing missing values in any column are dropped (with a warning)
 before the search, because \code{stepAIC()} cannot compare models fitted on
 differing row sets.
+
+For \code{direction = "backward"} or \code{"both"}, which start from the full
+model, the full model must leave residual degrees of freedom: with as many
+coefficients (intercept and factor dummies included) as complete rows it
+fits perfectly, its AIC is -Inf, and the call stops with an error naming
+the counts. A forward search starts from the intercept and may have more
+candidate predictors than rows; it warns if the model it ends on has no
+residual degrees of freedom (a perfect fit, so the selection is not
+meaningful). A factor or character predictor with fewer than two observed
+levels (after dropping incomplete rows) is an error, as is a factor dummy
+name that collides with another column or the target (factor \code{g} with
+level \code{b} next to a column \code{gb}).
 }
 \examples{
 \donttest{

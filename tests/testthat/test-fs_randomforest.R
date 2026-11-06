@@ -655,3 +655,262 @@ test_that("a numeric target with a defaulted task warns", {
                     control = list(ntree = 5), seed = 1)
   )
 })
+
+test_that("fs_randomforest handles hostile targets and names with clear outcomes", {
+  # REGRESSION: an ordered target failed after training with "comparison of
+  # these types is not implemented"; an empty-string class failed inside
+  # randomForest with "subscript out of bounds"; Inf predictors surfaced as
+  # "NA/NaN/Inf in foreign function call"; a duplicated column name was
+  # scored under a name ("x1.1") that is not a column of 'data'; an empty
+  # column name gave "undefined columns selected".
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(5)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- factor(ifelse(d$x1 > 0, "hi", "lo"), ordered = TRUE)
+  res <- fs_randomforest(d, "y", control = list(ntree = 20), seed = 1)
+  expect_s3_class(res, "fs_result")
+  expect_true(all(selected(res) %in% c("x1", "x2")))
+
+  d2 <- d
+  d2$y <- factor(ifelse(d$x1 > 0, "", "lo"))
+  expect_error(fs_randomforest(d2, "y", control = list(ntree = 20), seed = 1),
+               "empty-string class label")
+
+  d3 <- data.frame(x1 = rnorm(n), x2 = rnorm(n), y = rnorm(n))
+  d3$x2[1:3] <- c(Inf, -Inf, 1)
+  expect_error(fs_randomforest(d3, "y", task = "regression",
+                               control = list(ntree = 20), seed = 1),
+               "infinite values.*x2")
+
+  d4 <- data.frame(x1 = rnorm(n), x1 = rnorm(n), y = rnorm(n),
+                   check.names = FALSE)
+  expect_error(fs_randomforest(d4, "y", task = "regression",
+                               control = list(ntree = 20)),
+               "unique column names; duplicated: x1")
+  names(d4)[2] <- ""
+  expect_error(fs_randomforest(d4, "y", task = "regression",
+                               control = list(ntree = 20)),
+               "empty or NA column names")
+})
+
+test_that("control$strata is read from the training rows, never misaligned", {
+  # Second-round statistical review: `strata` was forwarded unchanged to
+  # randomForest(), which uses it positionally against the training rows and
+  # does not check its length, so a vector built for `data` silently
+  # stratified the wrong rows. It is now a column name read from the training
+  # split. Stratum "b" holds few training rows, so with sampsize = c(5, 5)
+  # each of them is in-bag in most trees: their out-of-bag counts must be far
+  # below those of stratum "a" rows -- which only holds if the strata line up
+  # with the rows the forest was grown on.
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  n <- 200
+  d <- data.frame(x = rnorm(n), g = factor(rep(c("a", "b"), c(190, 10))))
+  d$y <- factor(ifelse(d$x + rnorm(n) > 0, "p", "q"))
+
+  expect_error(
+    fs_randomforest(d, "y", control = list(ntree = 20, strata = d$g)),
+    "must be the name of a column"
+  )
+
+  res <- fs_randomforest(d, "y",
+                         control = list(ntree = 300, strata = "g",
+                                        sampsize = c(5, 5)),
+                         seed = 1)
+  g_train <- d$g[res$details$train_index]
+  oob <- res$model$oob.times
+  expect_length(oob, length(g_train))
+  # expected ratio about (1 - 1/9)^5 / (1 - 1/142)^5 = 0.57; misaligned ~ 1
+  expect_lt(mean(oob[g_train == "b"]), 0.75 * mean(oob[g_train == "a"]))
+})
+
+test_that("downsampling is not hijacked by columns named total_n / desired_total", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  n <- 200
+  d <- data.frame(x = rnorm(n), desired_total = rep(c(1, 500), length.out = n))
+  d$y <- d$x + rnorm(n)
+  res <- fs_randomforest(d, "y", task = "regression",
+                         control = list(sample_size = 100, ntree = 10), seed = 1)
+  expect_equal(length(res$details$train_index) +
+                 length(res$details$predictions), 100L)
+
+  sizes <- vapply(c("zz", "total_n"), function(nm) {
+    set.seed(1)
+    d2 <- data.frame(x = rnorm(n), v = rep(1, n),
+                     y = factor(sample(c("a", "b"), n, TRUE)))
+    names(d2)[2] <- nm
+    r2 <- fs_randomforest(d2, "y",
+                          control = list(sample_size = 100, ntree = 10,
+                                         drop_zerovar = FALSE),
+                          seed = 1)
+    length(r2$details$train_index) + length(r2$details$predictions)
+  }, numeric(1L))
+  expect_equal(sizes[["zz"]], sizes[["total_n"]])
+  expect_lte(sizes[["total_n"]], 100)
+})
+
+test_that("an infinite regression target is a clear featR error", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  d <- data.frame(a = rnorm(60), b = rnorm(60))
+  d$y <- d$a + rnorm(60)
+  d$y[c(3, 40)] <- Inf
+  expect_error(fs_randomforest(d, "y", task = "regression", seed = 1,
+                               control = list(ntree = 5)),
+               "finite values; column\\(s\\) with Inf/-Inf: y")
+})
+
+test_that("R2 is NA when the held-out target is constant up to round-off", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  d <- data.frame(x1 = rnorm(60), x2 = rnorm(60))
+  d$y <- c(rep(0.3, 56), rep(0.1 + 0.2, 4))
+  res <- suppressWarnings(fs_randomforest(d, "y", task = "regression", seed = 1,
+                                          control = list(ntree = 10)))
+  expect_true(is.na(res$details$metrics$R2))
+})
+
+test_that("a one-class held-out split gives AUC NA with a warning, not a crash", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  skip_if_not_installed("pROC")
+  set.seed(1)
+  d <- data.frame(x1 = rnorm(60), x2 = rnorm(60), x3 = rnorm(60))
+  d$y <- factor(c(rep("a", 58), rep("b", 2)))
+  set.seed(3)
+  expect_warning(res <- fs_randomforest(d, "y", control = list(ntree = 20)),
+                 "only one of the two classes")
+  expect_true(is.na(res$details$metrics$auc))
+})
+
+test_that("a test-only level of a factor predictor is treated like a character one", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  n <- 80
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n))
+  d$y <- factor(ifelse(d$x1 > 0, "hi", "lo"))
+  d$g <- sample(c("p", "q"), n, TRUE)
+  d$g[7] <- "r"
+  df <- d
+  df$g <- factor(df$g)
+  ctl <- list(ntree = 20, return_test_data = TRUE, drop_zerovar = FALSE)
+  a <- fs_randomforest(d, "y", seed = 3, control = ctl)
+  b <- fs_randomforest(df, "y", seed = 3, control = ctl)
+  expect_false(7L %in% b$details$train_index)
+  expect_false("r" %in% b$model$forest$xlevels$g)
+  expect_identical(as.character(b$details$test_data["7", "g"]),
+                   as.character(a$details$test_data["7", "g"]))
+  expect_equal(a$details$predictions, b$details$predictions)
+})
+
+test_that("per-class sampsize is clamped to the training class frequencies", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  n <- 200
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n),
+                  y = factor(sample(c("a", "b"), n, TRUE, prob = c(.9, .1))))
+  ss <- rep(min(table(d$y)), 2)
+  expect_warning(res <- fs_randomforest(d, "y", seed = 1,
+                                        control = list(sampsize = ss, ntree = 10)),
+                 "clamped to the class frequencies")
+  freq <- as.integer(table(d$y[res$details$train_index]))
+  expect_equal(as.integer(res$model$call$sampsize),
+               pmin(ss, freq))
+})
+
+test_that("an NA in the control$strata column is a clear error", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  n <- 200
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n),
+                  y = factor(sample(c("a", "b"), n, TRUE, prob = c(.9, .1))))
+  d$h <- c(NA, rep(c("p", "q"), length.out = n - 1))
+  expect_error(fs_randomforest(d, "y", seed = 1,
+                               control = list(strata = "h", sampsize = c(5, 5),
+                                              ntree = 5)),
+               "'control\\$strata' column 'h' contains NA")
+})
+
+test_that("all-constant predictors with drop_zerovar = FALSE error instead of hanging", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  d <- data.frame(y = factor(sample(c("a", "b"), 60, TRUE)), k = 0,
+                  f = factor("u"))
+  expect_error(fs_randomforest(d, "y", seed = 1,
+                               control = list(ntree = 10, drop_zerovar = FALSE)),
+               "Every predictor is constant")
+})
+
+test_that("kappa is computed without relying on e1071", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(2)
+  d <- data.frame(y = factor(sample(c("a", "b", "c"), 150, TRUE)), x = rnorm(150))
+  d$x <- d$x + as.integer(d$y)
+  res <- fs_randomforest(d, "y", control = list(ntree = 20), seed = 1)
+  tab <- res$details$confusion
+  po <- sum(diag(tab)) / sum(tab)
+  pe <- sum(rowSums(tab) * colSums(tab)) / sum(tab)^2
+  expect_equal(res$details$metrics$kappa, (po - pe) / (1 - pe))
+  expect_true(is.na(featR:::rf_cohen_kappa(table(factor(c("a", "a"), c("a", "b")),
+                                                factor(c("a", "a"), c("a", "b"))))))
+})
+
+test_that("a factor regression target is modelled on its labels, not level codes", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  d <- data.frame(y = factor(sample(c("10", "200"), 100, TRUE)),
+                  a = rnorm(100), b = rnorm(100))
+  res <- suppressWarnings(fs_randomforest(d, "y", task = "regression",
+                                          control = list(ntree = 10), seed = 1))
+  expect_setequal(unique(res$model$y), c(10, 200))
+})
+
+test_that("a control$positive_class that names no level is an error", {
+  skip_on_cran()
+  skip_if_not_installed("randomForest")
+  skip_if_not_installed("caret")
+  set.seed(1)
+  d <- data.frame(y = factor(sample(c("no", "yes"), 80, TRUE)),
+                  a = rnorm(80), b = rnorm(80))
+  expect_error(fs_randomforest(d, "y", seed = 1,
+                               control = list(ntree = 5, positive_class = "Yes")),
+               "'control\\$positive_class' \\(\"Yes\"\\) is not a level")
+  expect_no_error(fs_randomforest(d, "y", seed = 1,
+                                  control = list(ntree = 5, positive_class = "yes")))
+})
+
+test_that("large-offset predictors are not rejected as all-constant", {
+  # REGRESSION: the all-constant guard used a relative tolerance and
+  # rejected timestamp predictors that randomForest splits on fine.
+  skip_if_not_installed("randomForest")
+  set.seed(8)
+  n <- 100
+  d <- data.frame(ts = 1.7e9 + sample(0:20, n, TRUE))
+  d$y <- (d$ts - 1.7e9) + rnorm(n, sd = 0.5)
+  res <- fs_randomforest(d, "y", task = "regression", seed = 1,
+                         control = list(ntree = 50))
+  expect_s3_class(res, "fs_result")
+})

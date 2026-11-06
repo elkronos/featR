@@ -136,6 +136,8 @@
 #' out <- fs_chi(d, "target")
 #' out$selected
 #' out$details$results
+#' @seealso The [Filter methods](https://elkronos.github.io/featR/articles/filters.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_chi <- function(
     data,

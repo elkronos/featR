@@ -285,9 +285,11 @@ a single level in the training rows because its other levels fell
 only into the test rows.
 \item Unused factor levels are dropped before encoding, so they produce
 no all-zero dummy columns.
-\item If a dummy column name (\verb{<factor><level>}) matches another column
-or the target, for example factor \code{g} with level \code{"1"} next to a
-numeric \code{g1}, the call stops and asks for a rename.
+\item Dummy columns are named by caret's \code{dummyVars()}: \code{color.green}
+for a factor with three or more levels, \code{g1} for a two-level factor
+\code{g}. If a dummy name matches another column or the target (factor \code{g}
+with levels \code{"0"} and \code{"1"} next to a numeric \code{g1}), the call stops
+and asks for a rename.
 }
 }
 
@@ -342,4 +344,8 @@ if (requireNamespace("caret", quietly = TRUE) &&
   sel$scores
 }
 }
+}
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/wrappers.html}{Wrapper methods}
+guide, which runs this function on a worked example.
 }

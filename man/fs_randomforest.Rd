@@ -306,3 +306,7 @@ if (requireNamespace("randomForest", quietly = TRUE) &&
 }
 }
 }
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/regularization.html}{Regularization and embedded importance}
+guide, which runs this function on a worked example.
+}

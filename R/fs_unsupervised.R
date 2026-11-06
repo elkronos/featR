@@ -233,6 +233,8 @@ unsup_scores <- function(dt,
 #' fs_unsupervised(df, method = "missing_prop", threshold = 0.2,
 #'                 direction = "above", action = "remove",
 #'                 include_equal = TRUE, output = "names")
+#' @seealso The [Filter methods](https://elkronos.github.io/featR/articles/filters.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_unsupervised <- function(data,
                             method = c("variance",

@@ -251,3 +251,7 @@ if (requireNamespace("brms", quietly = TRUE)) {
 Piironen, J. and Vehtari, A. (2017). Comparison of Bayesian predictive
 methods for model selection. \emph{Statistics and Computing}, 27(3), 711-735.
 }
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/wrappers.html}{Wrapper methods}
+guide, which runs this function on a worked example.
+}

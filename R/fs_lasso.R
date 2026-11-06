@@ -459,9 +459,9 @@ lasso_importance <- function(coefs) {
 #' full-scale predictor with a raw coefficient around 1e15, so such columns
 #' are held at 0 during the fit. A coefficient whose standardized value is at
 #' most `1e-10` times the largest standardized coefficient is floating-point
-#' residue and is set to exactly 0. Without that step the redundant dummy of the first factor,
-#' which is collinear with the intercept, kept a coefficient around 1e-13 and
-#' was selected.
+#' residue and is set to exactly 0. Without that step, the redundant dummy of
+#' the first factor, which is collinear with the intercept, would keep a
+#' coefficient around 1e-13 and be selected.
 #'
 #' @section Missing values:
 #' Under the default `impute = "none"`, a missing predictor value is an error
@@ -545,6 +545,8 @@ lasso_importance <- function(coefs) {
 #'   head(res$scores)
 #' }
 #' }
+#' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_lasso <- function(data, target, alpha = 1, nfolds = 5, standardize = TRUE,
                      custom_folds = NULL, impute = c("none", "mean"),

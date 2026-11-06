@@ -130,3 +130,7 @@ recon <- full$left_singular_vectors \%*\%
   (full$singular_values * t(full$right_singular_vectors))
 all.equal(recon, m)
 }
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/dimensionality-reduction.html}{Dimensionality reduction}
+guide, which runs this function on a worked example.
+}

@@ -162,3 +162,7 @@ out <- fs_chi(d, "target")
 out$selected
 out$details$results
 }
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/filters.html}{Filter methods}
+guide, which runs this function on a worked example.
+}

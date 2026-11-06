@@ -43,7 +43,9 @@ remotes::install_github("elkronos/featR")
 featR itself depends only on data.table, withr, and base R. The modeling
 engines (glmnet, caret, Boruta, randomForest, brms, and others) are in
 `Suggests`. A function that needs one checks when you call it and stops with
-the `install.packages()` line you need.
+the `install.packages()` line you need. [Optional
+dependencies](https://elkronos.github.io/featR/articles/reproducibility.html#optional-dependencies)
+has one command that installs all of them.
 
 ## The calling convention
 
@@ -110,9 +112,9 @@ pruned$details$dropped
 It dropped `cyl` and `disp`. `summary()` shows the call and a ranked score
 table, with an asterisk on each feature that was kept. For `fs_correlation()`,
 a feature's score is its largest absolute correlation with any other input
-feature, dropped ones included. That is why `wt` (0.89 with `disp`) and `hp`
-(0.83 with `cyl`) score above 0.8 and still survive, because their partners
-were dropped.
+feature, dropped ones included. So `wt` (0.89 with `disp`) and `hp` (0.83
+with `cyl`) score above 0.8 and survive anyway, because their partners were
+dropped.
 
 ```{r}
 summary(pruned)
@@ -140,8 +142,10 @@ lasso <- fs_lasso(mtcars, target = "mpg", seed = 1)
 selected(lasso)
 ```
 
-[The fs_result object](https://elkronos.github.io/featR/articles/fs-result.html) covers the seven components,
-what `scores` means for each method, and how to compare results side by side.
+[The fs_result object](https://elkronos.github.io/featR/articles/fs-result.html)
+covers the seven components, how to read `print()` and `summary()`, what
+`scores` means for each method, how to compare results side by side, and what
+to do when nothing is selected.
 
 ## The four families
 

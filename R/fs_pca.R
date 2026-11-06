@@ -504,6 +504,8 @@ pca_plot <- function(pca_result, label_col) {
 #'   res <- fs_pca(iris, label_col = "Species", plot = TRUE)
 #' }
 #' }
+#' @seealso The [Dimensionality reduction](https://elkronos.github.io/featR/articles/dimensionality-reduction.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_pca <- function(data,
                    num_pc = NULL,

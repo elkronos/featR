@@ -144,3 +144,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 }
 }
 }
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/dimensionality-reduction.html}{Dimensionality reduction}
+guide, which runs this function on a worked example.
+}

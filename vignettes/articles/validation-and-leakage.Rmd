@@ -66,8 +66,8 @@ With the selection outside the loop, cross-validation reports an R² of 0.45
 for a model of noise. With the selection inside the loop, R² is -0.83.
 Nothing predicts `y`, and a model of 10 noise predictors fitted on 48 rows
 predicts worse than the mean, so a negative R² is what an honest estimate
-should show. Ambroise and McLachlan (2002) describe this selection bias. It applies to every method in featR,
-including the cheap filters.
+should show. Ambroise and McLachlan (2002) describe this selection bias. It
+applies to every method in featR, including the cheap filters.
 
 ## What featR does for you
 

@@ -47,7 +47,7 @@ sim$class  <- factor(ifelse(sim$y > 0, "pos", "neg"))
 
 ## Filters that ignore the outcome
 
-### `fs_unsupervised()`: clean-up before anything else
+### `fs_unsupervised()`
 
 [`fs_unsupervised()`](../reference/fs_unsupervised.html) scores each column by
 a statistic that needs no outcome: `"variance"` (the default), `"mad"`,
@@ -92,7 +92,7 @@ A high variance says nothing about usefulness. A noisy column can have the
 largest variance in the data and a strong predictor the smallest, so use this
 function for clean-up, not for ranking.
 
-### `fs_correlation()`: remove redundancy
+### `fs_correlation()`
 
 [`fs_correlation()`](../reference/fs_correlation.html) looks only at how the
 features relate to each other. It flags every pair whose absolute correlation
@@ -142,11 +142,11 @@ values otherwise.
 
 ## Filters that score against the outcome
 
-### `fs_supervised()`: one feature at a time against the outcome
+### `fs_supervised()`
 
 [`fs_supervised()`](../reference/fs_supervised.html) scores every feature
-against `target`, and every feature column must be numeric. For a numeric target the score is the absolute
-Pearson correlation, in [0, 1]. For a factor, character, or logical target it
+against `target`, and every feature column must be numeric. For a numeric
+target the score is the absolute Pearson correlation, in [0, 1]. For a factor, character, or logical target it
 is the one-way ANOVA *F* statistic, which has no upper bound. The default
 `method = "auto"` picks between them from the target's type.
 
@@ -187,7 +187,7 @@ Caveats:
   both it and the target are observed. A constant feature has no defined
   score; it scores `NA` and is never selected.
 
-### `fs_chi()`: categorical features against a categorical outcome
+### `fs_chi()`
 
 [`fs_chi()`](../reference/fs_chi.html) runs a chi-squared test of independence
 between each categorical feature and the target. Character columns become
@@ -231,7 +231,7 @@ levels after dropping missing values is skipped, with an `NA` p-value.
 A p-value measures evidence against independence. It is not an effect size:
 with enough rows, a negligible association is still significant.
 
-### `fs_infogain()`: bits of uncertainty removed
+### `fs_infogain()`
 
 [`fs_infogain()`](../reference/fs_infogain.html) scores each feature by its
 information gain, `H(Y) - H(Y | X)`: how many bits of uncertainty about the

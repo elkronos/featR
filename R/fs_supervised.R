@@ -371,6 +371,8 @@ sup_scores <- function(dt,
 #' )
 #' fs_supervised(df_fac, target = "grp", method = "anova", threshold = 1,
 #'               output = "matrix")
+#' @seealso The [Filter methods](https://elkronos.github.io/featR/articles/filters.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_supervised <- function(data,
                           target,

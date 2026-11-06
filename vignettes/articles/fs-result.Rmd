@@ -11,6 +11,9 @@ Fourteen of featR's sixteen functions return the same object, an `fs_result`.
 The two exceptions, `fs_pca()` and `fs_svd()`, do dimensionality reduction
 and return their own lists; the
 [dimensionality reduction](dimensionality-reduction.html) article covers them.
+`fs_supervised()` and `fs_unsupervised()` also have an `output` argument that
+can return the filtered data, a logical mask, or column indices instead; its
+default, `"result"`, gives an `fs_result`.
 
 ## The seven components
 
@@ -46,8 +49,15 @@ str(unclass(res), max.level = 1, give.attr = FALSE)
 res
 ```
 
-`summary()` adds the call and a ranked score table. An asterisk marks the
-features that were kept:
+The first line names the method and, in parentheses, the task. The second
+counts the kept features against the candidates, and the third lists the kept
+names, cut off after the first 10 (`print(res, n = 20)` shows more). A
+`Model:` line appears when the method stored a fitted model, and the last line
+names the elements of `details`, which are described under Value on each
+function's help page.
+
+`summary()` adds the call and a table of up to 20 scores (set `n` for more),
+ranked strongest first. An asterisk marks the features that were kept:
 
 ```{r}
 summary(res)
@@ -109,8 +119,10 @@ the original variables.
 
 * `fs_lasso()` and `fs_elastic()` paste the level onto the name:
   `colorgreen`, `colorred`.
-* `fs_svm()` and `fs_recursivefeature(handle_categorical = TRUE)` put a dot in
-  between: `color.green`, `color.red`.
+* `fs_svm()` and `fs_recursivefeature(handle_categorical = TRUE)` use caret's
+  `dummyVars()`, which puts a dot between name and level for factors with
+  three or more levels (`color.green`, `color.red`) and none for a two-level
+  factor (`g1` for factor `g` with levels `"0"` and `"1"`).
 * `fs_stepwise()` keys `scores` and `selected` by term, so the factor appears
   once as `color`. The per-coefficient values (`colorgreen`, `colorred`) are
   in `details$coefficient_scores`.
@@ -153,3 +165,12 @@ none <- suppressWarnings(fs_unsupervised(d[, 1:3], threshold = 1e6))
 selected(none)
 length(selected(none)) == 0
 ```
+
+An empty selection from a threshold filter usually means the threshold is
+stricter than every score. `summary()` still ranks every scored feature, so
+read the scores there before you choose a new cut. An empty `fs_chi()` result
+can also come from Monte Carlo p-values that cannot get below `sig_level`
+after the multiple-testing adjustment; featR warns when that happens, and
+[Filter methods](filters.html) explains the fix. If `fs_lasso(lambda = "1se")`
+keeps nothing, the default `lambda = "min"` selects at a smaller penalty and
+usually keeps more.

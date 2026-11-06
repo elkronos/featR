@@ -840,6 +840,8 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #'   print(res$details$test_metrics)
 #' }
 #' }
+#' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_recursivefeature <- function(data,
                                 target,

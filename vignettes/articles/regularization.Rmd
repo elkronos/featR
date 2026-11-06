@@ -155,9 +155,9 @@ The default `alpha_seq` is `seq(0.1, 1, by = 0.1)`. It leaves out
 0 yourself and it wins, every predictor is "selected" and featR warns.
 `scores` are absolute coefficients on the scale of the columns as supplied
 (`NULL` for an outcome with more than two classes, where each predictor has
-one coefficient per class).
-`fs_elastic()` does not rescale them the way `fs_lasso()` does, so
-standardize the predictors first if you want to rank by `scores`.
+one coefficient per class). `fs_elastic()` does not rescale them the way
+`fs_lasso()` does, so standardize the predictors first if you want to rank by
+`scores`.
 
 Rows with a missing outcome or any missing predictor are dropped before
 fitting. Factors are expanded into k - 1 dummy columns, and the selection
@@ -195,8 +195,8 @@ version. Importance can also favor predictors with many distinct values, so
 treat close scores as ties.
 
 A forest ranks predictors without selecting any. Unless you supply a
-selection rule, `selected` is every predictor, ordered by importance. To turn the ranking
-into a selection, pass a function as `control$feature_select`. It receives
+selection rule, `selected` is every predictor, ordered by importance. To turn
+the ranking into a selection, pass a function as `control$feature_select`. It receives
 the training rows as a data.table and returns the columns to keep, including
 the outcome. The hook below keeps a fixed list for illustration; a real rule
 would compute something from `dt`.

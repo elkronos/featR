@@ -153,3 +153,7 @@ fs_unsupervised(df, method = "missing_prop", threshold = 0.2,
                 direction = "above", action = "remove",
                 include_equal = TRUE, output = "names")
 }
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/filters.html}{Filter methods}
+guide, which runs this function on a worked example.
+}

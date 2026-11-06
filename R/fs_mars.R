@@ -750,6 +750,8 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #'   res$details$metrics
 #' }
 #' }
+#' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_mars <- function(data,
                     target,

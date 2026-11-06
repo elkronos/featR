@@ -178,7 +178,6 @@ head(res$pca_df)
 #> 5:  1.68827810  0.7361403     8
 #> 6:  0.02536833  2.7401361     6
 
-# \donttest{
 if (requireNamespace("ggplot2", quietly = TRUE)) {
   # plot = FALSE (the default) draws nothing, but $plot is built anyway
   res <- fs_pca(iris, label_col = "Species", verbose = TRUE)
@@ -190,6 +189,4 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 #> Excluding 1 non-numeric column(s) from the PCA features (kept as label candidates): Species
 #> Using prcomp for PCA computation.
 #> [1] TRUE
-
-# }
 ```

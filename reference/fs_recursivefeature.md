@@ -341,7 +341,6 @@ which runs this function on a worked example.
 ## Examples
 
 ``` r
-# \donttest{
 if (requireNamespace("caret", quietly = TRUE) &&
     requireNamespace("randomForest", quietly = TRUE) &&
     requireNamespace("e1071", quietly = TRUE)) {
@@ -361,5 +360,4 @@ if (requireNamespace("caret", quietly = TRUE) &&
 #> [1] 3
 #>  Accuracy     Kappa 
 #> 0.9333333 0.9000000 
-# }
 ```

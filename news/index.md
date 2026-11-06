@@ -8,6 +8,11 @@ crashes, and inaccurate claims. Fixes that change behavior are listed
 first under each review. Where a result changed, the old result was
 wrong.
 
+- featR now requires withr 2.4.0 or later, the first release that
+  exports `local_seed()`.
+- Examples that run in under two seconds are no longer wrapped in
+  `\donttest{}`, so `R CMD check` runs them.
+
 ### First adversarial review
 
 A full statistical, methodological, and programmatic review. Every

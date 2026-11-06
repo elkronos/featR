@@ -51,7 +51,9 @@
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.2.0" id="featr-020">featR 0.2.0<a class="anchor" aria-label="anchor" href="#featr-020"></a></h2>
 <p>A correctness release. Two adversarial reviews of every function and every documentation page found and fixed silent wrong answers, hangs, crashes, and inaccurate claims. Fixes that change behavior are listed first under each review. Where a result changed, the old result was wrong.</p>
-<div class="section level3">
+<ul><li>featR now requires withr 2.4.0 or later, the first release that exports <code>local_seed()</code>.</li>
+<li>Examples that run in under two seconds are no longer wrapped in <code>\donttest{}</code>, so <code>R CMD check</code> runs them.</li>
+</ul><div class="section level3">
 <h3 id="first-adversarial-review-0-2-0">First adversarial review<a class="anchor" aria-label="anchor" href="#first-adversarial-review-0-2-0"></a></h3>
 <p>A full statistical, methodological, and programmatic review. Every finding was reproduced in R before it was fixed, and each fix has a regression test. This round also added the pkgdown site’s guides and articles.</p>
 <div class="section level4">

@@ -311,8 +311,7 @@ guide, which runs this function on a worked example.</p></div>
 
     <div class="section level2">
     <h2 id="ref-examples">Examples<a class="anchor" aria-label="anchor" href="#ref-examples"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="co"># \donttest{</span></span></span>
-<span class="r-in"><span><span class="kw">if</span> <span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/ns-load.html" class="external-link">requireNamespace</a></span><span class="op">(</span><span class="st">"caret"</span>, quietly <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span> <span class="op">&amp;&amp;</span></span></span>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="kw">if</span> <span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/ns-load.html" class="external-link">requireNamespace</a></span><span class="op">(</span><span class="st">"caret"</span>, quietly <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span> <span class="op">&amp;&amp;</span></span></span>
 <span class="r-in"><span>    <span class="fu"><a href="https://rdrr.io/r/base/ns-load.html" class="external-link">requireNamespace</a></span><span class="op">(</span><span class="st">"earth"</span>, quietly <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">{</span></span></span>
 <span class="r-in"><span>  <span class="co"># x1 and x2 drive y; x3 is noise</span></span></span>
 <span class="r-in"><span>  <span class="va">df</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span></span>
@@ -323,14 +322,17 @@ guide, which runs this function on a worked example.</p></div>
 <span class="r-in"><span>  <span class="va">df</span><span class="op">$</span><span class="va">y</span> <span class="op">&lt;-</span> <span class="fl">2</span> <span class="op">*</span> <span class="va">df</span><span class="op">$</span><span class="va">x1</span> <span class="op">-</span> <span class="va">df</span><span class="op">$</span><span class="va">x2</span> <span class="op">+</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="fl">150</span>, sd <span class="op">=</span> <span class="fl">0.5</span><span class="op">)</span></span></span>
 <span class="r-in"><span>  <span class="va">res</span> <span class="op">&lt;-</span> <span class="fu">fs_mars</span><span class="op">(</span><span class="va">df</span>, <span class="st">"y"</span>, degree <span class="op">=</span> <span class="fl">1</span>, nprune <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">5</span>, <span class="fl">10</span><span class="op">)</span>,</span></span>
 <span class="r-in"><span>                 number <span class="op">=</span> <span class="fl">3</span>, repeats <span class="op">=</span> <span class="fl">1</span>, seed <span class="op">=</span> <span class="fl">42</span><span class="op">)</span></span></span>
-<span class="r-in"><span>  <span class="va">res</span><span class="op">$</span><span class="va">selected</span></span></span>
-<span class="r-in"><span>  <span class="va">res</span><span class="op">$</span><span class="va">scores</span></span></span>
-<span class="r-in"><span>  <span class="va">res</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">metrics</span></span></span>
+<span class="r-in"><span>  <span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">res</span><span class="op">$</span><span class="va">selected</span><span class="op">)</span></span></span>
+<span class="r-in"><span>  <span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">res</span><span class="op">$</span><span class="va">scores</span><span class="op">)</span></span></span>
+<span class="r-in"><span>  <span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">res</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">metrics</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="op">}</span></span></span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span> Loading required package: earth</span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span> Loading required package: Formula</span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span> Loading required package: plotmo</span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span> Loading required package: plotrix</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "x1" "x2"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>        x1        x2        x3 </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 100.00000  43.91191   0.00000 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $RMSE</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0.4538177</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
@@ -340,7 +342,6 @@ guide, which runs this function on a worked example.</p></div>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $R2</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0.9614264</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
-<span class="r-in"><span><span class="co"># }</span></span></span>
 </code></pre></div>
     </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

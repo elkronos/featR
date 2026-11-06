@@ -176,7 +176,6 @@ which runs this function on a worked example.
 ## Examples
 
 ``` r
-# \donttest{
 if (requireNamespace("MASS", quietly = TRUE)) {
   res <- fs_stepwise(mtcars, target = "mpg", direction = "both")
   print(res$selected)
@@ -191,6 +190,5 @@ if (requireNamespace("MASS", quietly = TRUE)) {
 #>       wt     qsec       am 
 #> 5.506882 4.246676 2.080819 
 #> mpg ~ qsec + am
-#> <environment: 0x55837c212878>
-# }
+#> <environment: 0x55842f31bbb8>
 ```

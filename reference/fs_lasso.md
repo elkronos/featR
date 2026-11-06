@@ -258,7 +258,6 @@ guide, which runs this function on a worked example.
 ## Examples
 
 ``` r
-# \donttest{
 if (requireNamespace("glmnet", quietly = TRUE)) {
   n <- 100
   df <- data.frame(
@@ -268,14 +267,14 @@ if (requireNamespace("glmnet", quietly = TRUE)) {
   )
   df$y <- 2 * df$x1 - 3 * df$x2 + rnorm(n)
   res <- fs_lasso(df, "y", seed = 123)
-  selected(res)
-  head(res$scores)
+  print(selected(res))
+  print(head(res$scores))
 }
+#> [1] "x2"   "x1"   "catc" "cata"
 #>   Variable Coefficient AbsCoefficient
 #> 1       x2 -2.87232033     2.87232033
 #> 2       x1  2.16440132     2.16440132
 #> 3     catc -0.09940822     0.09940822
 #> 4     cata  0.08988327     0.08988327
 #> 5     catb  0.00000000     0.00000000
-# }
 ```

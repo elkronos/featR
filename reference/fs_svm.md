@@ -381,7 +381,6 @@ which runs this function on a worked example.
 ## Examples
 
 ``` r
-# \donttest{
 if (requireNamespace("caret", quietly = TRUE) &&
     requireNamespace("kernlab", quietly = TRUE) &&
     requireNamespace("e1071", quietly = TRUE)) {
@@ -394,7 +393,7 @@ if (requireNamespace("caret", quietly = TRUE) &&
     tune_grid = data.frame(C = 1),
     seed = 42
   )
-  res$details$performance
+  print(res$details$performance)
 
   # SVM-RFE keeps the two most useful measurements
   sel <- fs_svm(
@@ -409,10 +408,40 @@ if (requireNamespace("caret", quietly = TRUE) &&
     n_features = 2,
     seed = 42
   )
-  sel$selected
-  sel$scores
+  print(sel$selected)
+  print(sel$scores)
 }
+#> Confusion Matrix and Statistics
+#> 
+#>             Reference
+#> Prediction   setosa versicolor virginica
+#>   setosa         15          0         0
+#>   versicolor      0         14         1
+#>   virginica       0          1        14
+#> 
+#> Overall Statistics
+#>                                           
+#>                Accuracy : 0.9556          
+#>                  95% CI : (0.8485, 0.9946)
+#>     No Information Rate : 0.3333          
+#>     P-Value [Acc > NIR] : < 2.2e-16       
+#>                                           
+#>                   Kappa : 0.9333          
+#>                                           
+#>  Mcnemar's Test P-Value : NA              
+#> 
+#> Statistics by Class:
+#> 
+#>                      Class: setosa Class: versicolor Class: virginica
+#> Sensitivity                 1.0000            0.9333           0.9333
+#> Specificity                 1.0000            0.9667           0.9667
+#> Pos Pred Value              1.0000            0.9333           0.9333
+#> Neg Pred Value              1.0000            0.9667           0.9667
+#> Prevalence                  0.3333            0.3333           0.3333
+#> Detection Rate              0.3333            0.3111           0.3111
+#> Detection Prevalence        0.3333            0.3333           0.3333
+#> Balanced Accuracy           1.0000            0.9500           0.9500
+#> [1] "Petal.Length" "Petal.Width" 
 #> Sepal.Length  Sepal.Width Petal.Length  Petal.Width 
 #>    0.1598883    0.3103668    4.5281035    5.1138497 
-# }
 ```

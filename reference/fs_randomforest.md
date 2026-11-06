@@ -371,7 +371,6 @@ guide, which runs this function on a worked example.
 ## Examples
 
 ``` r
-# \donttest{
 if (requireNamespace("randomForest", quietly = TRUE) &&
     requireNamespace("caret", quietly = TRUE)) {
   res <- fs_randomforest(
@@ -398,5 +397,4 @@ if (requireNamespace("randomForest", quietly = TRUE) &&
 #> $auc
 #> [1] NA
 #> 
-# }
 ```

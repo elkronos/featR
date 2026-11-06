@@ -1,5 +1,5 @@
 ---
-title: "Reproducibility, randomness, and parallelism"
+title: "Reproducibility and parallelism"
 ---
 
 ```{r setup, include = FALSE}
@@ -7,15 +7,17 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 library(featR)
 ```
 
-## featR does not touch your random stream
+featR leaves your random number generator alone unless you pass `seed`, runs
+on one core unless you ask for more, and loads its modeling engines only when
+a function needs them.
+
+## Seeds
 
 No featR function calls `set.seed()` unless you pass `seed`. When you do, the
-seed applies **for that call only**. Your previous RNG state is restored when
-the function returns, even when it errors. Two consequences follow:
-
-* Two calls with the same `seed` give the same answer.
-* Calling featR with a seed does not change the random numbers your own code
-  draws afterwards.
+seed applies to that call only, and your previous RNG state is restored when
+the function returns, even if it errors. So two calls with the same `seed`
+give the same answer, and a seeded featR call does not change the random
+numbers your own code draws afterwards:
 
 ```{r}
 d <- data.frame(a = sin(1:50), b = cos(1:50), c = sin(1:50) + 0.1 * cos(3:52))
@@ -31,77 +33,100 @@ observed <- runif(3)
 identical(expected, observed)
 ```
 
-Without a `seed`, randomized methods draw from your global stream like any
-other R function, so `set.seed()` before the call also works for sequential
-runs. Parallel workers do not draw from your global stream, so pass `seed`
-to make a parallel run reproducible. For `fs_randomforest()`, whose workers
-grow the trees, `seed` is the only way.
+Without `seed`, a randomized function draws from your global stream like any
+other R function, so calling `set.seed()` first also makes a sequential run
+repeatable. Parallel workers do not draw from your global stream, so a
+parallel run needs `seed`. For `fs_randomforest()` with more than one worker,
+`seed` is the only way to get the same forest twice.
 
-### Which functions use randomness
+## Which functions use randomness
 
-* **Train/test splits:** `fs_randomforest()`, `fs_mars()`,
-  `fs_recursivefeature()`, `fs_svm()`.
-* **Cross-validation folds:** `fs_lasso()`, `fs_elastic()`, `fs_mars()`,
-  `fs_recursivefeature()`, `fs_svm()`.
-* **Model fitting:** `fs_randomforest()` and `fs_boruta()` grow random forests.
-* **Monte-Carlo p-values:** `fs_chi()`, when expected cell counts are small.
-* **Row sampling:** `fs_correlation(sample_frac < 1)`.
-* **Subset sampling:** `fs_bayes(sample_combinations = ...)`.
-* **Deterministic:** `fs_supervised()`, `fs_unsupervised()`,
-  `fs_infogain()`, `fs_stepwise()`, `fs_pca()`, and `fs_svd()` with the exact
-  solver.
+| Source of randomness | Functions |
+|---|---|
+| Train/test split | `fs_randomforest()`, `fs_mars()`, `fs_recursivefeature()`, `fs_svm()` |
+| Cross-validation folds | `fs_lasso()`, `fs_elastic()`, `fs_mars()`, `fs_recursivefeature()`, `fs_svm()` |
+| Random forests | `fs_randomforest()`, `fs_boruta()` |
+| Monte Carlo p-values, when expected cell counts are small | `fs_chi()` |
+| Row down-sampling | `fs_correlation()` with `sample_frac < 1`, `fs_mars()` above `sample_size` rows (default 10000), `fs_randomforest()` with `control$sample_size` |
+| Subset sampling and MCMC | `fs_bayes()` |
+| None | `fs_supervised()`, `fs_unsupervised()`, `fs_infogain()`, `fs_stepwise()`, `fs_pca()`, `fs_svd()` |
 
-`fs_bayes()` also fits models by MCMC. Its `seed` controls which subsets are
-sampled and, unless you pass `brm_args = list(seed = ...)`, also draws one
-Stan seed per candidate model, so a seeded call reproduces the MCMC fits too,
-including under `parallel_combinations = TRUE`. An explicit `brm_args$seed`
-is used for every model instead.
+`fs_stepwise()`, `fs_pca()`, and the other deterministic functions have no
+`seed` argument because they never touch the RNG.
 
-## Parallelism is opt-in and bounded
+`fs_bayes()` fits each candidate model by MCMC. Its `seed` controls which
+subsets `sample_combinations` draws and, unless you pass
+`brm_args = list(seed = ...)`, also draws one Stan seed per candidate model.
+A seeded call therefore reproduces the MCMC fits too, including under
+`parallel_combinations = TRUE`. An explicit `brm_args$seed` is used for every
+model instead.
 
-Every function runs on one core unless you ask for more. The rules are:
+## Parallelism
 
-* Worker requests are **capped** at `parallel::detectCores()`. Asking for 64
-  on a 4-core laptop gives 4.
-* Clusters featR creates are **stopped when the call returns**, including on
-  error.
-* Parallel backends you registered yourself are restored afterwards.
-* With a `seed`, two seeded parallel runs agree with each other. What makes
-  them agree is that everything random is decided in the main R process from
-  the local seed, not on the workers: the train/test split and the
-  resampling folds, and, for the caret-based `fs_svm()`,
-  `fs_recursivefeature()` and `fs_mars()`, one seed per resample that caret
-  draws from that seed and hands to whichever worker fits the resample.
-  `fs_lasso()` and `fs_elastic()` need nothing more, because glmnet fits are
-  deterministic once the folds are fixed. Seeding the workers' own RNG
-  streams would not be enough on its own: foreach gives each resample to
-  whichever worker is free, so which stream fits which resample changes from
-  run to run. The exception is `fs_randomforest()`, which hands each worker
-  one fixed block of trees and seeds the workers with L'Ecuyer-CMRG streams.
-  A seeded parallel run need not agree with a seeded *sequential* one.
+Every function runs on one core unless you ask for more:
+
+| Function | How to ask | Workers when you ask |
+|---|---|---|
+| `fs_lasso()` | `parallel = TRUE` | `n_cores`, default 2 |
+| `fs_chi()` | `parallel = TRUE` | `n_cores`, default 2, or the future plan you already set |
+| `fs_correlation()` | `parallel = TRUE`, `method = "pointbiserial"` only | `n_cores`, default 2 |
+| `fs_recursivefeature()` | `parallel = TRUE` | 2 |
+| `fs_elastic()`, `fs_mars()`, `fs_randomforest()`, `fs_svm()` | `n_cores` greater than 1 | `n_cores` |
+| `fs_bayes()` | `parallel_combinations = TRUE` | `n_cores`; not available on Windows |
+
+Worker requests are capped at `parallel::detectCores()`, so asking for 64
+workers on a 4-core laptop gives 4. Clusters featR creates are stopped when
+the call returns, including on error, and a foreach backend or future plan
+you registered yourself is restored afterwards. If you have already set a
+non-sequential future plan, `fs_chi()` uses that plan as is, ignores
+`n_cores`, and leaves your workers running.
+
+### Seeded parallel runs
+
+For most functions, two seeded parallel runs agree with each other because
+everything random is decided in the main R process from the local seed: the
+train/test split, the resampling folds, and, for the caret-based `fs_svm()`,
+`fs_recursivefeature()`, and `fs_mars()`, one seed per resample that caret
+draws and hands to whichever worker fits that resample. Seeding the workers'
+own RNG streams would not be enough on its own. foreach gives each resample
+to whichever worker is free, so which stream fits which resample changes from
+run to run. `fs_lasso()` and `fs_elastic()` need nothing more, because glmnet
+fits are deterministic once the folds are fixed.
+
+`fs_randomforest()` works differently. It hands each worker a fixed block of
+trees and seeds the workers with L'Ecuyer-CMRG streams.
+
+A seeded parallel run need not match a seeded sequential one. `fs_elastic()`
+guarantees that its two runs agree. `fs_svm()` and `fs_recursivefeature()`
+make no such promise, and `fs_chi()`'s parallel p-values come from furrr's
+own streams, so they differ from the sequential ones for the same `seed`.
 
 ```r
 fs_randomforest(big_data, "y", task = "regression", n_cores = 4, seed = 1)
 fs_lasso(big_data, "y", parallel = TRUE, n_cores = 4, seed = 1)
 ```
 
-One caveat: when `fs_randomforest()` grows its forest on more than one worker,
-the pieces are merged with `randomForest::combine()`. That drops the
-out-of-bag error estimates, so `details$oob` is `NULL`. Use `n_cores = 1` if
-you need the OOB numbers.
+When `fs_randomforest()` grows its forest on more than one worker, it merges
+the pieces with `randomForest::combine()`, which drops the out-of-bag error
+estimates, so `details$oob` is `NULL`. Use `n_cores = 1` if you need the OOB
+numbers. `fs_bayes()` with `parallel_combinations = TRUE` holds each model to
+a single MCMC chain, so cross-chain diagnostics such as R-hat are not
+available; it warns when that happens.
 
 ## Optional dependencies
 
-The only hard dependencies are data.table, parallel, stats, utils, and withr.
-Every modeling engine is in `Suggests` and is loaded only on the code path that
-needs it. A missing package gives an actionable error:
+featR's hard dependencies are data.table, methods, parallel, stats, utils,
+and withr. Every modeling engine is in `Suggests` and is loaded only on the
+code path that needs it. A missing package stops the call with the command
+to fix it:
 
 ```
-Error: Packages 'glmnet', 'Matrix' are required for lasso feature selection
-but not installed. Install with: install.packages(c("glmnet", "Matrix"))
+Error: Package 'glmnet' is required for lasso feature selection but not
+installed. Install with: install.packages(c("glmnet"))
 ```
 
-To install everything at once:
+The [choosing a method](choosing-a-method.html) guide lists which packages
+each function needs. To install all of them at once:
 
 ```r
 install.packages(c(
@@ -112,5 +137,6 @@ install.packages(c(
 ))
 ```
 
-`fs_bayes()` also needs a working C++ toolchain for Stan. See the
-[brms installation notes](https://github.com/paul-buerkner/brms#how-do-i-install-brms).
+`fs_bayes()` also needs a working C++ toolchain for Stan; the
+[brms installation notes](https://github.com/paul-buerkner/brms#how-do-i-install-brms)
+explain how to set one up.

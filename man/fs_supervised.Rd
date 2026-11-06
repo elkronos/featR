@@ -2,7 +2,7 @@
 % Please edit documentation in R/fs_supervised.R
 \name{fs_supervised}
 \alias{fs_supervised}
-\title{Supervised Filter-Based Feature Selection}
+\title{Supervised filter that scores each feature against a target}
 \usage{
 fs_supervised(
   data,
@@ -18,137 +18,127 @@ fs_supervised(
 )
 }
 \arguments{
-\item{data}{A data.frame, data.table, or matrix containing \code{target} and
-the candidate feature columns. Every column other than \code{target} must be
-numeric. The input is copied, never modified in place.}
+\item{data}{A data.frame, data.table, or matrix holding \code{target} and the
+candidate features. Every column other than \code{target} must be numeric.
+The input is copied, never modified in place.}
 
-\item{target}{Character. Name of the target column in \code{data}. It is
-removed from the candidate features and used as the scoring target. The
-target column itself may be numeric, factor, character, or logical; any
-other type is an error.}
+\item{target}{Single string naming the target column of \code{data}. The target
+may be numeric, factor, character, or logical; any other type is an
+error. It is removed from the candidates and used only for scoring.}
 
-\item{method}{One of \code{"auto"} (default), \code{"correlation"},
-\code{"anova"}.}
+\item{method}{One of \code{"auto"} (default), \code{"correlation"}, or \code{"anova"}.
+See Details.}
 
-\item{threshold}{Non-negative, finite numeric scalar threshold applied to
-the feature scores (not to the target directly). Default 0. Note that the
-two methods put scores on different scales: \code{[0, 1]} for
-\code{"correlation"} and \code{[0, Inf]} for \code{"anova"}. With the
-defaults (\code{threshold = 0}, \code{direction = "above"},
-\code{action = "keep"}) nothing is filtered in practice: any
-non-constant feature has a sample \eqn{|r| > 0} or \eqn{F > 0}, even
-when it is pure noise, so every feature with a defined score is kept.
-Choose a threshold to make an actual selection.}
+\item{threshold}{Non-negative, finite number compared with each feature's
+score. Default 0. The scale depends on the method: \verb{[0, 1]} for
+\code{"correlation"}, \verb{[0, Inf]} for \code{"anova"}. With the defaults
+(\code{threshold = 0}, \code{direction = "above"}, \code{action = "keep"}) nothing is
+filtered: any non-constant feature, pure noise included, has a sample
+\eqn{|r| > 0} or \eqn{F > 0}, so every feature with a defined score is
+kept. Set a threshold to make a real selection.}
 
-\item{direction}{One of \code{"above"} (default), \code{"below"}; compares
-scores to \code{threshold}.}
+\item{direction}{\code{"above"} (default) or \code{"below"}: which side of
+\code{threshold} a score must fall on to meet the condition.}
 
-\item{action}{One of \code{"keep"} (default), \code{"remove"}; determines
-whether features meeting the condition are retained or dropped.}
+\item{action}{\code{"keep"} (default) retains the features that meet the
+condition; \code{"remove"} drops them.}
 
-\item{include_equal}{Logical; if TRUE, comparisons are inclusive
-(greater/less than or equal) instead of strict. Default FALSE.}
+\item{include_equal}{Logical. If \code{TRUE}, a score equal to \code{threshold}
+meets the condition. Default \code{FALSE}.}
 
-\item{na_rm}{Logical; if TRUE (the default), rows with NA in a feature or
-in the target are dropped when computing that feature's score. If FALSE,
-an NA anywhere in a feature or the target makes that feature's score
-undefined.}
+\item{na_rm}{Logical. If \code{TRUE} (the default), rows with \code{NA} in a feature
+or in the target are left out when that feature is scored. If \code{FALSE},
+an \code{NA} anywhere in a feature or in the target makes that feature's score
+\code{NA}.}
 
-\item{output}{One of \code{"result"} (default), \code{"matrix"},
-\code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
-\code{"names"}, \code{"list"}. Throughout, "candidate features" means the
+\item{output}{Shape of the return value. "Candidate features" means the
 columns of \code{data} other than \code{target}, in their original order.
 \itemize{
-\item \code{"result"} (default): an \code{fs_result} object (see
-Value).
-\item \code{"matrix"}: numeric matrix of the selected features.
-\item \code{"dt"}: data.table of the selected features.
-\item \code{"data.frame"}: data.frame of the selected features.
-\item \code{"mask"}: logical vector, one element per candidate feature,
-named after the candidate features; TRUE marks a selected column.
-\item \code{"indices"}: integer vector of the selected column indices,
-indexing the candidate features (that is, \code{data} without \code{target}),
-named after the selected columns.
-\item \code{"names"}: character vector of the selected column names.
-\item \code{"list"}: list with components \code{filtered} (matrix),
-\code{mask}, \code{indices}, \code{names}, \code{scores} (all as
-above), and \code{meta}, a list recording \code{method_arg} (the
-method as requested), \code{method_used} (the method after
-\code{"auto"} was resolved), \code{threshold}, \code{direction},
-\code{action}, \code{include_equal}, \code{na_rm},
+\item \code{"result"} (default): an \code{fs_result} object (see Value).
+\item \code{"matrix"}, \code{"dt"}, \code{"data.frame"}: the selected features as a
+numeric matrix, a data.table, or a data.frame.
+\item \code{"mask"}: logical vector with one element per candidate feature,
+named after the candidates; \code{TRUE} marks a selected feature.
+\item \code{"indices"}: integer positions of the selected features among
+the candidates (that is, in \code{data} without \code{target}), named after
+the selected features.
+\item \code{"names"}: character vector of the selected feature names.
+\item \code{"list"}: a list with \code{filtered} (matrix), \code{mask}, \code{indices},
+\code{names}, \code{scores}, and \code{meta}. \code{meta} records \code{method_arg} (the
+method as requested), \code{method_used} (after \code{"auto"} is resolved),
+\code{threshold}, \code{direction}, \code{action}, \code{include_equal}, \code{na_rm},
 \code{n_input_cols}, and \code{n_kept_cols}.
 }}
 
-\item{verbose}{Logical; emit progress messages. Default FALSE.}
+\item{verbose}{Logical; print progress messages. Default \code{FALSE}.}
 }
 \value{
-With the default \code{output = "result"}, an object of class
-\code{fs_result} with elements:
+With \code{output = "result"} (the default), an \code{fs_result} object:
 \itemize{
 \item \code{selected}: character vector of selected feature names.
-\item \code{scores}: named numeric vector of per-feature scores, in column
-order, \code{NA} where the score is undefined.
-\item \code{method}: \code{"supervised_"} followed by the resolved scoring
-method, for example \code{"supervised_correlation"}.
+\item \code{scores}: named numeric vector with one score per candidate
+feature, in column order, \code{NA} where the score is undefined.
+\item \code{method}: \code{"supervised_"} followed by the method actually used,
+for example \code{"supervised_correlation"}.
 \item \code{task}: \code{"regression"} for a numeric target,
-\code{"classification"} for a factor target, \code{NA} otherwise.
+\code{"classification"} for a factor target, and \code{NA} for a character or
+logical target, whose intended task is ambiguous.
 \item \code{model}: \code{NULL}.
 \item \code{details}: a list holding, in this order, \code{mask} (the logical
-keep-mask over the candidate features), \code{indices} (the selected
-column indices, named after the selected columns), \code{filtered} (the
-selected columns as a data.table), \code{threshold}, \code{direction},
-\code{action}, and \code{n_features} (the number of candidate features, that
-is \code{ncol(data) - 1}).
+keep-mask over the candidates), \code{indices} (selected positions, named),
+\code{filtered} (the selected columns as a data.table), \code{threshold},
+\code{direction}, \code{action}, and \code{n_features} (the number of candidates,
+\code{ncol(data) - 1}).
 \item \code{call}: the matched call.
 }
-Any other \code{output} returns that shape instead, exactly as documented
-above. When no feature meets the selection criteria, a warning is issued
-and the tabular shapes come back empty: \code{"matrix"} and
-\code{"data.frame"} have zero columns and keep the input row count, while
-the \code{"dt"} shape (and \code{details$filtered}) is only guaranteed to have
-zero columns -- data.table represents a zero-column table as having zero
-rows, so its row count is not preserved.
+Any other \code{output} returns the shape described under \code{output}.
+
+When no feature meets the criteria, a warning is issued and the tabular
+shapes come back empty. \code{"matrix"} and \code{"data.frame"} then have zero
+columns and keep the input row count. The \code{"dt"} shape and
+\code{details$filtered} have zero columns and also zero rows, because
+data.table represents a zero-column table that way.
 }
 \description{
-Performs supervised, univariate, filter-based feature selection: every
-column of \code{data} except \code{target} is scored against the target, and
-features are selected or dropped by comparing that score to \code{threshold}.
+Scores every column of \code{data} except \code{target} against the target, one
+feature at a time, and keeps or drops each feature by comparing its score
+with \code{threshold}. A numeric target is scored by absolute Pearson
+correlation, a categorical target by the one-way ANOVA F statistic.
 }
 \details{
-This is one of the cheapest supervised screens in featR: no predictive
-model is fitted, each feature is scored on its own, and the cost is linear
-in the number of columns, so it scales to wide data. The flip side is that
-scoring is strictly univariate: it cannot see interactions between
-features, and it will happily keep a whole group of near-duplicate columns
-that all correlate with the target. Use \code{\link[=fs_correlation]{fs_correlation()}} to prune that
-redundancy afterwards, or a wrapper such as \code{\link[=fs_recursivefeature]{fs_recursivefeature()}} or
-\code{\link[=fs_svm]{fs_svm()}} when the joint contribution is what matters.
+No model is fitted, so the cost grows linearly with the number of columns
+and the function copes with wide data. Each feature is scored on its own,
+which has two consequences: the filter cannot see interactions, and it
+keeps every member of a group of near-duplicate columns that all track the
+target. Prune that redundancy afterwards with \code{\link[=fs_correlation]{fs_correlation()}}, or use a
+wrapper such as \code{\link[=fs_recursivefeature]{fs_recursivefeature()}} or \code{\link[=fs_svm]{fs_svm()}} when the joint
+contribution of features is what you care about.
 
-Supported methods:
+The three values of \code{method}:
 \itemize{
-\item \code{"correlation"}: Absolute Pearson correlation (numeric
-target), so scores lie in \code{[0, 1]}. A constant feature (or
-target) has no defined correlation and scores \code{NA}; the check is
-relative to the column's magnitude, so features measured on a very
-small scale are scored normally.
-\item \code{"anova"}: One-way ANOVA F-statistic (categorical target),
-so scores lie in \code{[0, Inf]}: a feature that separates the
-classes perfectly (no spread within any class) scores \code{Inf}, and
-a constant feature scores \code{NA}.
-\item \code{"auto"}: Chooses \code{"correlation"} for a numeric target
-and \code{"anova"} for a categorical one. Because the two score scales
-differ, a message reports the resolved method when
-\code{verbose = TRUE}.
+\item \code{"correlation"} requires a numeric target. The score is the
+absolute Pearson correlation, in \verb{[0, 1]}. A constant feature or a
+constant target has no defined correlation and scores \code{NA}. The
+constancy check is relative to each column's magnitude, so a feature
+measured on a very small or very large scale is scored normally.
+\item \code{"anova"} requires a factor, character, or logical target. The
+score is the one-way ANOVA F statistic, in \verb{[0, Inf]}. A feature that
+separates the classes perfectly (no spread within any class) scores
+\code{Inf}, and a constant feature scores \code{NA}.
+\item \code{"auto"} (the default) uses \code{"correlation"} for a numeric target
+and \code{"anova"} otherwise. The two scales differ, so a threshold that
+suits one is meaningless for the other; with \code{verbose = TRUE} a message
+reports which method was chosen.
 }
 
-Features whose score is undefined (\code{NA}) are never selected, under
-both \code{action = "keep"} and \code{action = "remove"}; a warning
-reports how many such features were excluded.
+A feature whose score is \code{NA} is never selected, whether \code{action} is
+\code{"keep"} or \code{"remove"}, and a warning reports how many features were
+excluded this way.
 
-Columns are subset by integer index, never by name, so duplicated feature
-names cannot select the wrong columns. The target's name must be unique,
-and every column must have a non-empty, non-NA name (a matrix keeps its own
-column names; \code{V1}, \code{V2}, ... are used only when it has none).
+Columns are subset by position, never by name, so duplicated feature names
+cannot pull in the wrong column. The target's name must be unique, and
+every column needs a non-empty, non-\code{NA} name. A matrix keeps its own
+column names; \code{V1}, \code{V2}, ... are used only when it has none.
 }
 \examples{
 df <- data.frame(
@@ -177,4 +167,8 @@ df_fac <- data.frame(
 )
 fs_supervised(df_fac, target = "grp", method = "anova", threshold = 1,
               output = "matrix")
+}
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/filters.html}{Filter methods}
+guide, which runs this function on a worked example.
 }

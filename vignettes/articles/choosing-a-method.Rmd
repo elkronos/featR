@@ -7,13 +7,11 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
 featR has fourteen selection functions and two dimensionality-reduction
-functions. This page helps you pick one. It gives a decision guide, the
-trade-offs between the method families, and a reference table of what each
-function needs and accepts.
+functions. Pick one by the question you are asking, then check the
+reference tables at the end for what it accepts, how it treats missing
+values, and which optional packages it needs.
 
 ## Start with the question
-
-Different methods answer different questions. Pick the question first:
 
 | Question | Function |
 |---|---|
@@ -23,7 +21,7 @@ Different methods answer different questions. Pick the question first:
 | Which categorical columns are associated with a categorical outcome? | `fs_chi()`, `fs_infogain()` |
 | How much does each column reduce uncertainty about the outcome, whatever its type? | `fs_infogain()` |
 | Which predictors survive in a sparse linear model? | `fs_lasso()`, `fs_elastic()` |
-| Which predictors carry *any* information, including redundant ones? | `fs_boruta()` |
+| Which predictors carry *any* information about the outcome? | `fs_boruta()`; set `cutoff_cor = NULL` to keep redundant ones too |
 | How does each predictor rank in a random forest, and how good is that forest on held-out rows? | `fs_randomforest()` |
 | Which predictors does a model with automatic non-linearities and interactions use? | `fs_mars()` |
 | What is the smallest subset a particular model needs? | `fs_recursivefeature()`, `fs_svm()` |
@@ -31,76 +29,127 @@ Different methods answer different questions. Pick the question first:
 | Which predictor subset has the best out-of-sample predictive fit under a Bayesian model? | `fs_bayes()` |
 | Can I summarize these columns in a few directions? | `fs_pca()`, `fs_svd()` |
 
+The method guides cover each function in depth:
+[Filter methods](filters.html),
+[Regularization and embedded importance](regularization.html),
+[Wrapper methods](wrappers.html), and
+[Dimensionality reduction](dimensionality-reduction.html).
+
 ## Filters, embedded methods, and wrappers
 
-**Filters** (`fs_unsupervised()`, `fs_supervised()`, `fs_chi()`,
-`fs_infogain()`, `fs_correlation()`) score each feature without fitting a
-predictive model. They are fast and scale to thousands of columns. The cost is
-that they are **univariate**:
+A **filter** scores each feature without fitting a predictive model. The
+filters are `fs_unsupervised()`, `fs_supervised()`, `fs_chi()`,
+`fs_infogain()`, and `fs_correlation()`. They are fast and scale to thousands
+of columns. The cost is that they look at one feature at a time (or, for
+`fs_correlation()`, one pair at a time), so two copies of the same signal both
+score highly, and a feature that matters only in combination with another
+scores low. Use filters for a first cut, then refine with something else.
 
-* Two copies of the same signal both score highly.
-* A feature that matters only in combination with another scores low.
+An **embedded method** fits one model and reads the selection off its
+structure: non-zero coefficients, importance, or retained terms. The embedded
+methods are `fs_lasso()`, `fs_elastic()`, `fs_randomforest()`, and
+`fs_mars()`. They account for the other predictors, but the answer belongs to
+that model family. `fs_randomforest()` ranks rather than selects: unless you
+pass a selection function in `control$feature_select`, `selected` holds every
+predictor the forest used, in importance order, and the cutoff is yours.
 
-Use filters for a first cut, then refine with something else.
-
-**Embedded methods** (`fs_lasso()`, `fs_elastic()`, `fs_randomforest()`,
-`fs_mars()`) fit one model and read the selection off its structure: non-zero
-coefficients, importance, or retained terms. They account for the other
-predictors, but the answer belongs to that model family.
-
-**Wrappers** (`fs_recursivefeature()`, `fs_svm()`, `fs_boruta()`,
-`fs_stepwise()`, `fs_bayes()`) refit a model over many candidate subsets. They
-are the most expensive and the most tailored to one model. They are also the
-most prone to overfitting the selection itself, so validate their output on
-held-out data.
+A **wrapper** refits a model over many candidate subsets. The wrappers are
+`fs_recursivefeature()`, `fs_svm()`, `fs_boruta()`, `fs_stepwise()`, and
+`fs_bayes()`. They are the most expensive and the most tailored to one model.
+They are also the most prone to overfitting the selection itself, so validate
+their output on held-out data.
 
 ## A sensible default pipeline
 
 For a new tabular problem:
 
-1. **Clean.** Drop constant or mostly missing columns with
-   `fs_unsupervised()`. This uses no outcome, so it is safe to run before any
-   split.
-2. **Split.** Hold out a test set now, before anything looks at the outcome.
-3. **Deduplicate.** Prune near-duplicate columns with `fs_correlation()` on the
+1. Drop constant or mostly missing numeric columns with `fs_unsupervised()`.
+   It uses no outcome, so it is safe to run before any split.
+2. Hold out a test set now, before anything looks at the outcome.
+3. Prune near-duplicate numeric columns with `fs_correlation()` on the
    training rows.
-4. **Select.** Run the method that matches your final model on the training
-   rows: `fs_lasso()` for a linear model, `fs_randomforest()` or
-   `fs_boruta()` for trees, `fs_svm()` for an SVM.
-5. **Validate.** Evaluate the final model on the test rows.
+4. On the training rows, run the selector that matches your final model:
+   `fs_lasso()` for a linear model, `fs_recursivefeature()` (random forests by
+   default) for a forest, `fs_svm(feature_select = TRUE)` for an SVM. Use
+   `fs_boruta(cutoff_cor = NULL)` instead when you want every informative
+   feature rather than a compact set.
+5. Evaluate the final model on the test rows.
 
-The [validation and leakage](validation-and-leakage.html) article shows this
-pipeline end to end.
+The [validation and leakage](validation-and-leakage.html) article runs this
+pipeline end to end and lists which numbers each function reports on held-out
+data.
 
 ## Reference: what each function accepts
 
-Every selection function takes `data` first. The functions with an outcome take
-`target`, the **name** of the outcome column, second. The housekeeping
-arguments differ between functions, so check the table before you write a loop
-over several methods:
+The [calling convention](featR.html#the-calling-convention) is `data` first,
+then `target` as a string for the functions that use an outcome. Four
+functions break the pattern:
 
-| Function | `target` | Outcome types | `seed` | Parallel | Engine packages (Suggests) |
-|---|---|---|---|---|---|
-| `fs_unsupervised()` | — | none | — | — | none |
-| `fs_correlation()` | — | none | yes | `parallel`, `n_cores` (point-biserial only) | polycor (polychoric), foreach + doParallel |
-| `fs_supervised()` | yes | numeric, factor | — | — | none |
-| `fs_chi()` | yes | categorical | yes | `parallel`, `n_cores` | furrr + future when parallel |
-| `fs_infogain()` | yes | any (discretized) | — | — | none |
-| `fs_lasso()` | yes | numeric | yes | `parallel`, `n_cores` | glmnet, Matrix |
-| `fs_elastic()` | yes | numeric, factor | yes | `n_cores` | caret, glmnet, Matrix |
-| `fs_randomforest()` | yes | set by `task` | yes | `n_cores` | randomForest, caret, pROC (AUC) |
-| `fs_mars()` | yes | numeric, factor | yes | `n_cores` | caret, earth, pROC/PRROC (AUC) |
-| `fs_recursivefeature()` | yes | numeric, factor | yes | `parallel` | caret, randomForest (default functions), e1071 |
-| `fs_svm()` | yes | set by `task` | yes | `n_cores` | caret, kernlab, e1071, randomForest (rf_rfe) |
-| `fs_boruta()` | yes | numeric, factor | yes | — | Boruta |
-| `fs_stepwise()` | yes | numeric | — (deterministic) | — | MASS |
-| `fs_bayes()` | yes | any brms family | yes (subset sampling) | `parallel_combinations`, `n_cores` | brms, loo, a Stan toolchain |
-| `fs_pca()` | — | none | — | — | ggplot2 (plot), bigstatsr (large data) |
-| `fs_svd()` | — (`x`) | none | — | — | RSpectra (approximate solver) |
+* `fs_svm()` requires `task = "classification"` or `"regression"` and will not
+  guess it.
+* `fs_randomforest()` takes `task` too, defaulting to `"classification"`; it
+  warns when that default meets a numeric target.
+* `fs_bayes()` uses only the columns you list in `predictors`, and
+  `fs_svd()` takes a numeric matrix `x` instead of `data`.
 
-Every function takes `verbose`. All of them are sequential by default.
-`fs_chi()`, `fs_correlation()`, and `fs_lasso()` default to `n_cores = 2`, but
-that value is used only when you also set `parallel = TRUE`.
+### Outcome and predictor types
 
-If an engine package is missing, the function stops and prints the exact
-`install.packages()` call you need. Nothing fails deep inside a model fit.
+"Dummy-coded" means factor and character predictors are expanded into one
+column per level, so `selected` names those columns (`colorred`) rather than
+the original one (`color`). The [fs_result object](fs-result.html) article
+lists which functions do this.
+
+| Function | Outcome (`target`) | `task` reported | Predictor columns |
+|---|---|---|---|
+| `fs_unsupervised()` | none | `NA` | numeric only; any other column is an error |
+| `fs_correlation()` | none | `NA` | numeric for `"pearson"`, `"spearman"`, `"kendall"`; ordered factors for `"polychoric"`; numeric or two-valued columns for `"pointbiserial"` |
+| `fs_supervised()` | numeric, factor, character, or logical | `"regression"` for numeric, `"classification"` for factor, `NA` for character or logical | numeric only; any other column is an error |
+| `fs_chi()` | anything, coerced to a factor (a numeric outcome becomes one class per distinct value) | `"classification"` | factor and character only; numeric, logical, and date columns are skipped |
+| `fs_infogain()` | anything; a numeric outcome is binned | always `"classification"` | any mix: numeric columns are binned, dates split into year, month, and day |
+| `fs_lasso()` | numeric only | `"regression"` | numeric, factor, character, logical; dummy-coded |
+| `fs_elastic()` | numeric, or factor, character, or logical for classification | either | numeric, factor, character, logical; dummy-coded |
+| `fs_randomforest()` | set by `task` | either | numeric, factor, character, logical, `Date` |
+| `fs_mars()` | numeric, or factor or character for classification; logical is an error | either | numeric, factor, character, logical; importance is mapped back to the original column |
+| `fs_recursivefeature()` | numeric, or factor, character, or logical for classification | either | numeric, factor, character, logical; dummy-coded only with `handle_categorical = TRUE` |
+| `fs_svm()` | set by `task`; a numeric outcome may be a class label only if it has at most 10 values | either | numeric, factor, character, logical; dummy-coded |
+| `fs_boruta()` | numeric, or factor for classification; character is an error | either | numeric, factor, character, logical, `Date`, `POSIXt` |
+| `fs_stepwise()` | numeric only | `"regression"` | numeric, factor, character, logical; `scores` are per term, not per dummy |
+| `fs_bayes()` | whatever `brm_family` accepts (numeric for `gaussian()`, 0/1 or logical for `bernoulli()`) | `"classification"` for binary, categorical, and ordinal families, else `"regression"` | the columns named in `predictors`; `date_col` adds an `iso_week_id` predictor |
+| `fs_pca()` | none | no `fs_result` | numeric columns; other columns are kept as labels |
+| `fs_svd()` | none | no `fs_result` | a numeric matrix, or a data frame whose columns are all numeric |
+
+### Missing values and optional packages
+
+The packages in the last column are in featR's Suggests, so they are not
+installed with featR. Packages listed in parentheses are needed only for the
+feature named. When a required package is missing, the function stops before
+doing any work and prints the `install.packages()` call you need. A few are
+optional extras with a fallback instead of an error: without bigstatsr,
+`fs_pca()` uses `prcomp()` on large data; without pROC, `fs_randomforest()`
+reports no AUC and `fs_mars()` tunes on accuracy instead of ROC and skips
+the test ROC AUC; without PRROC, `fs_mars()` skips the PR AUC; without
+pbapply, `fs_bayes()` shows no progress bar. [Optional
+dependencies](reproducibility.html#optional-dependencies) has one command
+that installs every suggested package.
+
+| Function | Missing values | Suggests packages |
+|---|---|---|
+| `fs_unsupervised()` | `na_rm = TRUE` (default) ignores them for `"variance"`, `"mad"`, `"iqr"`, `"range"`; `"missing_prop"` and `"n_unique"` always see them | none |
+| `fs_correlation()` | `na.rm = FALSE` (default) leaves those correlations `NA`, and an `NA` pair is never flagged; `na.rm = TRUE` drops them pairwise. `"polychoric"` errors unless `na.rm = TRUE`, then drops incomplete rows | polycor (`"polychoric"`); foreach, doParallel (parallel point-biserial) |
+| `fs_supervised()` | `na_rm = TRUE` (default) drops incomplete rows separately for each feature | none |
+| `fs_chi()` | each feature is tested on its own complete cases | furrr, future (`parallel = TRUE`) |
+| `fs_infogain()` | handled per predictor and outcome pair | none |
+| `fs_lasso()` | an error, for the outcome and for predictors; `impute = "mean"` fills predictors with full-data means and warns that this leaks | glmnet; foreach, doParallel (`parallel = TRUE`) |
+| `fs_elastic()` | rows with any missing value are dropped | caret, glmnet, Matrix; e1071 (classification); foreach, doParallel (`n_cores > 1`) |
+| `fs_randomforest()` | rows with a missing outcome are dropped with a warning; missing predictors are imputed with training-row medians and modes | randomForest, caret; pROC (binary AUC); foreach, doParallel (`n_cores > 1`) |
+| `fs_mars()` | rows with any missing value are dropped | caret, earth; e1071 (classification); pROC, PRROC (binary ROC and PR AUC); MLmetrics with pROC (multiclass summary); foreach, doParallel (`n_cores > 1`) |
+| `fs_recursivefeature()` | an error in the outcome or the training predictors; missing test values are not imputed | caret; randomForest (default function set, or `model_method = "rf"`); e1071 (classification); foreach, doParallel (`parallel = TRUE`) |
+| `fs_svm()` | an error | caret, kernlab; e1071 (classification); randomForest (`select_method = "rf_rfe"`); foreach, doParallel (`n_cores > 1`) |
+| `fs_boruta()` | an error | Boruta |
+| `fs_stepwise()` | rows with any missing value are dropped, with a warning | MASS |
+| `fs_bayes()` | rows missing the outcome, a predictor, or `date_col` are dropped | brms, loo, and a working Stan toolchain; pbapply (progress bar) |
+| `fs_pca()` | rows with a missing numeric value are dropped | ggplot2 (plot); bigstatsr (data of 1e7 cells or more, otherwise `prcomp()` is used) |
+| `fs_svd()` | an error | RSpectra (approximate solver only) |
+
+`seed`, parallelism, and which functions use random numbers at all are covered
+in [Reproducibility and parallelism](reproducibility.html).

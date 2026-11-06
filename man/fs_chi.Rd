@@ -2,7 +2,7 @@
 % Please edit documentation in R/fs_chi.R
 \name{fs_chi}
 \alias{fs_chi}
-\title{Chi-square feature selection for categorical features}
+\title{Chi-squared tests for categorical features}
 \usage{
 fs_chi(
   data,
@@ -18,124 +18,140 @@ fs_chi(
 )
 }
 \arguments{
-\item{data}{A data.frame or data.table with features and target, with
-unique, non-empty, non-NA column names. Character columns are coerced to factor. The input
+\item{data}{A data frame or data.table holding the features and the
+target. Column names must be unique, non-empty, and not \code{NA}. The input
 object is never modified.}
 
-\item{target}{Character scalar: name of the target column. It is coerced to
-a factor if necessary and must have at least 2 non-NA levels.}
+\item{target}{Name of the target column. It is converted to a factor if
+necessary and must have at least 2 levels among its non-missing values.}
 
-\item{sig_level}{Numeric threshold for significance, strictly between 0
-and 1 (default 0.05).}
+\item{sig_level}{Significance threshold for the adjusted p-values, strictly
+between 0 and 1. Default 0.05.}
 
-\item{continuity_correction}{NULL/TRUE/FALSE: apply Yates correction to 2x2
-tables tested asymptotically. If NULL (default), auto-apply to every such
-table; TRUE is equivalent, FALSE disables it. It has no effect on tables
-larger than 2x2 or on simulation-based p-values, neither of which is ever
-corrected.}
+\item{continuity_correction}{\code{NULL}, \code{TRUE}, or \code{FALSE}. Controls Yates'
+correction for 2x2 tables tested asymptotically. \code{NULL} (the default)
+and \code{TRUE} both apply it; \code{FALSE} turns it off. Tables larger than 2x2
+and simulated p-values are never corrected.}
 
-\item{p_adjust_method}{Character: one of \code{stats::p.adjust.methods}
-(default "bonferroni"). Set to "none" to disable multiple-testing
-correction. Matching is case-insensitive, and an invalid name is an
-error before any feature is tested. The correction counts only the
-features that were actually tested: a skipped feature has an \code{NA} p-value,
-and \code{stats::p.adjust()} drops NAs before its default \code{n = length(p)} is
-evaluated, so skipped features keep an \code{NA} adjusted p-value and do not
-inflate the multiplier for the others. With \code{k} tested and \code{s} skipped
-features, "bonferroni" therefore multiplies by \code{k}, not by \code{k + s}.}
+\item{p_adjust_method}{Multiple-testing correction, one of
+\code{stats::p.adjust.methods}, matched case-insensitively. Default
+\code{"bonferroni"}; \code{"none"} turns correction off. An invalid name is an
+error before any feature is tested. Only tested features count toward
+the correction: a skipped feature keeps an \code{NA} adjusted p-value and
+does not raise the multiplier for the others. With \code{k} tested and \code{s}
+skipped features, \code{"bonferroni"} multiplies by \code{k}, not \code{k + s}.}
 
-\item{simulation_B}{Whole number >= 100: replicates for the simulation-based
-p-value used when any expected cell count is < 5 (default 2000). A
-simulated p-value is never below \code{1 / (simulation_B + 1)}, so after a
-multiplicity adjustment it may be unable to reach \code{sig_level} at all
-(with Bonferroni, once the number of tested features reaches
-\code{sig_level * (simulation_B + 1)}, i.e. 101 at the defaults); a warning
-then names the affected features and the \code{simulation_B} that would be
-needed.}
+\item{simulation_B}{Number of Monte Carlo replicates for the simulated
+p-value used when any expected cell count is below 5. A whole number of
+at least 100; default 2000. A simulated p-value is never below
+\code{1 / (simulation_B + 1)}, so after adjustment it may be unable to reach
+\code{sig_level} at all. With Bonferroni this happens once the number of
+tested features reaches \code{sig_level * (simulation_B + 1)}, which is 101
+at the defaults. A warning then names the affected features and the
+\code{simulation_B} you would need.}
 
-\item{seed}{Optional integer. Seeds the RNG locally (the previous RNG state
-is restored on exit), which makes simulation-based p-values reproducible
-in the sequential path. The parallel path draws from furrr's own
-L'Ecuyer-CMRG parallel streams (\code{furrr_options(seed = TRUE)}), so for the
-same \code{seed} parallel results are internally reproducible but differ from
-sequential results. Default NULL (never seeds).}
+\item{seed}{Optional integer. When supplied, the RNG is seeded for this
+call and the previous RNG state is restored on exit, which makes
+simulated p-values reproducible. With \code{parallel = TRUE} the simulations
+draw from furrr's parallel-safe streams instead
+(\code{furrr_options(seed = TRUE)}), so a given \code{seed} gives reproducible
+parallel results that differ from the sequential ones. Default \code{NULL}
+(featR does not touch the RNG).}
 
-\item{verbose}{Logical; if TRUE, emits informative messages (target
-coercion, skipped features, worker count). Default FALSE.}
+\item{verbose}{If \code{TRUE}, report target conversion, skipped features, and
+the worker count. Default \code{FALSE}.}
 
-\item{parallel}{Logical; if TRUE, run features in parallel using the
-suggested furrr and future packages. Default FALSE (sequential).}
+\item{parallel}{If \code{TRUE}, test features in parallel using the suggested
+furrr and future packages. Default \code{FALSE}.}
 
-\item{n_cores}{Whole number >= 1. Number of workers used when
-\code{parallel = TRUE}; requests are capped at the detected core count. If
-the current future plan is sequential (the default), a
-\code{future::multisession} plan with that many workers is set for the
-duration of the call and the previous plan is restored on exit, even if
-worker start-up fails. If you have already set a non-sequential plan
-(e.g. \code{future::plan(future::multisession, workers = 4)}), it is used as
-is, its workers are left running, and \code{n_cores} is ignored. Default 2.}
+\item{n_cores}{Number of workers when \code{parallel = TRUE}, a whole number of
+at least 1, capped at the detected core count. Default 2. If the current
+future plan is sequential (the future default), featR sets a
+\code{future::multisession} plan with this many workers for the duration of
+the call and restores the previous plan on exit, even if worker start-up
+fails. If you have already set a non-sequential plan, for example
+\code{future::plan(future::multisession, workers = 4)}, featR uses it as is,
+leaves its workers running, and ignores \code{n_cores}.}
 }
 \value{
-An object of class \code{fs_result} with:
+An \code{fs_result} object with:
 \describe{
-\item{selected}{Character vector of features with
-adj_p_value < sig_level.}
-\item{scores}{Named numeric vector of adjusted p-values, one per candidate
-categorical feature and \code{NA} for any feature that had to be skipped
-(smaller is stronger evidence of association).}
-\item{method}{"chi".}
-\item{task}{"classification".}
-\item{model}{NULL; the chi-square filter fits no model.}
-\item{details}{A list with \code{results} (the full results data.frame, one row
-per candidate categorical feature, ordered by adj_p_value then
-p_value so that skipped features sort last, with columns: feature;
-n (for tested features, the number of complete feature-target pairs;
-for skipped features, the feature's non-NA row count); df (NA for
-simulation-based tests, where the asymptotic degrees of freedom do
-not apply, and for skipped features); p_value; adj_p_value;
-significant (TRUE only when adj_p_value < sig_level, so FALSE for
-skipped features); method ("asymptotic" or "simulation", NA when
-skipped); correction_applied (TRUE/FALSE, NA when skipped);
-min_expected (minimum expected cell count, NA when skipped)), plus
-\code{sig_level}, \code{p_adjust_method} (the method string as supplied), and
-\code{n_features} (the number of candidate categorical features,
-including any that were skipped).}
-\item{call}{The matched call.}
+\item{\code{selected}}{Features with an adjusted p-value below \code{sig_level}.}
+\item{\code{scores}}{Named numeric vector of adjusted p-values, one per
+candidate factor feature, \code{NA} for skipped features. Smaller means
+stronger evidence of association, the opposite of most featR
+scores.}
+\item{\code{method}}{\code{"chi"}.}
+\item{\code{task}}{\code{"classification"}.}
+\item{\code{model}}{\code{NULL}; no model is fitted.}
+\item{\code{details}}{A list with \code{results}, \code{sig_level}, \code{p_adjust_method}
+(as supplied), and \code{n_features} (the number of candidate factor
+features, skipped ones included). \code{results} is a data frame with one
+row per candidate feature, ordered by adjusted then raw p-value with
+skipped features last. Its columns are:
+\itemize{
+\item \code{feature}: the column name.
+\item \code{n}: for tested features, the number of complete
+feature-target pairs; for skipped features, the feature's count of
+non-missing values.
+\item \code{df}: degrees of freedom; \code{NA} for simulated and skipped tests.
+\item \code{p_value}, \code{adj_p_value}: raw and adjusted p-values.
+\item \code{significant}: \code{TRUE} when \code{adj_p_value < sig_level}, so
+\code{FALSE} for skipped features.
+\item \code{method}: \code{"asymptotic"} or \code{"simulation"}; \code{NA} when skipped.
+\item \code{correction_applied}: whether Yates' correction was actually
+applied. A 2x2 table whose counts equal their expected values
+gets no correction even when one was requested. \code{NA} when skipped.
+\item \code{min_expected}: the smallest expected cell count; \code{NA} when
+skipped.
+}}
+\item{\code{call}}{The matched call.}
 }
 }
 \description{
-Tests association between each categorical feature and a (categorical) target
-via the chi-square test of independence. Character columns are automatically
-coerced to factors, and only factor features (excluding the target) are tested.
-Handles missing values per-feature, switches to simulation-based p-values
-when any expected cell count is < 5, and supports multiple-testing correction.
+Tests each categorical feature for association with a categorical target
+using the chi-squared test of independence, adjusts the p-values for
+multiple testing, and keeps the features whose adjusted p-value is below
+\code{sig_level}.
 }
 \details{
-The question this answers is, per feature: does the joint distribution of
-that feature and the target differ from what independence would predict?
-Features are examined one at a time, so the result describes marginal
-association only. It says nothing about interactions, and two features
-carrying the same information are both reported as significant. Only factor
-features are tested: numeric, logical and date columns are ignored entirely,
-so convert or discretize them first if you want them included.
+For each feature, the test asks whether the feature and the target are
+distributed jointly the way independence would predict. Features are
+tested one at a time, so the result describes marginal association only.
+A feature that matters only in combination with another is missed, and
+two features carrying the same information are both reported as
+significant.
+
+A p-value measures evidence against independence and says nothing about
+the size of the effect. With enough rows a negligible association still
+clears any \code{sig_level}.
+}
+\section{Which columns are tested}{
+
+Character columns are converted to factors, and then every factor column
+other than the target is tested. Numeric, logical, and date columns are
+ignored, so convert or discretize them first if you want them tested. If
+no factor features remain, the result has an empty selection and no
+error is raised. A numeric target is converted with \code{as.factor()}, so each
+distinct value becomes its own class.
+}
+
+\section{Missing values and sparse tables}{
 
 Each feature is tested on its own complete cases (rows where both the
 feature and the target are observed), so \code{n} can differ between features.
-Levels left empty after that filtering are dropped; if either the feature or
-the target then has fewer than two levels, the feature is skipped with an
-\code{NA} p-value rather than tested.
+Levels left empty after that filtering are dropped. If the feature or the
+target then has fewer than two levels, the feature is skipped: it gets an
+\code{NA} p-value and is not selected.
 
-A feature is tested with the asymptotic chi-square statistic when every
+A feature is tested with the asymptotic chi-squared statistic when every
 expected cell count is at least 5. Otherwise the p-value comes from a
-Monte-Carlo simulation with \code{simulation_B} replicates, which makes it
-stochastic unless \code{seed} is set and leaves \code{df} as \code{NA}. Yates' continuity
-correction applies only on the asymptotic path and only to 2x2 tables; it is
-never applied to a simulated p-value or to a larger table, whatever
-\code{continuity_correction} says.
-
-Finally, a p-value is evidence against independence, not an effect size:
-with enough rows a negligible association still clears any \code{sig_level}.
+Monte Carlo simulation with \code{simulation_B} replicates. A simulated p-value
+changes from run to run unless \code{seed} is set, and its \code{df} is \code{NA}. Yates'
+continuity correction applies only to 2x2 tables on the asymptotic path,
+whatever \code{continuity_correction} says.
 }
+
 \examples{
 d <- data.frame(
   f1 = factor(rep(c("A", "B", "A"), times = c(40, 40, 20))),
@@ -145,4 +161,8 @@ d <- data.frame(
 out <- fs_chi(d, "target")
 out$selected
 out$details$results
+}
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/filters.html}{Filter methods}
+guide, which runs this function on a worked example.
 }

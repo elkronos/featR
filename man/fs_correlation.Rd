@@ -2,7 +2,7 @@
 % Please edit documentation in R/fs_correlation.R
 \name{fs_correlation}
 \alias{fs_correlation}
-\title{Correlation-based feature selection}
+\title{Find and prune highly correlated variables}
 \usage{
 fs_correlation(
   data,
@@ -20,136 +20,144 @@ fs_correlation(
 )
 }
 \arguments{
-\item{data}{A data frame or matrix with at least 2 columns and unique,
-non-empty column names (a correlation matrix with duplicated dimnames is ambiguous,
-so duplicates are rejected rather than silently resolved to the first
-match). For \code{"pearson"}, \code{"spearman"},
-\code{"kendall"}: all columns must be numeric. For \code{"polychoric"}:
-all columns must be ordered factors. For \code{"pointbiserial"}: columns
-may be numeric (continuous) or dichotomous (exactly 2 unique non-NA values).}
+\item{data}{A data frame or matrix with at least 2 columns. Column names
+must be unique, non-empty, and not \code{NA}; duplicated names are an error
+because a correlation matrix with duplicated names is ambiguous. The
+allowed column types depend on \code{method}:
+\itemize{
+\item \code{"pearson"}, \code{"spearman"}, \code{"kendall"}: all numeric.
+\item \code{"polychoric"}: all ordered factors.
+\item \code{"pointbiserial"}: numeric, or any type with exactly 2 distinct
+non-missing values. A numeric column with more than 2 distinct
+values counts as continuous, and a column with exactly 2 counts as
+dichotomous. At least one of each is needed, or every correlation
+is \code{NA} (with a warning).
+}}
 
-\item{threshold}{Numeric between 0 and 1. Pairs with |correlation| > threshold
-are flagged as redundant. Required; there is no default.}
+\item{threshold}{Absolute-correlation cutoff between 0 and 1. Pairs with
+an absolute correlation strictly greater than \code{threshold} are flagged.
+Required; there is no default.}
 
-\item{method}{One of \code{"pearson"} (default), \code{"spearman"},
-\code{"kendall"}, \code{"polychoric"}, \code{"pointbiserial"}.
-Point-biserial correlations are computed as the Pearson correlation
-between the continuous variable and a 0/1 indicator of the dichotomous
-variable (1 for the second sorted unique value, e.g. the second factor
-level), which is the definition of the point-biserial coefficient. Only
-continuous-dichotomous pairs are defined under that method: cells for
-continuous-continuous and dichotomous-dichotomous pairs stay \code{NA},
-so those pairs can never be flagged.}
+\item{method}{One of \code{"pearson"} (default), \code{"spearman"}, \code{"kendall"},
+\code{"polychoric"} (needs the suggested polycor package), or
+\code{"pointbiserial"}. The point-biserial correlation is the Pearson
+correlation between a continuous variable and a 0/1 indicator of a
+dichotomous one, where 1 marks the second sorted value (for a factor,
+the second level). Only continuous-dichotomous pairs have one, so under
+this method every continuous-continuous and dichotomous-dichotomous
+cell stays \code{NA} and those pairs are never flagged.}
 
-\item{prune}{Logical. If \code{TRUE} (default), \code{selected} is the
-reduced non-redundant set: variables are dropped one at a time until no
-two retained variables correlate above \code{threshold}, each step
-dropping the member of the strongest remaining pair with the HIGHER mean
-absolute correlation to the other retained variables. This borrows the
-tie-break of \code{caret::findCorrelation()} but not its scan order
-(caret visits columns in order of mean correlation rather than pairs in
-order of strength), so the two can drop different variables, and
-neither is guaranteed to drop the fewest. Variables that were never
-flagged are always retained.
-If \code{FALSE}, \code{selected} is every variable appearing in at least
-one flagged pair, i.e. the redundant set, and nothing is dropped.}
+\item{prune}{If \code{TRUE} (default), \code{selected} is the reduced set left after
+pruning (see "How pruning works"). If \code{FALSE}, nothing is dropped and
+\code{selected} is every variable in at least one flagged pair: the
+redundant set, not the set to keep.}
 
-\item{na.rm}{Logical. If \code{TRUE}, missing values are removed pairwise
-for \code{"pearson"}/\code{"spearman"}/\code{"kendall"}, per pair
-(complete observations within each variable pair) for
-\code{"pointbiserial"}, and casewise (complete cases across all columns)
-for \code{"polychoric"}. If \code{FALSE} (default), missing values
-propagate NA into the affected correlations, except for
-\code{"polychoric"}, which stops with an error when missing values are
-present (silently deleting cases would contradict the behavior of the
-other methods). Default \code{FALSE}.}
+\item{na.rm}{How to handle missing values. If \code{TRUE}, they are removed
+pairwise for \code{"pearson"}, \code{"spearman"}, and \code{"kendall"}; within each
+pair for \code{"pointbiserial"}; and casewise (rows complete across all
+columns) for \code{"polychoric"}. If \code{FALSE} (default), a missing value makes
+the affected correlations \code{NA}, except under \code{"polychoric"}, which stops
+with an error instead of silently dropping rows.}
 
-\item{sample_frac}{Numeric in (0, 1]. Fraction of rows sampled without
-replacement (rounded up, never below one row) before computing
-correlations. Default \code{1} (no sampling).}
+\item{sample_frac}{Fraction of rows, in (0, 1], to sample without
+replacement before computing correlations. The sample size is rounded up
+and is never below one row. Default 1 (no sampling).}
 
-\item{output_format}{\code{"matrix"} (default) or \code{"data.frame"} for the
-correlation matrix stored in \code{details$corr_matrix}.}
+\item{output_format}{Shape of \code{details$corr_matrix}: \code{"matrix"} (default)
+or \code{"data.frame"} (long form).}
 
-\item{diag_value}{Single numeric value, or \code{NA}, assigned to the
-diagonal of the reported correlation matrix. It is cosmetic: the diagonal
-never takes part in flagging, scoring, or pruning. Default \code{0}.}
+\item{diag_value}{Single number, or \code{NA}, written on the diagonal of
+\code{details$corr_matrix}. The diagonal never takes part in flagging,
+scoring, or pruning. Default 0.}
 
-\item{seed}{Optional integer seed for reproducible sampling, applied
-locally; the previous RNG state is restored afterwards. It only matters
-for the row down-sampling, which happens in the main R process; the
-point-biserial computations run under \code{parallel = TRUE} use no
-random numbers, so no worker RNG streams are set or needed. Default
-\code{NULL} (never seeds).}
+\item{seed}{Optional integer seed for the row sampling. It is applied for
+this call only and the previous RNG state is restored afterward. It has
+no effect when \code{sample_frac = 1}, and parallel point-biserial
+computation uses no random numbers. Default \code{NULL} (featR does not
+touch the RNG).}
 
-\item{verbose}{Logical. Emit progress messages (row sampling, the
-correlation method used, and any variables dropped by pruning). Default
-\code{FALSE}.}
+\item{verbose}{If \code{TRUE}, report row sampling, the correlation method, and
+any variables dropped by pruning. Default \code{FALSE}.}
 
-\item{parallel}{Logical. Use parallel processing (via the suggested foreach
-and doParallel packages) for point-biserial computations. Ignored by every
-other method, all of which are single-call. Default \code{FALSE}
-(sequential).}
+\item{parallel}{If \code{TRUE}, compute point-biserial correlations in parallel
+with the suggested foreach and doParallel packages. Every other method
+computes the matrix in one call and ignores this. Default \code{FALSE}.}
 
-\item{n_cores}{Whole number >= 1. Number of workers if \code{parallel = TRUE}
-and \code{method = "pointbiserial"}; requests are capped at the detected
-core count. Default \code{2}.}
+\item{n_cores}{Number of workers when \code{parallel = TRUE} and
+\code{method = "pointbiserial"}, a whole number of at least 1, capped at the
+detected core count. Default 2.}
 }
 \value{
-An object of class \code{fs_result} with:
+An \code{fs_result} object with:
 \describe{
-\item{selected}{Character vector. With \code{prune = TRUE}, every variable
-that survives pruning (all columns except \code{details$dropped}), no
-two of which have a computable absolute correlation above
-\code{threshold}. With \code{prune = FALSE}, every variable appearing in
-at least one flagged pair (both members of each pair), which is the
-redundant set rather than the set to keep.}
-\item{scores}{Named numeric vector giving each variable's maximum absolute
-correlation with any other variable (NA when no correlation with that
-variable could be computed).}
-\item{method}{\code{paste0("correlation_", method)}, e.g.
-"correlation_pearson".}
-\item{task}{\code{NA_character_}; correlation filtering is unsupervised.}
-\item{model}{NULL; no model is fitted.}
-\item{details}{A list with \code{corr_matrix} (the correlation matrix, with the
-diagonal set to \code{diag_value}, reshaped to long form with columns
-Var1, Var2, Correlation when \code{output_format = "data.frame"}),
-\code{pairs} (a data.frame of the flagged pairs with columns Var1, Var2,
-Correlation, ordered by decreasing absolute correlation and unaffected
-by \code{output_format}), \code{dropped} (variables removed by pruning, in
-the order they were dropped; empty when \code{prune = FALSE}),
-\code{redundant} (every variable in at least one flagged pair, i.e.
-\code{selected} as it would be under \code{prune = FALSE}), and
-\code{n_features} (the number of variables considered).}
-\item{call}{The matched call.}
+\item{\code{selected}}{With \code{prune = TRUE}, every variable not in
+\code{details$dropped}; no two of them have a computable absolute
+correlation above \code{threshold}. With \code{prune = FALSE}, both members of
+every flagged pair.}
+\item{\code{scores}}{Named numeric vector giving each variable's largest
+absolute correlation with any other variable. Larger means more
+redundant. \code{NA} when no correlation with that variable could be
+computed.}
+\item{\code{method}}{\code{paste0("correlation_", method)}, for example
+\code{"correlation_pearson"}.}
+\item{\code{task}}{\code{NA}; the filter uses no outcome.}
+\item{\code{model}}{\code{NULL}; no model is fitted.}
+\item{\code{details}}{A list with:
+\itemize{
+\item \code{corr_matrix}: the correlation matrix with \code{diag_value} on
+the diagonal, or, when \code{output_format = "data.frame"}, the same
+values in long form with columns \code{Var1}, \code{Var2}, \code{Correlation}.
+\item \code{pairs}: a data frame of the flagged pairs (\code{Var1}, \code{Var2},
+\code{Correlation}), strongest absolute correlation first, whatever
+\code{output_format} is.
+\item \code{dropped}: variables removed by pruning, in the order they
+were dropped; empty when \code{prune = FALSE}.
+\item \code{redundant}: every variable in at least one flagged pair,
+which is \code{selected} as it would be under \code{prune = FALSE}.
+\item \code{n_features}: the number of variables considered.
+}}
+\item{\code{call}}{The matched call.}
 }
 }
 \description{
-Flags variable pairs whose absolute correlation exceeds \code{threshold} and,
-by default, reduces each correlated group to a single representative.
+Finds pairs of variables whose absolute correlation exceeds \code{threshold}
+and, by default, drops variables until no such pair remains, keeping one
+representative of each correlated group.
 }
 \details{
-This is an unsupervised redundancy filter: it looks only at how the
-variables relate to one another and never at an outcome. When two variables
-are near-interchangeable it therefore cannot prefer the one that predicts
-better; it keeps whichever is least entangled with the rest of the data. Use
-\code{fs_boruta()} when the choice inside a correlated group should be
-driven by importance for a target.
-
-Pruning is greedy rather than group-wise: while any retained pair still
-exceeds \code{threshold}, the strongest such pair is taken and the member
-with the larger mean absolute correlation to the other retained variables is
-dropped. No two retained variables end up with a computable correlation
-above \code{threshold}, but the surviving set is not guaranteed to be the
-smallest one with that property, and it depends on the order in which pairs
-are resolved.
-
-Correlations that cannot be computed come back as \code{NA}. Those pairs are
-never flagged and never pruned -- an unknown correlation is treated as no
-evidence of redundancy -- and a warning reports how many there are. A
-message (not a warning) is emitted when no pair at all exceeds
-\code{threshold}, whatever \code{verbose} is set to.
+This is an unsupervised redundancy filter. It looks only at how the
+variables relate to one another, never at an outcome, so when two
+variables are nearly interchangeable it cannot keep the one that predicts
+better. It keeps whichever is less correlated with the rest of the data.
+Use \code{\link[=fs_boruta]{fs_boruta()}} when the choice within a correlated group should depend
+on importance for a target.
 }
+\section{How pruning works}{
+
+Pruning is greedy. While any pair of retained variables still has an
+absolute correlation above \code{threshold}, the strongest such pair is taken,
+and the member with the larger mean absolute correlation to the other
+retained variables is dropped (on an exact tie, the later column). Afterward
+no two retained variables have a computable correlation above
+\code{threshold}. The surviving set is not guaranteed to be the smallest one
+with that property, and it can depend on the order in which pairs are
+resolved.
+
+This borrows the tie-break of \code{caret::findCorrelation()} but not its scan
+order: caret visits columns in order of mean correlation rather than
+pairs in order of strength, so the two can drop different variables.
+Variables that were never flagged are always kept.
+}
+
+\section{Correlations that cannot be computed}{
+
+A correlation that cannot be computed is \code{NA}. Such pairs are never
+flagged and never pruned, because an unknown correlation is no evidence of
+redundancy, and a warning reports how many there are. When no pair
+exceeds \code{threshold}, a message (not a warning) says so, whatever
+\code{verbose} is set to.
+}
+
 \examples{
 d <- data.frame(
   a = c(1, 2, 3, 4, 5, 6),
@@ -160,6 +168,10 @@ res <- fs_correlation(d, threshold = 0.9)
 res$selected
 res$details$pairs
 
-# keep the legacy view: both members of every flagged pair
+# Both members of every flagged pair, with nothing dropped
 fs_correlation(d, threshold = 0.9, prune = FALSE)$selected
+}
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/filters.html}{Filter methods}
+guide, which runs this function on a worked example.
 }

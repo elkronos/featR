@@ -15,14 +15,14 @@ selected(x, ...)
 \item{...}{Unused, for future methods.}
 }
 \value{
-A character vector of selected feature names, possibly empty when
-nothing met the selection criteria.
+A character vector of selected feature names. When nothing met the
+selection criteria it is \code{character(0)}, never \code{NULL}.
 }
 \description{
-The generic accessor for the one thing every featR method produces: the
-names of the features it kept. Equivalent to \code{x$selected}, but stable
-against future changes in the internal layout, and safe to call on the
-result of any \verb{fs_*()} selection function.
+Returns the names of the features a selection function kept. It gives the
+same value as \code{x$selected} and works on the result of any \verb{fs_*()}
+selection function. Code that calls \code{selected()} keeps working if the
+internal layout of the result changes.
 }
 \examples{
 res <- fs_unsupervised(

@@ -2,7 +2,7 @@
 % Please edit documentation in R/fs_lasso.R
 \name{fs_lasso}
 \alias{fs_lasso}
-\title{Lasso Feature Selection with Cross-Validation}
+\title{Lasso feature selection with cross-validation}
 \usage{
 fs_lasso(
   data,
@@ -21,145 +21,177 @@ fs_lasso(
 )
 }
 \arguments{
-\item{data}{A data.frame or data.table holding the target and the candidate
-predictors, with unique, non-empty column names. A numeric matrix with column names is also accepted;
-non-numeric matrices are not (supply a data.frame so factors and
-characters can be expanded by \code{model.matrix()}).}
+\item{data}{A data.frame or data.table holding the target and the
+candidate predictors, with unique, non-empty column names. A numeric
+matrix with column names is also accepted. A non-numeric matrix is not:
+supply a data.frame so factors and characters can be expanded by
+\code{model.matrix()}.}
 
-\item{target}{Single string naming the outcome column in \code{data}. It must be
-numeric and free of NA/NaN/Inf.}
+\item{target}{Single string naming the outcome column in \code{data}. It must
+be numeric and free of NA, NaN and Inf.}
 
-\item{alpha}{Numeric in (0, 1]; default 1 (lasso). Use values in (0, 1)
-for elastic-net. \code{alpha = 0} (pure ridge) is rejected: it never sets a
-coefficient to exactly zero, so it cannot select.}
+\item{alpha}{Numeric in (0, 1]; default 1 (lasso). Values in (0, 1) give an
+elastic net. \code{alpha = 0} (pure ridge) is rejected because ridge never
+sets a coefficient to exactly zero, so it cannot select.}
 
 \item{nfolds}{Integer >= 3; default 5. Number of cross-validation folds
 passed to \code{glmnet::cv.glmnet()}, which rejects anything smaller than 3.
-When \code{custom_folds} is supplied those fold IDs define the folds instead,
-and \code{nfolds} only bounds which IDs are valid (so \code{custom_folds} must also
-define at least 3 folds).}
+When \code{custom_folds} is supplied, those fold IDs define the folds and
+\code{nfolds} only bounds which IDs are valid, so \code{custom_folds} must also
+define at least 3 folds.}
 
-\item{standardize}{Logical; default TRUE. Passed to \code{glmnet::cv.glmnet()}
-and also controls the scale \code{scores} is ranked on (see Details).}
+\item{standardize}{Logical; default \code{TRUE}. Passed to
+\code{glmnet::cv.glmnet()}, and also sets the scale \code{scores} is ranked on (see
+"How scores are scaled").}
 
-\item{custom_folds}{Optional integer vector of fold IDs (one per row of
-\code{data}, covering 1..\code{nfolds} with no empty folds); default NULL.}
+\item{custom_folds}{Optional integer vector of fold IDs, one per row of
+\code{data}, covering 1..\code{nfolds} with no empty fold; default \code{NULL}.}
 
 \item{impute}{How to handle missing predictor values: \code{"none"} (default)
-errors and names the offending columns, \code{"mean"} imputes column means
-computed on the full data and warns about the leakage.}
+errors and names the affected columns; \code{"mean"} imputes column means
+computed on the full data and warns about the leak.}
 
-\item{return_model}{Logical; keep the fitted cv.glmnet object in the result
-(and pass \code{keep = TRUE} to \code{cv.glmnet()}); default FALSE.}
+\item{return_model}{Logical; default \code{FALSE}. When \code{TRUE}, the fitted
+\code{cv.glmnet} object is kept in \code{model} and \code{keep = TRUE} is passed to
+\code{cv.glmnet()} so the prevalidated fits are retained.}
 
-\item{lambda}{Which cross-validated penalty to select at: \code{"min"}
-(default, \code{lambda.min}) or \code{"1se"} (\code{lambda.1se}, sparser). See Details.}
+\item{lambda}{Penalty to select at: \code{"min"} (default, \code{lambda.min}) or
+\code{"1se"} (\code{lambda.1se}, sparser). See Details.}
 
-\item{seed}{Optional whole number for reproducibility, applied locally and
-restored on exit; default NULL (never seeds by default).}
+\item{seed}{Optional whole number; default \code{NULL}, which leaves the RNG
+alone. When given, the seed is set for this call only and the previous
+RNG state is restored on exit.}
 
-\item{verbose}{Logical; default FALSE. When TRUE, reports the parallel
+\item{verbose}{Logical; default \code{FALSE}. When \code{TRUE}, reports the parallel
 backend status and how many design-matrix columns were selected.}
 
-\item{parallel}{Logical; default FALSE. When TRUE, cross-validation runs on
-\code{n_cores} workers (requires the 'doParallel' and 'foreach' packages); if
-\code{n_cores} resolves to one worker it stays sequential and says so under
-\code{verbose = TRUE}.}
+\item{parallel}{Logical; default \code{FALSE}. When \code{TRUE}, cross-validation
+runs on \code{n_cores} workers, which needs the 'doParallel' and 'foreach'
+packages. If \code{n_cores} resolves to one worker, the run stays sequential
+and says so when \code{verbose = TRUE}.}
 
-\item{n_cores}{Integer >= 1; number of workers used only when
-\code{parallel = TRUE}. Default 2. Values above the detected core count are
-capped.}
+\item{n_cores}{Integer >= 1; default 2. Number of workers, used only when
+\code{parallel = TRUE}. Values above the detected core count are capped.}
 }
 \value{
 An \code{fs_result} object with:
 \item{selected}{Design-matrix columns whose coefficient at the chosen
-lambda (\code{lambda.min} by default) is non-zero, ordered by decreasing
-\code{scores} magnitude. Constant (and numerically constant) columns always
-have coefficient 0, so they are never selected; floating-point residue
-coefficients are zeroed (see Details).}
+lambda is non-zero, ordered by decreasing \code{scores} magnitude. Constant
+and numerically constant columns always have coefficient 0, so they
+are never selected.}
 \item{scores}{data.frame with columns Variable, Coefficient and
 AbsCoefficient, one row per design-matrix column (including those
-shrunk to zero), ordered by decreasing AbsCoefficient, on the
-standardized scale when \code{standardize = TRUE} (see Details).}
-\item{method}{\code{"lasso"}, regardless of \code{alpha}.}
+shrunk to zero), ordered by decreasing AbsCoefficient. On the
+standardized scale when \code{standardize = TRUE}.}
+\item{method}{\code{"lasso"}, whatever the value of \code{alpha}.}
 \item{task}{\code{"regression"} (gaussian family only).}
-\item{model}{The fitted cv.glmnet object when \code{return_model = TRUE}, else
-NULL.}
+\item{model}{The fitted \code{cv.glmnet} object when \code{return_model = TRUE},
+else \code{NULL}.}
 \item{details}{List of \code{lambda_min} (lambda minimizing CV error),
-\code{lambda_1se} (largest lambda within 1 SE of the minimum),
-\code{lambda_used} (\code{"lambda.min"} or \code{"lambda.1se"}, the one selection and
-all coefficients are read at), \code{coefficients} (the same three-column table as
-\code{scores} but always on the raw coefficient scale) and \code{n_features}
-(number of design-matrix columns considered).}
+\code{lambda_1se} (largest lambda within one standard error of the
+minimum), \code{lambda_used} (\code{"lambda.min"} or \code{"lambda.1se"}, the one that
+selection and all coefficients are read at), \code{coefficients} (the same
+three-column table as \code{scores}, always on the raw coefficient scale)
+and \code{n_features} (number of design-matrix columns considered).}
 \item{call}{The matched call.}
 }
 \description{
-Fits a lasso (or elastic-net) model with \code{glmnet::cv.glmnet()} and reports
-which predictors survive at \code{lambda.min} (default) or \code{lambda.1se}. Numeric
-outcomes only (gaussian family).
+Fits a lasso (or elastic-net) regression with \code{glmnet::cv.glmnet()} and
+selects the predictors whose coefficient is non-zero at the
+cross-validated penalty. The outcome must be numeric; only the gaussian
+family is fitted.
 }
 \details{
-Use this when the question is "which predictors keep a non-zero coefficient
-under a cross-validated L1 penalty (or, for \code{alpha < 1}, an elastic-net
-penalty)?". By default selection happens at \code{lambda.min}, the penalty that
-minimizes cross-validated error. \code{lambda.min} is tuned for prediction and
-is known to over-select (it tends to keep noise variables alongside the
-true ones); \code{lambda = "1se"} selects at \code{lambda.1se}, the largest penalty
-whose CV error is within one standard error of the minimum, which gives a
-sparser, more conservative set. Both values are reported in \code{details}
-whichever one is used. The main caveat is that lasso tends to
-keep one member of a group of strongly correlated predictors and zero out
-the rest, so an absent feature is not evidence that it is unrelated to the
-outcome.
+The lasso adds an L1 penalty to least squares, which shrinks coefficients
+and sets some of them to exactly zero. \code{fs_lasso()} chooses the penalty
+strength (lambda) by \code{nfolds}-fold cross-validation and reports the
+predictors that keep a non-zero coefficient. With \code{alpha < 1} the penalty
+becomes an elastic net, a mix of L1 and L2 penalties; \code{fs_elastic()} tunes
+\code{alpha} as well and also handles classification.
 
-The design matrix is built internally from every column of \code{data} except
-\code{target}, via \code{stats::model.frame(na.action = stats::na.pass)} followed by
-\code{stats::model.matrix()}: factors and characters are expanded to dummies and
-rows carrying NAs are preserved rather than silently dropped. Non-syntactic
-column names are reported as the caller wrote them (without the backticks
-\code{model.matrix()} adds). The design matrix must have at least two columns,
-because \code{glmnet} cannot fit a single-column \code{x}. The matrix
-carries no intercept column of its own (\code{glmnet} fits its own intercept,
-which is dropped from the reported coefficients), so \code{selected}, \code{scores}
-and \code{details$coefficients} name design-matrix columns -- for a factor
-predictor, its expanded dummy columns rather than the original column.
+By default selection happens at \code{lambda.min}, the penalty with the lowest
+cross-validated error. \code{lambda.min} is tuned for prediction and tends to
+over-select, keeping noise variables alongside the true ones.
+\code{lambda = "1se"} selects at \code{lambda.1se}, the largest penalty whose CV
+error is within one standard error of the minimum, which gives a sparser,
+more conservative set. Both values are reported in \code{details} whichever one
+is used.
 
-\code{scores} ranks features on the STANDARDIZED coefficient scale when
-\code{standardize = TRUE}: each coefficient is multiplied by the standard
-deviation of its design-matrix column, which makes the ranking independent
-of the units the predictors happen to be measured in. glmnet standardizes
-internally for fitting but reports coefficients back on the input scale, so
+The lasso tends to keep one member of a group of strongly correlated
+predictors and zero out the rest, so an absent feature is not evidence
+that it is unrelated to the outcome.
+
+\code{fs_lasso()} reports no performance estimate. The lambdas are tuned on all
+rows, so judging the selected set needs an outer resampling loop around
+the whole call.
+}
+\section{How the design matrix is built}{
+
+Every column of \code{data} except \code{target} is a candidate predictor. The
+design matrix comes from \code{stats::model.frame(na.action = stats::na.pass)}
+followed by \code{stats::model.matrix()} without an intercept column, so rows
+with NAs reach the missing-value policy instead of being dropped silently.
+Factors and characters are expanded to dummy columns: the first factor
+(in column order) gets one dummy per level and each later factor gets one
+per level except the first. \code{glmnet} fits its own intercept, which is left
+out of the reported coefficients.
+
+\code{selected}, \code{scores} and \code{details$coefficients} therefore name
+design-matrix columns, so a factor predictor appears as its dummy columns
+rather than under its own name. Non-syntactic column names are reported as
+you wrote them, without the backticks \code{model.matrix()} adds.
+
+These inputs are errors:
+\itemize{
+\item a design matrix with fewer than two columns (\code{glmnet} cannot fit a
+single-column \code{x});
+\item a factor or character predictor with fewer than two observed levels;
+\item a dummy name that collides with another column or the target (factor
+\code{g} with level \code{b} next to a column \code{gb}), because \code{selected} and
+\code{scores} identify columns by name;
+\item Inf or -Inf in any predictor (NaN counts as a missing value);
+\item a column whose variance overflows double precision (values around 1e154
+or larger); rescale it first.
+}
+}
+
+\section{How scores are scaled}{
+
+With \code{standardize = TRUE} (the default), \code{scores} ranks features on the
+standardized coefficient scale: each coefficient is multiplied by the
+standard deviation of its design-matrix column, so the ranking does not
+depend on the units the predictors are measured in. \code{glmnet} standardizes
+internally for fitting but reports coefficients on the input scale, and
 those raw coefficients are kept in \code{details$coefficients}. With
-\code{standardize = FALSE}, \code{scores} is the raw table and the two are identical.
+\code{standardize = FALSE}, \code{scores} holds the raw coefficients and the two
+tables are identical.
+
+A raw coefficient depends on scale: a predictor measured in small units
+earns a large coefficient for the same effect. Compare
+\code{details$coefficients} (and \code{scores} when \code{standardize = FALSE}) across
+predictors only when the predictors share a scale.
 
 Constant columns get a coefficient of exactly 0 and are never selected.
 The same holds for columns that are constant up to floating-point
-round-off (spread negligible relative to magnitude): standardization would
-otherwise blow that round-off up to a full-scale predictor with a raw
-coefficient around 1e15, so such columns are held at 0 during the fit. A
-column whose variance overflows (values around 1e154 or larger) is an
-error; rescale it first. Coefficients that are floating-point residue
-(below \code{1e-10} times the largest standardized coefficient) are reported as
-exactly 0: with all-level dummy coding of the first factor, the redundant
-level otherwise kept a coefficient around 1e-13 and was selected.
-
-Design-matrix names must be unique, because \code{selected} and \code{scores} name
-columns: a factor dummy that collides with another column or the target
-(factor \code{g} with level \code{b} next to a column \code{gb}) is an error, as is a
-factor or character predictor with fewer than two observed levels.
-
-Raw coefficient magnitude is a scale-dependent notion of importance: a
-predictor measured in small units earns a large coefficient for the same
-effect. That applies to \code{details$coefficients} always, and to \code{scores} when
-\code{standardize = FALSE}, so compare those numbers across predictors only when
-the predictors share a scale.
-
-Missing predictor values are an error under the default
-\code{impute = "none"}, because imputing before cross-validation lets the folds
-see each other. \code{impute = "mean"} fills them with column means computed on
-the whole data set -- not on the training part of each fold -- and warns
-that this leaks. Columns that are entirely NA are an error either way.
+round-off: standardization would otherwise inflate that round-off into a
+full-scale predictor with a raw coefficient around 1e15, so such columns
+are held at 0 during the fit. A coefficient whose standardized value is at
+most \code{1e-10} times the largest standardized coefficient is floating-point
+residue and is set to exactly 0. Without that step, the redundant dummy of
+the first factor, which is collinear with the intercept, would keep a
+coefficient around 1e-13 and be selected.
 }
+
+\section{Missing values}{
+
+Under the default \code{impute = "none"}, a missing predictor value is an error
+that names the affected columns, because imputing before cross-validation
+lets the folds see each other. \code{impute = "mean"} fills missing values with
+column means computed on all rows, not on the training part of each fold,
+and warns about that leak. A column that is entirely NA is an error under
+either setting. The target must be free of NA, NaN and Inf.
+}
+
 \examples{
 \donttest{
 if (requireNamespace("glmnet", quietly = TRUE)) {
@@ -175,4 +207,8 @@ if (requireNamespace("glmnet", quietly = TRUE)) {
   head(res$scores)
 }
 }
+}
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/regularization.html}{Regularization and embedded importance}
+guide, which runs this function on a worked example.
 }

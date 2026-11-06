@@ -6,10 +6,10 @@ This is an update of featR from 0.1.0 to 0.2.0.
 
 It is a correctness release. Two statistical, methodological, and
 programmatic reviews of the whole package fixed silent wrong answers, hangs,
-crashes, and documentation that did not match behaviour. Each fix has a
+crashes, and documentation that did not match behavior. Each fix has a
 regression test; the test suite grew from 2013 to 2560 passing assertions.
 Some fixes change results or turn previously accepted, invalid input into an
-informative error. NEWS.md lists every change, with behaviour changes first.
+informative error. NEWS.md lists every change, with behavior changes first.
 
 ## Test environments
 
@@ -43,6 +43,7 @@ There are no reverse dependencies on CRAN.
   worker, requested worker counts are capped at the detected core count, and no
   example or test uses more than two cores.
 * The package never calls `set.seed()` unless the user supplies a `seed`
-  argument, and restores the previous RNG state on exit via `withr::local_seed()`.
+  argument, and then restores the previous RNG state on exit via
+  `withr::local_seed()`.
 * No package code writes to the user's file system, home directory, working
   directory, or global environment.

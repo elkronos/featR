@@ -2,7 +2,7 @@
 % Please edit documentation in R/fs_bayes.R
 \name{fs_bayes}
 \alias{fs_bayes}
-\title{Bayesian feature selection for model optimization}
+\title{Bayesian predictor-subset selection with brms and LOO}
 \usage{
 fs_bayes(
   data,
@@ -23,167 +23,197 @@ fs_bayes(
 }
 \arguments{
 \item{data}{A data.frame or data.table. It is copied, never modified. Only
-\code{target}, \code{predictors} and \code{date_col} are carried forward, and rows with a
-missing value in any of them are dropped before any model is fitted.
-Infinite values in those columns are an error. None of those columns may
-be named \code{fitted_values}, \code{residuals}, \code{abs_residuals} or
-\code{squared_residuals}, which are appended to \code{details$data}.}
+\code{target}, \code{predictors}, and \code{date_col} are kept, and rows with a missing
+value in any of them are dropped before any model is fitted. Infinite
+values in those columns are an error. None of those columns may be named
+\code{fitted_values}, \code{residuals}, \code{abs_residuals}, or \code{squared_residuals},
+because those columns are appended to \code{details$data}.}
 
-\item{target}{Character. Name of the target (response) column, which must
-exist in \code{data} and suit \code{brm_family} (numeric for \code{stats::gaussian()},
-0/1 or logical for \code{brms::bernoulli()}).}
+\item{target}{Name of the target (response) column. It must exist in
+\code{data} and suit \code{brm_family}: numeric for \code{stats::gaussian()}, 0/1 or
+logical for \code{brms::bernoulli()}.}
 
-\item{predictors}{Character vector. Names of the candidate predictor
-columns; at least one, without duplicates, all present in \code{data}.}
+\item{predictors}{Character vector naming the candidate predictor columns:
+at least one, without duplicates, all present in \code{data}.}
 
-\item{date_col}{Character or NULL. Name of a date column. When provided, an
+\item{date_col}{Name of a date column, or \code{NULL}. When given, an
 \code{iso_week_id} feature (ISO year * 100 + ISO week) is added to the
-predictors, so neither the target, a predictor, nor the date column may
-itself be named \code{iso_week_id}. Note: \code{iso_week_id} enters the models as a continuous
-covariate, which is a rough encoding of seasonality; a categorical or
-cyclic encoding is deferred to a future version. Default NULL (no date
-feature; the date column itself is never used as a predictor).}
+predictors, so no target, predictor, or date column may itself be named
+\code{iso_week_id}. \code{iso_week_id} enters the models as a continuous
+covariate, a rough encoding of seasonality; a categorical or cyclic
+encoding may come in a future version. The date column itself is never
+used as a predictor. Default \code{NULL} (no date feature).}
 
-\item{brm_family}{A model family accepted by brms::brm(), for example
-stats::gaussian() (default) or brms::bernoulli().}
+\item{brm_family}{A model family accepted by \code{brms::brm()}, for example
+\code{stats::gaussian()} (the default) or \code{brms::bernoulli()}.}
 
-\item{prior}{A brms prior specification (default NULL).}
+\item{prior}{A brms prior specification. Default \code{NULL} (the brms default
+priors).}
 
-\item{brm_args}{List. Extra arguments for brms::brm() (for example iter,
-warmup, seed), overriding featR's defaults of iter = 2000,
-adapt_delta = 0.99, max_treedepth = 15 and refresh = 0. \code{chains} and
-\code{cores} are respected when evaluating combinations sequentially (\code{cores}
-is capped at the detected core count; the defaults are 4 chains on 1
-core), but both are forced to 1 when \code{parallel_combinations = TRUE}.
-The PSIS-LOO step uses the same core count, never
-\code{getOption("mc.cores")}.
-Default \code{list()}.}
+\item{brm_args}{List of extra arguments for \code{brms::brm()}, such as \code{iter},
+\code{warmup}, or \code{seed}. They override featR's defaults of \code{iter = 2000},
+\code{adapt_delta = 0.99}, \code{max_treedepth = 15}, and \code{refresh = 0}. \code{chains}
+and \code{cores} are respected when combinations are evaluated sequentially
+(the defaults are 4 chains on 1 core, and \code{cores} is capped at the
+detected core count), but both are forced to 1 when
+\code{parallel_combinations = TRUE}. The PSIS-LOO step uses the same core
+count, never \code{getOption("mc.cores")}. Default \code{list()}.}
 
-\item{rule}{Selection rule: \code{"1se"} (default) keeps the most parsimonious
+\item{rule}{Selection rule. \code{"1se"} (default) keeps the most parsimonious
 model within one standard error of the best elpd; \code{"best"} keeps the raw
-elpd maximum.}
+elpd maximum. See Details.}
 
-\item{max_comb_size}{Whole number >= 1, or NULL. Largest number of
-predictors allowed in a combination; values above the number of candidate
-predictors are capped rather than rejected. Default NULL (all sizes).}
+\item{max_comb_size}{Largest number of predictors in a combination, a
+whole number >= 1, or \code{NULL}. Values above the number of candidate
+predictors are capped. Default \code{NULL} (all sizes).}
 
-\item{sample_combinations}{Whole number >= 1, or NULL. Randomly sample this
-many combinations instead of evaluating all of them; ignored when fewer
-combinations exist. Pass \code{seed} to make the draw reproducible. Default
-NULL (evaluate every combination).}
+\item{sample_combinations}{Number of combinations to draw at random
+instead of evaluating all of them, a whole number >= 1, or \code{NULL}.
+Ignored when fewer combinations exist. Pass \code{seed} to make the draw
+reproducible. Default \code{NULL} (evaluate every combination).}
 
-\item{parallel_combinations}{Logical. Evaluate predictor combinations in
-parallel via parallel::mclapply(). Not available on Windows (falls back
-to sequential evaluation with a message), and falls back to sequential
-evaluation when \code{n_cores} resolves to 1. Because each model is then held
-to a single MCMC chain, cross-chain convergence diagnostics such as R-hat
-become unavailable; a warning says so. Default FALSE.}
+\item{parallel_combinations}{Logical. If \code{TRUE}, evaluate combinations in
+parallel with \code{parallel::mclapply()}. Each model is then limited to a
+single MCMC chain, so cross-chain convergence diagnostics such as R-hat
+are unavailable; a warning says so. On Windows, or when \code{n_cores}
+resolves to 1, evaluation falls back to sequential with a message.
+Default \code{FALSE}.}
 
-\item{seed}{Optional whole number (within the R integer range; fractional
-values are an error rather than being truncated). When supplied, the
-whole call runs on a local RNG stream and the caller's RNG state is
-restored on exit. It seeds the random sampling of combinations (see
-\code{sample_combinations}) and, unless \code{brm_args$seed} is given, also draws
-one Stan seed per combination from that stream, so the MCMC fits are
-reproducible too, including under \code{parallel_combinations = TRUE}. An
-explicit \code{brm_args$seed} is used for every model instead. Default NULL:
-fs_bayes() never seeds the RNG unless asked (brms/rstan then draw their
-seeds from the global stream).}
+\item{seed}{Optional whole number within the R integer range; fractional
+values are an error. When supplied, the whole call runs on a local RNG
+stream and your RNG state is restored on exit. The seed drives the
+random draw of combinations (see \code{sample_combinations}) and, unless
+\code{brm_args$seed} is given, one Stan seed per combination, so the MCMC fits
+are reproducible too, including with \code{parallel_combinations = TRUE}. An
+explicit \code{brm_args$seed} is used for every model instead. Default \code{NULL}:
+\code{fs_bayes()} never seeds the RNG unless you ask, and brms and rstan then
+draw their seeds from the global stream.}
 
-\item{verbose}{Logical. Print progress information, and show a progress bar
-for sequential evaluation when the suggested pbapply package is
-installed. Default FALSE.}
+\item{verbose}{Logical. If \code{TRUE}, print progress and every per-model
+warning, and show a progress bar for sequential evaluation when the
+suggested package 'pbapply' is installed. Default \code{FALSE}.}
 
-\item{n_cores}{Whole number >= 1. Worker count used when
-\code{parallel_combinations = TRUE}, and ignored otherwise. Default 1
-(sequential); requests are capped at the detected core count.}
+\item{n_cores}{Number of workers when \code{parallel_combinations = TRUE}, a
+whole number >= 1; ignored otherwise. Requests are capped at the
+detected core count. Default 1 (sequential).}
 }
 \value{
 An object of class \code{fs_result} with:
 \describe{
 \item{selected}{Character vector of the predictors in the chosen model.}
-\item{scores}{\code{NULL}: no per-feature score is comparable across
-combination models. \code{details$n_features} records how many candidate
-predictors were offered.}
-\item{method}{"bayes".}
-\item{task}{"classification" when \code{brm_family} is a binary, categorical or
-ordinal family (\code{bernoulli}, \code{binomial}, \code{beta_binomial},
-\code{categorical}, \code{multinomial}, \code{cumulative}, \code{sratio}, \code{cratio},
-\code{acat}), otherwise "regression".}
+\item{scores}{\code{NULL}, because no per-feature score is comparable across
+models with different predictors. \code{details$n_features} records how
+many candidate predictors were offered.}
+\item{method}{\code{"bayes"}.}
+\item{task}{\code{"classification"} when \code{brm_family} is a binary,
+categorical, or ordinal family (\code{bernoulli}, \code{binomial},
+\code{beta_binomial}, \code{categorical}, \code{multinomial}, \code{cumulative}, \code{sratio},
+\code{cratio}, \code{acat}), otherwise \code{"regression"}.}
 \item{model}{The selected \code{brmsfit}.}
-\item{details}{A list with \code{data} (the complete-case modeling data.table:
-\code{target}, \code{predictors}, \code{date_col} and \code{iso_week_id} where applicable,
-plus appended \code{fitted_values}, \code{residuals}, \code{abs_residuals} and
-\code{squared_residuals} columns), \code{mae} and \code{rmse} (in-sample,
-post-selection errors computed on the same rows used to fit and select,
-so they are optimistic), \code{formula} (the selected model's formula
-string), \code{best_elpd} (the selected model's elpd_loo, possibly \code{NA};
-optimistic because it was selected, see Details),
-\code{loo_comparison} (the \code{loo::loo_compare()} table -- a matrix or
-data.frame depending on the loo version -- or \code{NULL} when fewer than two
-models could be compared or the comparison failed), \code{n_failed_fits}
-(how many combinations failed to fit), \code{n_loo_failed} (how many fitted
-models were excluded because loo() failed), \code{n_compared} (how many
-models with a finite elpd_loo competed in the selection) and
-\code{n_features} (the number of
-candidate predictors, including \code{iso_week_id} when \code{date_col} is
-supplied).}
+\item{details}{A list with:
+\itemize{
+\item \code{data}: the complete-case modeling data.table (\code{target},
+\code{predictors}, and \code{date_col} and \code{iso_week_id} where applicable),
+with \code{fitted_values}, \code{residuals}, \code{abs_residuals}, and
+\code{squared_residuals} columns appended. Families without a single
+fitted value per row (categorical, multinomial, and multivariate
+responses) get no appended columns.
+\item \code{mae}, \code{rmse}: in-sample errors on the rows used to fit and
+select, so optimistic; \code{NA} for the families without a single
+fitted value per row.
+\item \code{formula}: the selected model's formula, as a string.
+\item \code{best_elpd}: the selected model's \code{elpd_loo}, possibly \code{NA};
+optimistic because it was selected (see Details).
+\item \code{loo_comparison}: the \code{loo::loo_compare()} table (a matrix or
+a data.frame, depending on the loo version), or \code{NULL} when fewer
+than two models could be compared or the comparison failed.
+\item \code{n_failed_fits}: how many combinations failed to fit.
+\item \code{n_loo_failed}: how many fitted models were left out because
+\code{loo()} failed.
+\item \code{n_compared}: how many models with a finite \code{elpd_loo} competed
+in the selection.
+\item \code{n_features}: the number of candidate predictors, including
+\code{iso_week_id} when \code{date_col} is given.
+}}
 \item{call}{The matched call.}
 }
 }
 \description{
-Fits a brms model for every candidate predictor combination and compares
-them with \code{loo::loo_compare()}, returning the selected combination as an
-\code{fs_result}.
+Fits one brms model for each candidate combination of predictors,
+estimates each model's out-of-sample fit with PSIS-LOO, and picks a
+combination from the \code{loo::loo_compare()} table. The selected \code{brmsfit} is
+returned as the \code{model} of an \code{fs_result}.
 }
 \details{
-Use this when you want the predictor subset itself chosen by out-of-sample
-predictive fit under a fully Bayesian model, and you can afford to fit one
-model per subset. The search is exhaustive by default: with \code{p} candidate
-predictors it fits every non-empty subset, \code{2^p - 1} models, and each one
-compiles and samples its own Stan program. Use \code{max_comb_size} or
-\code{sample_combinations} to bound the search.
+PSIS-LOO (Pareto-smoothed importance sampling leave-one-out) approximates
+leave-one-out cross-validation from a single posterior fit. It yields
+\code{elpd_loo}, an estimate of the expected log predictive density for new
+data; higher is better. Use \code{fs_bayes()} when you want the predictor subset chosen by that
+criterion under a fully Bayesian model and can afford one model per
+subset.
+\subsection{Cost of the search}{
 
-Model selection uses \code{loo::loo_compare()} rather than the raw elpd
-maximum. With \code{rule = "1se"} (the default) the chosen model is the most
-parsimonious one -- fewest predictors, ties broken by the higher elpd --
-among those whose elpd difference from the best model is no larger in
-absolute value than one standard error of that difference (the \code{se_diff}
-column of the comparison table). With \code{rule = "best"} the raw elpd maximum
-wins, which is the older behavior and is more prone to over-fitting the
-comparison. When no usable comparison table is available, both rules fall
-back to the raw elpd maximum, ties broken by fewer predictors.
+The search is exhaustive by default. With \code{p} candidate predictors it fits
+every non-empty subset, \code{2^p - 1} models, and each one compiles and samples
+its own Stan program: 4 predictors mean 15 models, 10 predictors mean
+1023. Use \code{max_comb_size} or \code{sample_combinations} to bound the search,
+and \code{parallel_combinations} to spread it over cores.
+}
 
-Combinations whose model fails to fit are excluded from selection and
-counted in \code{details$n_failed_fits}, with a warning that quotes the first
-brms error. Fitted models for which \code{loo::loo()} fails (or gives no finite
-elpd) are likewise excluded, counted in \code{details$n_loo_failed} and
-reported in a warning. If \code{loo::loo_compare()} itself fails, a warning
-says that the raw elpd maximum is used and \code{rule = "1se"} is not applied.
-If no fit yields a finite \code{elpd_loo} at all, the first successfully fitted
-model is returned with a warning; that is an arbitrary fallback, not a
-selection.
+\subsection{How a model is chosen}{
 
-Per-model sampler warnings (divergent transitions, R-hat, effective sample
-size) and loo's Pareto-k warnings are muffled while the models are fitted,
-so a search over many subsets does not flood the console, but they are not
-discarded: after the search one warning summarizes how many fits raised
+With \code{rule = "1se"} (the default), the chosen model is the one with the
+fewest predictors, ties broken by the higher elpd, among those whose elpd
+difference from the best model is at most one standard error of that
+difference (the \code{se_diff} column of the comparison table) in absolute
+value. With \code{rule = "best"}, the raw elpd maximum wins; that was the older
+behavior and is more prone to over-fitting the comparison. When no usable
+comparison table is available, both rules fall back to the raw elpd
+maximum, ties broken by fewer predictors.
+}
+
+\subsection{Failures and diagnostics}{
+
+Combinations whose model fails to fit are left out of the selection,
+counted in \code{details$n_failed_fits}, and reported in a warning that quotes
+the first brms error. Fitted models for which \code{loo::loo()} fails or gives
+no finite elpd are left out in the same way, counted in
+\code{details$n_loo_failed}, and reported in a warning. If \code{loo::loo_compare()}
+itself fails, a warning says that the raw elpd maximum is used and
+\code{rule = "1se"} is not applied. If no fit yields a finite \code{elpd_loo} at
+all, the first successfully fitted model is returned with a warning. That
+model is an arbitrary fallback that no criterion chose.
+
+Sampler warnings (divergent transitions, R-hat, effective sample size)
+and loo's Pareto-k warnings are muffled while the models are fitted, so a
+search over many subsets does not flood the console. They are counted
+instead: after the search, one warning reports how many fits raised
 sampler warnings and another how many have observations with Pareto
-k > 0.7 (unreliable PSIS-LOO estimates), each stating whether the selected
-model is among them. \code{verbose = TRUE} shows every individual warning.
+k > 0.7 (unreliable PSIS-LOO estimates), and each says whether the
+selected model is among them. \code{verbose = TRUE} shows every individual
+warning.
+}
 
-Three caveats are worth stating plainly. \code{details$mae} and \code{details$rmse}
-are in-sample errors computed on the same rows used to fit and to select,
-so they are optimistic. \code{details$best_elpd} (and the \code{loo_comparison}
-table) is optimistic too: PSIS-LOO is roughly unbiased for one fixed model,
-but the selected model's elpd_loo is the maximum, or a near-maximum under
-\code{rule = "1se"}, over \code{details$n_compared} candidates, so it overstates the
-chosen model's out-of-sample predictive performance, and increasingly so
-the larger the search (selection-induced bias; Piironen and Vehtari, 2017).
-An honest estimate needs the whole search repeated inside an outer
-cross-validation, or held-out data. And anything read off the returned
-\code{brmsfit} (posterior intervals, effect sizes) is post-selection inference:
-the model was chosen by looking at the same data it is reported on.
+\subsection{What is optimistic}{
+
+\code{details$mae} and \code{details$rmse} are in-sample errors, computed on the
+same rows used to fit and to select, so they are optimistic.
+
+\code{details$best_elpd} and the \code{loo_comparison} table are optimistic too.
+PSIS-LOO is roughly unbiased for one fixed model, but the selected model's
+\code{elpd_loo} is the maximum (or, under \code{rule = "1se"}, a near-maximum) over
+\code{details$n_compared} candidates. It therefore overstates the chosen
+model's out-of-sample performance, and more so the larger the search
+(selection-induced bias; Piironen and Vehtari, 2017). An honest estimate
+needs the whole search repeated inside an outer cross-validation, or
+held-out data.
+
+Anything read off the returned \code{brmsfit}, such as posterior intervals or
+effect sizes, is post-selection inference: the model was chosen using the
+same data it is reported on. The
+\href{https://elkronos.github.io/featR/articles/validation-and-leakage.html}{Validation and leakage}
+article covers both points.
+}
 }
 \examples{
 # Fitting needs more than the brms package: brms compiles and samples a

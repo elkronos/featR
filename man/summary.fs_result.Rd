@@ -9,54 +9,65 @@
 \arguments{
 \item{object}{An \code{fs_result} object.}
 
-\item{n}{Maximum number of scored features to show (default 20).}
+\item{n}{Maximum number of rows in the score table. Default 20.}
 
 \item{...}{Unused, for consistency with the generic.}
 }
 \value{
-\code{object}, invisibly. Called for its printed output.
+\code{object}, invisibly. Called for the printed output.
 }
 \description{
-Prints the result, the call that produced it, and a ranked score table.
+Prints the result, the call that produced it, and a table of scores ranked
+strongest first.
 }
 \details{
-Everything \code{print()} shows, then the recorded call, then -- for methods
-that produce per-feature scores -- a table of every scored feature, ranked
-strongest first, with columns \code{feature}, \code{score} (four
-significant digits) and \code{selected} (\code{*} marks the features that were kept).
-The table is truncated to \code{n} rows with a "... (m more)" tail.
-
-The ranking direction follows the method. For most methods a larger score
-means a stronger feature, and rows are ordered by decreasing score, so a
-negative importance (a feature that did worse than its permuted copy)
-ranks below every positive one. The exception is \code{\link{fs_lasso}},
-whose scores are signed standardized coefficients: those are ordered by
-decreasing absolute value, since the sign is the direction of the effect,
-not its strength. For
-methods that score by p-value, where smaller is better, rows are ordered
-ascending instead, so the most significant feature is listed first. The
-same ascending order is used for the threshold filters
-(\code{\link{fs_unsupervised}}, \code{\link{fs_supervised}}) when they kept
-the low side of the threshold (\code{direction = "below"} with
-\code{action = "keep"}, or \code{"above"} with \code{"remove"}), so the
-kept features come first.
-
-Two methods select features by something other than a cut on the score,
-and for them the selected features are listed first (each group ordered
-by score), so a kept feature is never ranked below, or truncated out
-behind, a dropped one. \code{\link{fs_mars}} selects every predictor the
-final model uses, which can have a zero or negative GCV importance while
-pruned predictors score 0. \code{\link{fs_correlation}} with
-\code{prune = TRUE} scores each variable by its largest absolute
-correlation with any other (larger = more redundant) and keeps one member
-of each redundant pair; its rows are ordered ascending within each group,
-least redundant first. With \code{prune = FALSE} the selection is the
-redundant set, ordered by decreasing score.
-
-The \code{selected} marks are matched by position when the result records a
-per-feature keep-mask (\code{details$mask}, as the threshold filters do),
-so features sharing a name are marked individually; otherwise by name.
+The output starts with everything \code{print()} shows, then the recorded call.
+For methods that produce per-feature scores it ends with a table of every
+scored feature, with columns \code{feature}, \code{score} (rounded to four
+significant digits), and \code{selected} (\code{*} marks the kept features). The
+table is truncated to \code{n} rows with a "... (m more)" tail.
 }
+\section{How rows are ranked}{
+
+For most methods a larger score means a stronger feature, so rows are in
+decreasing order of score. A negative importance (a feature that did
+worse than its permuted copy) therefore ranks below every positive one.
+The other rules are:
+\itemize{
+\item \code{\link[=fs_lasso]{fs_lasso()}} scores are signed standardized coefficients. The sign
+gives the direction of the effect, not its strength, so rows are in
+decreasing order of absolute value.
+\item \code{\link[=fs_chi]{fs_chi()}} scores are adjusted p-values, where smaller is
+stronger, so rows are in increasing order and the most significant
+feature comes first.
+\item \code{\link[=fs_unsupervised]{fs_unsupervised()}} and \code{\link[=fs_supervised]{fs_supervised()}} also use increasing
+order when they kept the low side of the threshold
+(\code{direction = "below"} with \code{action = "keep"}, or \code{"above"} with
+\code{"remove"}), so the kept features come first.
+}
+
+Two methods select by something other than a cut on the score. For them
+the selected features are listed first, each group ordered by score, so
+a kept feature is never ranked below, or truncated out behind, a dropped
+one:
+\itemize{
+\item \code{\link[=fs_mars]{fs_mars()}} selects every predictor the final earth model uses.
+A used predictor can have a zero or negative GCV importance while
+pruned predictors score 0.
+\item \code{\link[=fs_correlation]{fs_correlation()}} with \code{prune = TRUE} scores each variable by its
+largest absolute correlation with any other (larger means more
+redundant) and keeps one member of each redundant pair. Rows are in
+increasing order within each group, least redundant first. With
+\code{prune = FALSE} the selection is the redundant set itself, and rows
+are in decreasing order of score.
+}
+
+When the result records a per-feature keep-mask (\code{details$mask}, as the
+threshold filters do), the \code{selected} marks are matched by position, so
+two features sharing a name are marked separately. Otherwise they are
+matched by name.
+}
+
 \examples{
 res <- fs_unsupervised(
   data.frame(a = c(1, 5, 2, 8), b = c(1, 1, 1, 1)),

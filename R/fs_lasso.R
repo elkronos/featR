@@ -380,130 +380,155 @@ lasso_importance <- function(coefs) {
   importance_df
 }
 
-#' Lasso Feature Selection with Cross-Validation
+#' Lasso feature selection with cross-validation
 #'
-#' Fits a lasso (or elastic-net) model with `glmnet::cv.glmnet()` and reports
-#' which predictors survive at `lambda.min` (default) or `lambda.1se`. Numeric
-#' outcomes only (gaussian family).
+#' @description
+#' Fits a lasso (or elastic-net) regression with `glmnet::cv.glmnet()` and
+#' selects the predictors whose coefficient is non-zero at the
+#' cross-validated penalty. The outcome must be numeric; only the gaussian
+#' family is fitted.
 #'
 #' @details
-#' Use this when the question is "which predictors keep a non-zero coefficient
-#' under a cross-validated L1 penalty (or, for `alpha < 1`, an elastic-net
-#' penalty)?". By default selection happens at `lambda.min`, the penalty that
-#' minimizes cross-validated error. `lambda.min` is tuned for prediction and
-#' is known to over-select (it tends to keep noise variables alongside the
-#' true ones); `lambda = "1se"` selects at `lambda.1se`, the largest penalty
-#' whose CV error is within one standard error of the minimum, which gives a
-#' sparser, more conservative set. Both values are reported in `details`
-#' whichever one is used. The main caveat is that lasso tends to
-#' keep one member of a group of strongly correlated predictors and zero out
-#' the rest, so an absent feature is not evidence that it is unrelated to the
-#' outcome.
+#' The lasso adds an L1 penalty to least squares, which shrinks coefficients
+#' and sets some of them to exactly zero. `fs_lasso()` chooses the penalty
+#' strength (lambda) by `nfolds`-fold cross-validation and reports the
+#' predictors that keep a non-zero coefficient. With `alpha < 1` the penalty
+#' becomes an elastic net, a mix of L1 and L2 penalties; `fs_elastic()` tunes
+#' `alpha` as well and also handles classification.
 #'
-#' The design matrix is built internally from every column of `data` except
-#' `target`, via `stats::model.frame(na.action = stats::na.pass)` followed by
-#' `stats::model.matrix()`: factors and characters are expanded to dummies and
-#' rows carrying NAs are preserved rather than silently dropped. Non-syntactic
-#' column names are reported as the caller wrote them (without the backticks
-#' `model.matrix()` adds). The design matrix must have at least two columns,
-#' because `glmnet` cannot fit a single-column `x`. The matrix
-#' carries no intercept column of its own (`glmnet` fits its own intercept,
-#' which is dropped from the reported coefficients), so `selected`, `scores`
-#' and `details$coefficients` name design-matrix columns -- for a factor
-#' predictor, its expanded dummy columns rather than the original column.
+#' By default selection happens at `lambda.min`, the penalty with the lowest
+#' cross-validated error. `lambda.min` is tuned for prediction and tends to
+#' over-select, keeping noise variables alongside the true ones.
+#' `lambda = "1se"` selects at `lambda.1se`, the largest penalty whose CV
+#' error is within one standard error of the minimum, which gives a sparser,
+#' more conservative set. Both values are reported in `details` whichever one
+#' is used.
 #'
-#' `scores` ranks features on the STANDARDIZED coefficient scale when
-#' `standardize = TRUE`: each coefficient is multiplied by the standard
-#' deviation of its design-matrix column, which makes the ranking independent
-#' of the units the predictors happen to be measured in. glmnet standardizes
-#' internally for fitting but reports coefficients back on the input scale, so
+#' The lasso tends to keep one member of a group of strongly correlated
+#' predictors and zero out the rest, so an absent feature is not evidence
+#' that it is unrelated to the outcome.
+#'
+#' `fs_lasso()` reports no performance estimate. The lambdas are tuned on all
+#' rows, so judging the selected set needs an outer resampling loop around
+#' the whole call.
+#'
+#' @section How the design matrix is built:
+#' Every column of `data` except `target` is a candidate predictor. The
+#' design matrix comes from `stats::model.frame(na.action = stats::na.pass)`
+#' followed by `stats::model.matrix()` without an intercept column, so rows
+#' with NAs reach the missing-value policy instead of being dropped silently.
+#' Factors and characters are expanded to dummy columns: the first factor
+#' (in column order) gets one dummy per level and each later factor gets one
+#' per level except the first. `glmnet` fits its own intercept, which is left
+#' out of the reported coefficients.
+#'
+#' `selected`, `scores` and `details$coefficients` therefore name
+#' design-matrix columns, so a factor predictor appears as its dummy columns
+#' rather than under its own name. Non-syntactic column names are reported as
+#' you wrote them, without the backticks `model.matrix()` adds.
+#'
+#' These inputs are errors:
+#' * a design matrix with fewer than two columns (`glmnet` cannot fit a
+#'   single-column `x`);
+#' * a factor or character predictor with fewer than two observed levels;
+#' * a dummy name that collides with another column or the target (factor
+#'   `g` with level `b` next to a column `gb`), because `selected` and
+#'   `scores` identify columns by name;
+#' * Inf or -Inf in any predictor (NaN counts as a missing value);
+#' * a column whose variance overflows double precision (values around 1e154
+#'   or larger); rescale it first.
+#'
+#' @section How scores are scaled:
+#' With `standardize = TRUE` (the default), `scores` ranks features on the
+#' standardized coefficient scale: each coefficient is multiplied by the
+#' standard deviation of its design-matrix column, so the ranking does not
+#' depend on the units the predictors are measured in. `glmnet` standardizes
+#' internally for fitting but reports coefficients on the input scale, and
 #' those raw coefficients are kept in `details$coefficients`. With
-#' `standardize = FALSE`, `scores` is the raw table and the two are identical.
+#' `standardize = FALSE`, `scores` holds the raw coefficients and the two
+#' tables are identical.
+#'
+#' A raw coefficient depends on scale: a predictor measured in small units
+#' earns a large coefficient for the same effect. Compare
+#' `details$coefficients` (and `scores` when `standardize = FALSE`) across
+#' predictors only when the predictors share a scale.
 #'
 #' Constant columns get a coefficient of exactly 0 and are never selected.
 #' The same holds for columns that are constant up to floating-point
-#' round-off (spread negligible relative to magnitude): standardization would
-#' otherwise blow that round-off up to a full-scale predictor with a raw
-#' coefficient around 1e15, so such columns are held at 0 during the fit. A
-#' column whose variance overflows (values around 1e154 or larger) is an
-#' error; rescale it first. Coefficients that are floating-point residue
-#' (below `1e-10` times the largest standardized coefficient) are reported as
-#' exactly 0: with all-level dummy coding of the first factor, the redundant
-#' level otherwise kept a coefficient around 1e-13 and was selected.
+#' round-off: standardization would otherwise inflate that round-off into a
+#' full-scale predictor with a raw coefficient around 1e15, so such columns
+#' are held at 0 during the fit. A coefficient whose standardized value is at
+#' most `1e-10` times the largest standardized coefficient is floating-point
+#' residue and is set to exactly 0. Without that step the redundant dummy of the first factor,
+#' which is collinear with the intercept, kept a coefficient around 1e-13 and
+#' was selected.
 #'
-#' Design-matrix names must be unique, because `selected` and `scores` name
-#' columns: a factor dummy that collides with another column or the target
-#' (factor `g` with level `b` next to a column `gb`) is an error, as is a
-#' factor or character predictor with fewer than two observed levels.
+#' @section Missing values:
+#' Under the default `impute = "none"`, a missing predictor value is an error
+#' that names the affected columns, because imputing before cross-validation
+#' lets the folds see each other. `impute = "mean"` fills missing values with
+#' column means computed on all rows, not on the training part of each fold,
+#' and warns about that leak. A column that is entirely NA is an error under
+#' either setting. The target must be free of NA, NaN and Inf.
 #'
-#' Raw coefficient magnitude is a scale-dependent notion of importance: a
-#' predictor measured in small units earns a large coefficient for the same
-#' effect. That applies to `details$coefficients` always, and to `scores` when
-#' `standardize = FALSE`, so compare those numbers across predictors only when
-#' the predictors share a scale.
-#'
-#' Missing predictor values are an error under the default
-#' `impute = "none"`, because imputing before cross-validation lets the folds
-#' see each other. `impute = "mean"` fills them with column means computed on
-#' the whole data set -- not on the training part of each fold -- and warns
-#' that this leaks. Columns that are entirely NA are an error either way.
-#'
-#' @param data A data.frame or data.table holding the target and the candidate
-#'   predictors, with unique, non-empty column names. A numeric matrix with column names is also accepted;
-#'   non-numeric matrices are not (supply a data.frame so factors and
-#'   characters can be expanded by `model.matrix()`).
-#' @param target Single string naming the outcome column in `data`. It must be
-#'   numeric and free of NA/NaN/Inf.
-#' @param alpha Numeric in (0, 1]; default 1 (lasso). Use values in (0, 1)
-#'   for elastic-net. `alpha = 0` (pure ridge) is rejected: it never sets a
-#'   coefficient to exactly zero, so it cannot select.
+#' @param data A data.frame or data.table holding the target and the
+#'   candidate predictors, with unique, non-empty column names. A numeric
+#'   matrix with column names is also accepted. A non-numeric matrix is not:
+#'   supply a data.frame so factors and characters can be expanded by
+#'   `model.matrix()`.
+#' @param target Single string naming the outcome column in `data`. It must
+#'   be numeric and free of NA, NaN and Inf.
+#' @param alpha Numeric in (0, 1]; default 1 (lasso). Values in (0, 1) give an
+#'   elastic net. `alpha = 0` (pure ridge) is rejected because ridge never
+#'   sets a coefficient to exactly zero, so it cannot select.
 #' @param nfolds Integer >= 3; default 5. Number of cross-validation folds
 #'   passed to `glmnet::cv.glmnet()`, which rejects anything smaller than 3.
-#'   When `custom_folds` is supplied those fold IDs define the folds instead,
-#'   and `nfolds` only bounds which IDs are valid (so `custom_folds` must also
-#'   define at least 3 folds).
-#' @param standardize Logical; default TRUE. Passed to `glmnet::cv.glmnet()`
-#'   and also controls the scale `scores` is ranked on (see Details).
-#' @param custom_folds Optional integer vector of fold IDs (one per row of
-#'   `data`, covering 1..`nfolds` with no empty folds); default NULL.
+#'   When `custom_folds` is supplied, those fold IDs define the folds and
+#'   `nfolds` only bounds which IDs are valid, so `custom_folds` must also
+#'   define at least 3 folds.
+#' @param standardize Logical; default `TRUE`. Passed to
+#'   `glmnet::cv.glmnet()`, and also sets the scale `scores` is ranked on (see
+#'   "How scores are scaled").
+#' @param custom_folds Optional integer vector of fold IDs, one per row of
+#'   `data`, covering 1..`nfolds` with no empty fold; default `NULL`.
 #' @param impute How to handle missing predictor values: `"none"` (default)
-#'   errors and names the offending columns, `"mean"` imputes column means
-#'   computed on the full data and warns about the leakage.
-#' @param return_model Logical; keep the fitted cv.glmnet object in the result
-#'   (and pass `keep = TRUE` to `cv.glmnet()`); default FALSE.
-#' @param seed Optional whole number for reproducibility, applied locally and
-#'   restored on exit; default NULL (never seeds by default).
-#' @param verbose Logical; default FALSE. When TRUE, reports the parallel
+#'   errors and names the affected columns; `"mean"` imputes column means
+#'   computed on the full data and warns about the leak.
+#' @param return_model Logical; default `FALSE`. When `TRUE`, the fitted
+#'   `cv.glmnet` object is kept in `model` and `keep = TRUE` is passed to
+#'   `cv.glmnet()` so the prevalidated fits are retained.
+#' @param seed Optional whole number; default `NULL`, which leaves the RNG
+#'   alone. When given, the seed is set for this call only and the previous
+#'   RNG state is restored on exit.
+#' @param verbose Logical; default `FALSE`. When `TRUE`, reports the parallel
 #'   backend status and how many design-matrix columns were selected.
-#' @param parallel Logical; default FALSE. When TRUE, cross-validation runs on
-#'   `n_cores` workers (requires the 'doParallel' and 'foreach' packages); if
-#'   `n_cores` resolves to one worker it stays sequential and says so under
-#'   `verbose = TRUE`.
-#' @param n_cores Integer >= 1; number of workers used only when
-#'   `parallel = TRUE`. Default 2. Values above the detected core count are
-#'   capped.
-#' @param lambda Which cross-validated penalty to select at: `"min"`
-#'   (default, `lambda.min`) or `"1se"` (`lambda.1se`, sparser). See Details.
+#' @param parallel Logical; default `FALSE`. When `TRUE`, cross-validation
+#'   runs on `n_cores` workers, which needs the 'doParallel' and 'foreach'
+#'   packages. If `n_cores` resolves to one worker, the run stays sequential
+#'   and says so when `verbose = TRUE`.
+#' @param n_cores Integer >= 1; default 2. Number of workers, used only when
+#'   `parallel = TRUE`. Values above the detected core count are capped.
+#' @param lambda Penalty to select at: `"min"` (default, `lambda.min`) or
+#'   `"1se"` (`lambda.1se`, sparser). See Details.
 #' @return An `fs_result` object with:
 #'   \item{selected}{Design-matrix columns whose coefficient at the chosen
-#'     lambda (`lambda.min` by default) is non-zero, ordered by decreasing
-#'     `scores` magnitude. Constant (and numerically constant) columns always
-#'     have coefficient 0, so they are never selected; floating-point residue
-#'     coefficients are zeroed (see Details).}
+#'     lambda is non-zero, ordered by decreasing `scores` magnitude. Constant
+#'     and numerically constant columns always have coefficient 0, so they
+#'     are never selected.}
 #'   \item{scores}{data.frame with columns Variable, Coefficient and
 #'     AbsCoefficient, one row per design-matrix column (including those
-#'     shrunk to zero), ordered by decreasing AbsCoefficient, on the
-#'     standardized scale when `standardize = TRUE` (see Details).}
-#'   \item{method}{`"lasso"`, regardless of `alpha`.}
+#'     shrunk to zero), ordered by decreasing AbsCoefficient. On the
+#'     standardized scale when `standardize = TRUE`.}
+#'   \item{method}{`"lasso"`, whatever the value of `alpha`.}
 #'   \item{task}{`"regression"` (gaussian family only).}
-#'   \item{model}{The fitted cv.glmnet object when `return_model = TRUE`, else
-#'     NULL.}
+#'   \item{model}{The fitted `cv.glmnet` object when `return_model = TRUE`,
+#'     else `NULL`.}
 #'   \item{details}{List of `lambda_min` (lambda minimizing CV error),
-#'     `lambda_1se` (largest lambda within 1 SE of the minimum),
-#'     `lambda_used` (`"lambda.min"` or `"lambda.1se"`, the one selection and
-#'     all coefficients are read at), `coefficients` (the same three-column table as
-#'     `scores` but always on the raw coefficient scale) and `n_features`
-#'     (number of design-matrix columns considered).}
+#'     `lambda_1se` (largest lambda within one standard error of the
+#'     minimum), `lambda_used` (`"lambda.min"` or `"lambda.1se"`, the one that
+#'     selection and all coefficients are read at), `coefficients` (the same
+#'     three-column table as `scores`, always on the raw coefficient scale)
+#'     and `n_features` (number of design-matrix columns considered).}
 #'   \item{call}{The matched call.}
 #' @examples
 #' \donttest{

@@ -23,158 +23,190 @@ fs_mars(
 )
 }
 \arguments{
-\item{data}{data.frame or data.table with predictors and the target, with
-unique, non-empty column names and no infinite values. A data.table is
-copied, never modified in place. Unused levels of a factor target are
-dropped.}
+\item{data}{data.frame or data.table with the predictors and the target,
+with unique, non-empty column names and no infinite values. A data.table
+is copied, never modified in place.}
 
 \item{target}{Character. Name of the target column in \code{data}. A factor or
 character target is treated as classification, a numeric one as
-regression.}
+regression. Unused levels of a factor target are dropped.}
 
-\item{train_ratio}{Numeric in (0, 1). Training proportion (default 0.8).}
+\item{train_ratio}{Numeric in (0, 1). Proportion of rows used for training
+(default 0.8).}
 
-\item{degree}{Integer vector, each element >= 1. Interaction degrees to tune
-(default 1:3). Used when \code{search = "grid"}.}
+\item{degree}{Integer vector, each element >= 1. Interaction degrees to
+tune (default \code{1:3}). Used when \code{search = "grid"}.}
 
 \item{nprune}{Integer vector, each element >= 2. Numbers of retained terms
 to tune (default \code{c(5, 10, 15)}). Used when \code{search = "grid"}.}
 
-\item{tuneLength}{Integer >= 1. Number of random hyperparameter combinations
-evaluated when \code{search = "random"} (default 10; ignored for grid search).}
+\item{tuneLength}{Integer >= 1. Number of random hyperparameter
+combinations evaluated when \code{search = "random"} (default 10; ignored for
+grid search).}
 
-\item{search}{Character. "grid" (default) or "random"; see Details.}
+\item{search}{Character. \code{"grid"} (default) or \code{"random"}; see Details.}
 
 \item{number}{Integer >= 2. Cross-validation folds (default 5).}
 
 \item{repeats}{Integer >= 1. Cross-validation repeats (default 3).}
 
-\item{sample_size}{Integer >= 1. Maximum number of rows used; larger data
-sets are randomly down-sampled first, after missing rows are dropped and
-before the train/test split (default 10000).}
+\item{sample_size}{Integer >= 1. Maximum number of rows used (default
+10000). Larger data sets are randomly down-sampled after missing rows
+are dropped and before the train/test split.}
 
 \item{corr_cut}{Numeric between 0 and 1. Correlation cutoff for dropping
 highly correlated numeric predictors (default 0.95; 0 disables).}
 
-\item{remove_nzv}{Logical. Remove near-zero-variance predictors
-(default TRUE).}
+\item{remove_nzv}{Logical. Remove near-zero-variance predictors (default
+\code{TRUE}).}
 
-\item{seed}{Optional whole number for reproducibility, applied locally and
-restored on exit. Default NULL (never seeds by default). With a seed,
-one seed per resample (and tuning candidate) is drawn from the locally
-seeded RNG and passed to \code{caret::trainControl(seeds = )}, which is what
-keeps a seeded \code{n_cores > 1} run reproducible; the parallel workers
-themselves are not given seeded RNG streams. When NULL, no deterministic
-resampling seed lists are constructed either.}
+\item{seed}{Optional whole number; default \code{NULL}, which leaves the RNG
+alone and builds no resampling seed lists. When given, the seed is set
+for this call only and the previous RNG state is restored on exit. It
+drives the down-sampling and the train/test split, and one seed per
+resample and tuning candidate is drawn from it and passed to
+\code{caret::trainControl(seeds = )}. That seed list is what keeps a seeded
+\code{n_cores > 1} run reproducible; the parallel workers themselves are not
+given seeded RNG streams.}
 
-\item{verbose}{Logical. Print progress messages, caret's per-fold iteration
-log, and the small-class notice (default FALSE).}
+\item{verbose}{Logical. Print progress messages, caret's per-fold
+iteration log, and a warning when a class has fewer than 10 rows
+(default \code{FALSE}).}
 
 \item{n_cores}{Integer >= 1. Number of parallel workers for model training
-(default 1 = sequential; no cluster is created and caret's
-\code{allowParallel} stays FALSE). Values above the detected core count are
-capped; requires 'doParallel' and 'foreach' when greater than 1. The
-workers need 'caret' and 'earth' installed, not attached.}
+(default 1: sequential, no cluster is created and caret's
+\code{allowParallel} stays \code{FALSE}). Values above the detected core count are
+capped. Values above 1 need 'doParallel' and 'foreach'; the workers need
+'caret' and 'earth' installed, not attached.}
 }
 \value{
 An object of class \code{fs_result} with:
 \describe{
-\item{selected}{Character vector of the predictors earth retained
-(those appearing in a term of the final earth model), ordered by
-decreasing importance. If \code{caret::varImp()} fails (with a
-warning), the predictors in the final earth model are still
-reported, in model order.}
+\item{selected}{Character vector of the predictors that appear in a term
+of the final earth model, ordered by decreasing importance. If
+\code{caret::varImp()} fails (with a warning), those predictors are
+still reported, in model order.}
 \item{scores}{Named numeric vector of unscaled variable importance, one
 entry per candidate predictor that entered training. Predictors
-earth pruned away score 0; a predictor in the final model keeps its
-importance even when that is zero or negative. \code{NULL} when caret cannot
-compute variable importance for the fitted model (a warning carrying
-caret's error message is raised).}
-\item{method}{"mars".}
-\item{task}{"classification" for a factor or character target (characters
-are coerced to factor), "regression" for a numeric one.}
+earth pruned away score 0; a predictor in the final model keeps
+its importance even when that is zero or negative. \code{NULL} when
+caret cannot compute variable importance for the fitted model, in
+which case a warning carries caret's error message.}
+\item{method}{\code{"mars"}.}
+\item{task}{\code{"classification"} for a factor or character target
+(characters are coerced to factor), \code{"regression"} for a numeric
+one.}
 \item{model}{The \code{caret::train} object.}
-\item{details}{A list with \code{predictions} (test-set predictions; a factor
-carrying the training levels for classification), \code{metrics}
-(RMSE/MAE/R2 for regression; Accuracy/Kappa plus ROC_AUC/PR_AUC when
-the optional 'pROC'/'PRROC' packages are installed for binary
-classification; \code{ROC_AUC} is \code{NA} and \code{PR_AUC} absent when the
-held-out rows contain only one class), \code{confusion_matrix} (classification only, else
-NULL), \code{varimp} (the \code{caret::varImp()} object, or NULL when
-unsupported), \code{removed_predictors} (a list with \code{nzv} and \code{corr}
-naming the dropped predictors), \code{train_index} (integer row indices
-of the training rows, into the cleaned and optionally down-sampled
-data), \code{test_data} (the held-out rows after preprocessing) and
-\code{n_features} (number of candidate predictors that entered
-training).}
+\item{details}{A list with \code{predictions} (test-set predictions; for
+classification, a factor with the training levels), \code{metrics}
+(RMSE, MAE and R2 for regression; Accuracy and Kappa for
+classification; for binary classification also ROC_AUC when the
+optional 'pROC' package is installed and PR_AUC when 'PRROC' is
+installed as well;
+\code{ROC_AUC} is \code{NA} and \code{PR_AUC} absent when the held-out rows
+contain only one class), \code{confusion_matrix} (classification only,
+else \code{NULL}), \code{varimp} (the \code{caret::varImp()} object, or \code{NULL}
+when unsupported), \code{removed_predictors} (a list with \code{nzv} and
+\code{corr} naming the dropped predictors), \code{train_index} (integer row
+indices of the training rows within the cleaned and possibly
+down-sampled data), \code{test_data} (the held-out rows after
+preprocessing) and \code{n_features} (number of candidate predictors
+that entered training).}
 \item{call}{The matched call.}
 }
 }
 \description{
-Trains a Multivariate Adaptive Regression Splines model with
-\code{caret::train(method = "earth")} and repeated cross-validation, evaluates it
-on a held-out test set, and reports the predictors earth retained together
-with their variable importance.
+Trains a multivariate adaptive regression splines (MARS) model with
+\code{caret::train(method = "earth")} under repeated cross-validation,
+evaluates it on a held-out test set, and selects the predictors that the
+final model uses, together with their variable importance.
 }
 \details{
-Use this when you want a model that discovers non-linear effects and
-interactions on its own and then tells you which predictors it used: earth
-fits piecewise-linear hinge terms, prunes them back, and the surviving terms
-define the selected set. Selection is model-based rather than a filter, so
-it reflects one particular fitted model and its tuning.
+MARS builds a model from piecewise-linear hinge terms, optionally
+multiplied together into interactions, and then prunes the terms back.
+It finds non-linear effects and interactions without you specifying them,
+and the predictors that appear in the surviving terms form the selected
+set. That set comes from one fitted and tuned model, not from a
+per-predictor test.
 
-The pipeline, in order: rows with any missing value are dropped; the data
-are randomly down-sampled to at most \code{sample_size} rows; for classification
-each class must have at least two rows; a stratified
-\code{caret::createDataPartition()} split keeps \code{train_ratio} of the rows for
-training and holds the rest out; near-zero-variance and strongly correlated
-predictors (see \code{remove_nzv} and \code{corr_cut}) are identified on the training
-rows only and dropped from both halves; then \code{caret::train()} fits earth
-under repeated cross-validation with \code{preProcess = c("center", "scale")}.
-
-Selection is read off the fitted model: \code{caret::varImp(model, scale = FALSE)}
-is computed on the caret \code{train} object, and every predictor that appears in
-a term of the final (pruned) earth model is reported in \code{selected}.
-Predictors earth pruned away score 0 and are not selected. earth's GCV
-importance can be zero or negative for a predictor the final model still
-uses; such a predictor is selected and keeps its signed importance. caret expands factors into dummy columns
-before fitting, so each importance row is attributed back to the source
-predictor by name (the longest candidate name it starts with) and a
-predictor keeps the largest importance of its encoded columns; that
-name-based attribution is ambiguous if one predictor's name happens to be a
-prefix of another predictor's encoded column name. The backticks caret adds
-around non-syntactic names are stripped first, so such columns are
-attributed like any other.
-
-For classification, class imbalance is handled by \code{sampling = "up"} inside
-\code{caret::trainControl()}, i.e. upsampling happens within each resample; the
-data are never upsampled before cross-validation (which would leak
-duplicated rows across folds). The FIRST factor level (after unused levels
-are dropped and labels sanitized) is treated as the positive class for
-ROC/PR AUC and for the sensitivity/specificity (\code{Sens}/\code{Spec}) that
-\code{caret::twoClassSummary()} reports in \code{model$results}; there is no
-override, so reorder the target's levels with \code{stats::relevel()} to
-change it. This differs from \code{fs_randomforest()}, whose default positive
-class is the second level. ROC AUC does not depend on which class is
-positive, but PR AUC, sensitivity and specificity do. The test-set ROC AUC
-is computed with a fixed direction, so a worse-than-chance model scores
-below 0.5 rather than being silently flipped. Classification requires the 'e1071' package
-(used by \code{caret::confusionMatrix()} and caret's resampling summaries),
-which is checked before any training. Factor levels are sanitized with
-\code{make.names(unique = TRUE)}, so distinct labels can never be merged.
-
-For regression, the reported \code{R2} comes from \code{caret::R2()}, which is the
-squared correlation between predictions and observations -- not
-\code{1 - SSE/SST} -- and can be high even for a biased model.
-
-Everything in \code{details$metrics} comes from the single held-out split, so on
-small data sets these numbers are noisy; the per-resample tuning results are
-in \code{model$resample}.
-
-\code{search = "grid"} tunes over \code{expand.grid(nprune, degree)};
-\code{search = "random"} ignores that grid and evaluates \code{tuneLength} random
-hyperparameter combinations instead.
+The steps run in this order:
+\enumerate{
+\item Rows with any missing value are dropped.
+\item The data are randomly down-sampled to at most \code{sample_size} rows.
+\item For classification, unused target levels are dropped and each class
+must have at least two rows.
+\item A stratified \code{caret::createDataPartition()} split keeps \code{train_ratio}
+of the rows for training and holds the rest out.
+\item Near-zero-variance predictors (see \code{remove_nzv}) and highly correlated
+numeric predictors (see \code{corr_cut}) are identified on the training rows
+only and dropped from both halves.
+\item \code{caret::train()} tunes earth under repeated cross-validation with
+\code{preProcess = c("center", "scale")} applied inside each resample.
+\item The final model is evaluated on the held-out rows.
 }
+
+\code{search = "grid"} tunes over \code{expand.grid(nprune, degree)}.
+\code{search = "random"} ignores that grid and evaluates \code{tuneLength} random
+hyperparameter combinations instead. Tuning optimizes \code{RMSE} for
+regression, \code{ROC} for binary classification when 'pROC' is installed, and
+\code{Accuracy} otherwise.
+
+Everything in \code{details$metrics} comes from the single held-out split. The
+selection and preprocessing never saw those rows, so the numbers are
+honest, but on small data sets they are noisy. The cross-validated figures
+in \code{model$results} were used to pick the tuning values, so the winning
+row is optimistic. The per-resample results for every candidate are in
+\code{model$resample}.
+}
+\section{How predictors are selected and scored}{
+
+\code{caret::varImp(model, scale = FALSE)} is computed on the caret \code{train}
+object, and every predictor that appears in a term of the final (pruned)
+earth model is reported in \code{selected}. Predictors earth pruned away score
+0 and are not selected. earth's GCV importance can be zero or negative for
+a predictor the final model still uses; such a predictor is selected and
+keeps its signed importance.
+
+caret expands factors into dummy columns before fitting, so each
+importance row is attributed back to its source predictor by name (the
+longest candidate name it starts with), and a predictor keeps the largest
+importance of its dummy columns. This attribution is ambiguous when one
+predictor's name is a prefix of another predictor's dummy column name.
+The backticks caret adds around non-syntactic names are stripped first, so
+such columns are attributed like any other.
+}
+
+\section{Classification}{
+
+Class imbalance is handled by \code{sampling = "up"} in
+\code{caret::trainControl()}, so upsampling happens inside each resample. The
+data are never upsampled before cross-validation, which would leak
+duplicated rows across folds.
+
+The first factor level, after unused levels are dropped and labels
+sanitized, is the positive class for ROC and PR AUC and for the
+sensitivity and specificity (\code{Sens}, \code{Spec}) that
+\code{caret::twoClassSummary()} reports in \code{model$results}. There is no
+override; reorder the target's levels with \code{stats::relevel()} to change
+it. \code{fs_randomforest()} differs: its default positive class is the second
+level. ROC AUC does not depend on which class is positive, but PR AUC,
+sensitivity and specificity do. The test-set ROC AUC is computed with a
+fixed direction, so a worse-than-chance model scores below 0.5 instead of
+being flipped.
+
+Factor levels are sanitized with \code{make.names(unique = TRUE)}, so distinct
+labels such as "class 1" and "class.1" are never merged. Classification
+needs the 'e1071' package (used by \code{caret::confusionMatrix()} and caret's
+resampling summaries), which is checked before any training.
+}
+
+\section{Regression}{
+
+The reported \code{R2} comes from \code{caret::R2()}, which is the squared
+correlation between predictions and observations, not \code{1 - SSE/SST}. It
+can be high even for a biased model.
+}
+
 \examples{
 \donttest{
 if (requireNamespace("caret", quietly = TRUE) &&

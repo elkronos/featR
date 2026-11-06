@@ -106,127 +106,111 @@ unsup_scores <- function(dt,
   scores
 }
 
-#' Unsupervised Filter-Based Feature Selection
+#' Unsupervised filter that scores each feature without a target
 #'
-#' Performs unsupervised, univariate, filter-based feature selection by
-#' scoring each feature using a chosen unsupervised criterion and selecting
-#' or dropping features based on a threshold on that score.
+#' Scores each column of `data` with a summary that ignores any outcome
+#' (variance, spread, missingness, or number of distinct values) and keeps or
+#' drops each column by comparing its score with `threshold`.
 #'
-#' No target is involved, so this is the right tool for the first cleaning
-#' pass -- dropping constant or near-constant columns, columns that are mostly
-#' missing, or columns with too few distinct values -- and it is safe to run
-#' before a train/test split, since nothing about the outcome informs it. It
-#' says nothing about whether a feature is \emph{useful}: a high-variance
-#' column can be pure noise, and a low-variance one can be the best predictor
-#' you have. Use [fs_supervised()] or a model-based method for that judgment.
+#' @details
+#' Use it for the first cleaning pass: dropping constant or near-constant
+#' columns, columns that are mostly missing, or columns with too few distinct
+#' values. No outcome informs the scores, so it is safe to run before a
+#' train/test split. For the same reason it says nothing about whether a
+#' feature is useful. A high-variance column can be pure noise and a
+#' low-variance one can be your best predictor; [fs_supervised()] or a
+#' model-based method answers that question.
 #'
-#' Supported methods:
+#' The six values of `method`:
 #' \itemize{
-#'   \item \code{"variance"}: Sample variance (denominator n - 1), in
-#'     squared units. For values below about \code{1e-162} in magnitude the
-#'     variance is smaller than the smallest double and is reported as 0, so
-#'     to screen for constant columns on data in extreme units use
-#'     \code{"range"} (threshold 0) or \code{"n_unique"} (threshold 1).
-#'   \item \code{"mad"}: Median absolute deviation, computed with
-#'     \code{stats::mad()}'s default consistency constant 1.4826
-#'     (normal-consistent). Scores are therefore on the standard-deviation
-#'     (sigma) estimate scale, not the raw median-absolute-deviation scale,
-#'     and thresholds should be chosen accordingly.
-#'   \item \code{"iqr"}: Interquartile range.
-#'   \item \code{"range"}: Max - Min.
-#'   \item \code{"missing_prop"}: Proportion of missing values, in
-#'     \code{[0, 1]}. Note that with the default \code{threshold = 0},
-#'     \code{direction = "above"}, and \code{action = "keep"}, this KEEPS the
-#'     features with the most missing values, which is almost never the
-#'     intent; a warning suggests \code{action = "remove"} or
-#'     \code{direction = "below"}. The warning fires only when all three of
-#'     \code{threshold}, \code{direction}, and \code{action} are left at their
-#'     defaults, so passing any one of them explicitly opts out of the
-#'     advisory.
-#'   \item \code{"n_unique"}: Number of unique non-NA values.
+#'   \item `"variance"` (default): sample variance (denominator n - 1), in
+#'     squared units. For values below about `1e-162` in magnitude the
+#'     variance underflows to 0, so to find constant columns in extreme units
+#'     use `"range"` with threshold 0 or `"n_unique"` with threshold 1.
+#'   \item `"mad"`: median absolute deviation from `stats::mad()`, which
+#'     multiplies by the consistency constant 1.4826. Scores are on the
+#'     scale of a standard-deviation estimate, not the raw median absolute
+#'     deviation; choose thresholds on that scale.
+#'   \item `"iqr"`: interquartile range.
+#'   \item `"range"`: maximum minus minimum.
+#'   \item `"missing_prop"`: proportion of missing values, in `[0, 1]`. With
+#'     the default `threshold = 0`, `direction = "above"`, and
+#'     `action = "keep"`, this keeps the columns that have any missing values
+#'     and drops the complete ones, which is almost never what you want. A
+#'     warning then suggests `action = "remove"` or `direction = "below"`. The
+#'     warning fires only when all three of `threshold`, `direction`, and
+#'     `action` are left at their defaults; passing any one of them
+#'     explicitly silences it.
+#'   \item `"n_unique"`: number of distinct non-`NA` values.
 #' }
 #'
-#' \code{na_rm} affects only the methods that summarize the observed values
-#' (\code{"variance"}, \code{"mad"}, \code{"iqr"}, \code{"range"});
-#' \code{"missing_prop"} and \code{"n_unique"} always look at the whole
-#' column and treat NA as NA.
+#' A feature whose score is `NA` is never selected, whether `action` is
+#' `"keep"` or `"remove"`, and a warning reports how many features were
+#' excluded this way.
 #'
-#' Features whose score is undefined (\code{NA}) are never selected, under
-#' both \code{action = "keep"} and \code{action = "remove"}; a warning
-#' reports how many such features were excluded.
+#' Columns are subset by position, never by name, so duplicated column names
+#' cannot pull in the wrong column. Every column needs a non-empty,
+#' non-`NA` name. A matrix keeps its own column names; `V1`, `V2`, ... are
+#' used only when it has none.
 #'
-#' Columns are subset by integer index, never by name, so duplicated column
-#' names cannot select the wrong columns. Every column must have a non-empty,
-#' non-NA name; a matrix keeps its own column names (`V1`, `V2`, ... are used
-#' only when it has none).
-#'
-#' @param data A data.frame, data.table, or matrix; all columns must be
+#' @param data A data.frame, data.table, or matrix whose columns are all
 #'   numeric. Every column is a candidate feature. The input is copied, never
 #'   modified in place.
-#' @param method One of \code{"variance"} (default), \code{"mad"},
-#'   \code{"iqr"}, \code{"range"}, \code{"missing_prop"}, \code{"n_unique"}.
-#' @param threshold Non-negative, finite numeric scalar threshold applied to
-#'   the feature scores. Default 0. The scales differ by method (a variance is
-#'   in squared units, \code{"missing_prop"} is in \code{[0, 1]},
-#'   \code{"n_unique"} is a count), so a threshold is not portable between
-#'   methods.
-#' @param direction One of \code{"above"} (default), \code{"below"}; compares
-#'   scores to \code{threshold}.
-#' @param action One of \code{"keep"} (default), \code{"remove"}; determines
-#'   whether features meeting the condition are retained or dropped.
-#' @param include_equal Logical; if TRUE, comparisons are inclusive
-#'   (greater/less than or equal) instead of strict. Default FALSE.
-#' @param na_rm Logical; if TRUE (the default), remove NAs when computing
-#'   scores. Has no effect on \code{"missing_prop"} and \code{"n_unique"},
-#'   which always account for NAs the same way.
-#' @param output One of \code{"result"} (default), \code{"matrix"},
-#'   \code{"dt"}, \code{"data.frame"}, \code{"mask"}, \code{"indices"},
-#'   \code{"names"}, \code{"list"}.
+#' @param method One of `"variance"` (default), `"mad"`, `"iqr"`, `"range"`,
+#'   `"missing_prop"`, or `"n_unique"`. See Details.
+#' @param threshold Non-negative, finite number compared with each feature's
+#'   score. Default 0. Each method has its own scale (a variance is in squared
+#'   units, `"missing_prop"` lies in `[0, 1]`, `"n_unique"` is a count), so a
+#'   threshold chosen for one method does not carry over to another.
+#' @param direction `"above"` (default) or `"below"`: which side of
+#'   `threshold` a score must fall on to meet the condition.
+#' @param action `"keep"` (default) retains the features that meet the
+#'   condition; `"remove"` drops them.
+#' @param include_equal Logical. If `TRUE`, a score equal to `threshold`
+#'   meets the condition. Default `FALSE`.
+#' @param na_rm Logical. If `TRUE` (the default), `NA`s are removed before
+#'   computing `"variance"`, `"mad"`, `"iqr"`, and `"range"`; if `FALSE`, an
+#'   `NA` in a column makes its score `NA` under those methods.
+#'   `"missing_prop"` and `"n_unique"` ignore `na_rm`.
+#' @param output Shape of the return value.
 #'   \itemize{
-#'     \item \code{"result"} (default): an \code{fs_result} object (see
-#'       Value).
-#'     \item \code{"matrix"}: numeric matrix of the selected features.
-#'     \item \code{"dt"}: data.table of the selected features.
-#'     \item \code{"data.frame"}: data.frame of the selected features.
-#'     \item \code{"mask"}: logical vector of length \code{ncol(data)}, named
-#'       after the columns of `data`; TRUE marks a selected column.
-#'     \item \code{"indices"}: integer vector of the selected column indices,
-#'       named after the selected columns.
-#'     \item \code{"names"}: character vector of the selected column names.
-#'     \item \code{"list"}: list with components \code{filtered} (matrix),
-#'       \code{mask}, \code{indices}, \code{names}, \code{scores} (all as
-#'       above), and \code{meta}, a list recording \code{method},
-#'       \code{threshold}, \code{direction}, \code{action},
-#'       \code{include_equal}, \code{na_rm}, \code{n_input_cols}, and
-#'       \code{n_kept_cols}.
+#'     \item `"result"` (default): an `fs_result` object (see Value).
+#'     \item `"matrix"`, `"dt"`, `"data.frame"`: the selected features as a
+#'       numeric matrix, a data.table, or a data.frame.
+#'     \item `"mask"`: logical vector of length `ncol(data)`, named after the
+#'       columns of `data`; `TRUE` marks a selected column.
+#'     \item `"indices"`: integer positions of the selected columns, named
+#'       after them.
+#'     \item `"names"`: character vector of the selected column names.
+#'     \item `"list"`: a list with `filtered` (matrix), `mask`, `indices`,
+#'       `names`, `scores`, and `meta`. `meta` records `method`, `threshold`,
+#'       `direction`, `action`, `include_equal`, `na_rm`, `n_input_cols`, and
+#'       `n_kept_cols`.
 #'   }
-#' @param verbose Logical; emit progress messages. Default FALSE.
+#' @param verbose Logical; print progress messages. Default `FALSE`.
 #'
-#' @return With the default \code{output = "result"}, an object of class
-#'   `fs_result` with elements:
+#' @return With `output = "result"` (the default), an `fs_result` object:
 #'   \itemize{
 #'     \item `selected`: character vector of selected feature names.
-#'     \item `scores`: named numeric vector of per-feature scores, in column
-#'       order, `NA` where the score is undefined.
-#'     \item `method`: `"unsupervised_"` followed by the scoring method, for
-#'       example `"unsupervised_variance"`.
-#'     \item `task`: `NA_character_` (unsupervised selection has no task).
+#'     \item `scores`: named numeric vector with one score per column, in
+#'       column order, `NA` where the score is undefined.
+#'     \item `method`: `"unsupervised_"` followed by the method, for example
+#'       `"unsupervised_variance"`.
+#'     \item `task`: `NA_character_`, since there is no target.
 #'     \item `model`: `NULL`.
 #'     \item `details`: a list holding, in this order, `mask` (the logical
-#'       keep-mask over the candidate features), `indices` (the selected
-#'       column indices, named after the selected columns), `filtered` (the
-#'       selected columns as a data.table), `threshold`, `direction`,
-#'       `action`, and `n_features` (the number of candidate features, that
-#'       is `ncol(data)`).
+#'       keep-mask over the columns), `indices` (selected positions, named),
+#'       `filtered` (the selected columns as a data.table), `threshold`,
+#'       `direction`, `action`, and `n_features` (`ncol(data)`).
 #'     \item `call`: the matched call.
 #'   }
-#'   Any other `output` returns that shape instead, exactly as documented
-#'   above. When no feature meets the selection criteria, a warning is issued
-#'   and the tabular shapes come back empty: \code{"matrix"} and
-#'   \code{"data.frame"} have zero columns and keep the input row count, while
-#'   the \code{"dt"} shape (and `details$filtered`) is only guaranteed to have
-#'   zero columns -- data.table represents a zero-column table as having zero
-#'   rows, so its row count is not preserved.
+#'   Any other `output` returns the shape described under `output`.
+#'
+#'   When no feature meets the criteria, a warning is issued and the tabular
+#'   shapes come back empty. `"matrix"` and `"data.frame"` then have zero
+#'   columns and keep the input row count. The `"dt"` shape and
+#'   `details$filtered` have zero columns and also zero rows, because
+#'   data.table represents a zero-column table that way.
 #'
 #' @examples
 #' df <- data.frame(

@@ -20,209 +20,245 @@ fs_recursivefeature(
 )
 }
 \arguments{
-\item{data}{A data.frame or data.table with at least one row and one column,
-holding the target and the candidate predictors (every other column), with
-unique, non-empty column names and at least two candidate predictors
-(after any one-hot encoding). It is converted to a plain data.frame on
+\item{data}{A data.frame or data.table holding the target and the
+candidate predictors (every other column). It needs at least one row,
+unique non-empty column names, and at least two candidate predictors
+after any one-hot encoding. It is converted to a plain data.frame on
 entry.}
 
-\item{target}{Single string naming the target column of \code{data}; a column
-index is not accepted. A factor, character, or logical target means
+\item{target}{Single string naming the target column; a column index is
+not accepted. A factor, character, or logical target means
 classification (unused factor levels are dropped), anything else
 regression. The target may not contain missing or infinite values.}
 
-\item{sizes}{Vector of whole-number feature-subset sizes to evaluate
-(fractional sizes are an error). Default
-\code{NULL}, which uses \code{1:p}, where \code{p} is the predictor count after any
-one-hot encoding. Values outside \verb{[1, p]} are dropped with a warning; if
-that leaves nothing, the call is an error rather than a silent empty run.}
+\item{sizes}{Whole-number subset sizes to evaluate; fractional sizes are
+an error. Default \code{NULL} uses \code{1:p}, where \code{p} is the predictor count
+after any one-hot encoding. Values outside \verb{[1, p]} are dropped with a
+warning, and the call stops if none are left.}
 
-\item{train_ratio}{Numeric, strictly between 0 and 1: the training
-proportion of the stratified split. Default 0.8.}
+\item{train_ratio}{Training proportion of the stratified split, strictly
+between 0 and 1. Default 0.8.}
 
-\item{rfe_control}{List of arguments for \code{caret::rfeControl()}; must contain
-at least \code{method} and \code{number}. Default \code{list(method = "cv", number = 5)}.
-\code{method} must be one of \code{"cv"}, \code{"repeatedcv"}, \code{"LOOCV"}, \code{"boot"},
-\code{"boot632"}, \code{"LGOCV"} or \code{"test"}, and \code{number} must be at least 2 for
-\code{"cv"}/\code{"repeatedcv"}. \code{index}, \code{indexOut} and \code{indexFinal} are not
-accepted (an error): resampling runs on the internal training split, so
-row numbers built for \code{data} would point at the wrong rows.
-\code{functions} selects the caret RFE function set and defaults to
-\code{caret::rfFuncs}; a supplied set must contain the functions \code{summary},
-\code{fit}, \code{pred}, \code{rank}, \code{selectSize} and \code{selectVar}. An \code{allowParallel} entry is dropped with a warning (use
-the \code{parallel} argument instead), while a \code{verbose} entry, if present,
-overrides the \code{verbose} argument for \code{caret::rfe()}. With
-\code{method = "repeatedcv"} and no \code{repeats}, caret's default of 1 is used and
-a warning says so.}
+\item{rfe_control}{List of arguments for \code{caret::rfeControl()}. Default
+\code{list(method = "cv", number = 5)}.
+\itemize{
+\item \code{method} and \code{number} are required. \code{method} is one of \code{"cv"},
+\code{"repeatedcv"}, \code{"LOOCV"}, \code{"boot"}, \code{"boot632"}, \code{"LGOCV"} or
+\code{"test"} (matched ignoring case), and \code{number} must be at least 2
+for \code{"cv"} and \code{"repeatedcv"}. With \code{"repeatedcv"} and no \code{repeats},
+caret's default of 1 is used and a warning says so.
+\item \code{functions} is the caret RFE function set, default
+\code{caret::rfFuncs}. A supplied set must contain the functions
+\code{summary}, \code{fit}, \code{pred}, \code{rank}, \code{selectSize} and \code{selectVar}.
+\item \code{index}, \code{indexOut} and \code{indexFinal} are an error: resampling
+runs on the internal training split, so row numbers built for \code{data}
+would point at the wrong rows.
+\item \code{allowParallel} is dropped with a warning; use \code{parallel}
+instead. \code{verbose}, if present, overrides the \code{verbose} argument for
+\code{caret::rfe()}.
+}}
 
 \item{train_control}{List of arguments for \code{caret::trainControl()}, used
-only when \code{return_final_model = TRUE}, and then validated (together with
-\code{model_method}) before the search starts. Must contain \code{method}, and also
-\code{number} unless \code{method = "none"} (at least 2 for \code{"cv"}/\code{"repeatedcv"}).
-\code{index}, \code{indexOut} and \code{indexFinal} are not accepted (an error), for the
-same reason as in \code{rfe_control}. Unless it is set here, \code{allowParallel}
-follows the \code{parallel} argument, so a foreach backend you registered
-yourself is not used by a sequential call. Default
-\code{list(method = "cv", number = 5)}.}
+only when \code{return_final_model = TRUE} and then checked, together with
+\code{model_method}, before the search starts. It must contain \code{method}, and
+also \code{number} unless \code{method = "none"} (at least 2 for \code{"cv"} and
+\code{"repeatedcv"}). \code{index}, \code{indexOut} and \code{indexFinal} are an error, for
+the same reason as in \code{rfe_control}. Unless set here, \code{allowParallel}
+follows \code{parallel}, so a sequential call does not use a foreach backend
+you registered yourself. Default \code{list(method = "cv", number = 5)}.}
 
-\item{model_method}{Single string; the caret model key used for the final
-model, for example \code{"rf"} or \code{"lm"}. Used only when
-\code{return_final_model = TRUE}. Default \code{"rf"}.}
+\item{model_method}{Single string: the caret model key for the final
+model, such as \code{"rf"} or \code{"lm"}. It must be in caret's built-in model
+library. Used only when \code{return_final_model = TRUE}. Default \code{"rf"}.}
 
-\item{handle_categorical}{Logical; one-hot encode predictors with full-rank
-dummies (fitted on the training rows, applied to the test rows). A dummy
-name (\verb{<variable><level>}) that collides with another column is an
-error. Function sets that work on a model matrix (for example
-\code{caret::lmFuncs}) rank dummy columns rather than factors, so they need
+\item{handle_categorical}{Logical; one-hot encode the predictors with
+full-rank dummies, fitted on the training rows and applied to the test
+rows. A dummy name (\verb{<variable><level>}) that matches another column is
+an error. Function sets that work on a model matrix, such as
+\code{caret::lmFuncs}, rank dummy columns rather than factors, so they need
 \code{handle_categorical = TRUE} when factor predictors are present; without
-it the call stops with an error saying so. Default \code{FALSE}.}
+it the call stops with an error that says so. Default \code{FALSE}.}
 
-\item{return_final_model}{Logical; train a final caret model on the training
-rows using the selected features and return it as \code{model}, with the \code{rfe}
-object still available in \code{details$rfe}. Near-zero-variance and linearly
-dependent predictors are dropped from the selected set first, each with a
-warning, and what survives is recorded in \code{details$final_model_variables}.
-Default \code{FALSE}.}
+\item{return_final_model}{Logical; train a final caret model on the
+training rows using the selected predictors and return it as \code{model}
+(the \code{rfe} object stays in \code{details$rfe}). Near-zero-variance and
+linearly dependent predictors are dropped from the selected set first,
+each with a warning, and the survivors are recorded in
+\code{details$final_model_variables}. Default \code{FALSE}.}
 
-\item{seed}{Optional single whole number within the range of an R integer;
-fractional or out-of-range values are an error rather than being
-truncated. It covers the split and the RFE resampling, is applied for
-the duration of the call only (the previous RNG state is restored on
-exit), and defaults to \code{NULL}, which never seeds. Under
-\code{parallel = TRUE} a seed also sets \code{rfe_control$seeds = NULL} (unless
-you supplied \code{seeds}), so caret draws one seed per resample from the
-locally seeded RNG; that is what makes two seeded parallel runs agree
-with each other (the workers additionally get L'Ecuyer-CMRG streams, but
-those alone would not, because foreach hands resamples to whichever
-worker is free). A seeded parallel run need not equal a seeded
-sequential one, because the sequential run keeps caret's default
-\code{seeds = NA}.}
+\item{seed}{Optional whole number within the range of an R integer.
+Fractional or out-of-range values are an error, not truncated. Default
+\code{NULL}, which never seeds. See "Seeds and parallel runs" in Details.}
 
 \item{verbose}{Logical; print progress messages and let \code{caret::rfe()}
 report its own progress, unless \code{rfe_control$verbose} overrides the
 latter. Default \code{FALSE}.}
 
-\item{parallel}{Logical. If \code{TRUE}, registers a two-worker PSOCK cluster
+\item{parallel}{Logical. \code{TRUE} registers a two-worker PSOCK cluster
 (capped at the detected core count) for the duration of the call, then
-stops it and restores whichever foreach backend was registered before the
-call; requires the suggested packages 'foreach' and 'doParallel'.
-The RFE resampling and the final model's resampling both follow this
-setting; a custom function set such as \code{caret::caretFuncs} builds its own
-inner \code{caret::train()} control and is not covered. Default \code{FALSE}.}
+stops it and restores whichever foreach backend was registered before.
+Requires the suggested packages 'foreach' and 'doParallel'. The RFE
+resampling and the final model's resampling both follow this setting. A
+custom function set such as \code{caret::caretFuncs} builds its own inner
+\code{caret::train()} control and is not covered. Default \code{FALSE}.}
 }
 \value{
 An object of class \code{fs_result} with:
 \describe{
-\item{selected}{Character vector of the variables RFE kept
-(\code{optVariables} at the optimal subset size).}
+\item{selected}{Character vector of the predictors RFE kept: caret's
+\code{optVariables} at the optimal subset size.}
 \item{scores}{Named numeric vector with one entry per candidate
 predictor: its importance in the full-size fit (all candidates
-present), averaged over every resample. Unlike \code{caret::varImp()}
-on the \code{rfe} object, this does not average a variable only over
-the resamples where it survived to the optimal size, so marginal
-variables are not inflated and no candidate is missing. When the
+present), averaged over every resample. \code{caret::varImp()} on the
+\code{rfe} object instead averages a predictor only over the resamples
+where it survived to the optimal size, which inflates marginal
+predictors and omits predictors that never survived. When the
 function set records no per-resample importance, the
-\code{caret::varImp()} values are used instead; \code{NULL} when there is
-nothing usable.}
-\item{method}{"rfe".}
-\item{task}{"classification" or "regression", inferred from the target.}
+\code{caret::varImp()} values are used instead. \code{NULL} when neither is
+available.}
+\item{method}{\code{"rfe"}.}
+\item{task}{\code{"classification"} or \code{"regression"}, inferred from the
+target.}
 \item{model}{The final \code{caret::train} model when
 \code{return_final_model = TRUE}, otherwise the \code{rfe} object.}
-\item{details}{A list, in snake_case, with \code{rfe} (the caret \code{rfe} object,
-always present even when \code{model} holds the final model),
-\code{optimal_size} (the subset size RFE chose), \code{test_metrics}
-(\code{caret::postResample()} on the held-out rows -- the only held-out
-estimate on the object), \code{resampling_results} (the RFE resampling
-summary over candidate sizes, computed inside the training rows),
-\code{variable_importance} (the \code{caret::varImp()} data.frame, which
-averages each variable only over the resamples where it survived
-to the optimal size; \code{selected} follows caret's \code{optVariables}
-rule, which is weighted the same way),
-\code{preprocessor} (the \code{dummyVars} encoder, or \code{NULL} when
-\code{handle_categorical = FALSE}), \code{train_index} and \code{test_index} (row
-indices into \code{data} for the two partitions), \code{final_model_variables}
-(predictors the final model actually used after
-NZV/linear-combination filtering, or \code{NULL} when no final model was
-requested) and \code{n_features} (candidate predictors offered to RFE,
-counted after one-hot encoding when \code{handle_categorical = TRUE} and
-after constant predictors were removed).}
+\item{details}{A list with:
+\itemize{
+\item \code{rfe}: the caret \code{rfe} object, present even when \code{model} holds
+the final model.
+\item \code{optimal_size}: the subset size RFE chose.
+\item \code{test_metrics}: \code{caret::postResample()} on the test rows, the
+only held-out estimate on the result.
+\item \code{resampling_results}: the RFE resampling summary over candidate
+sizes, computed inside the training rows.
+\item \code{variable_importance}: the \code{caret::varImp()} data.frame. It
+averages each predictor only over the resamples where it survived
+to the optimal size, and \code{selected} follows caret's \code{optVariables}
+rule, which is weighted the same way.
+\item \code{preprocessor}: the \code{dummyVars} encoder, or \code{NULL} when
+\code{handle_categorical = FALSE}.
+\item \code{train_index}, \code{test_index}: row indices into \code{data} for the
+two partitions.
+\item \code{final_model_variables}: the predictors the final model used
+after near-zero-variance and linear-combination filtering, or
+\code{NULL} when no final model was requested.
+\item \code{n_features}: the number of candidate predictors offered to
+RFE, counted after one-hot encoding and after constant predictors
+were removed.
+}}
 \item{call}{The matched call.}
 }
 }
 \description{
-Answers "how few predictors can I keep before resampled performance starts
-to fall off?" Splits the data into stratified train/test partitions,
-optionally one-hot encodes the predictors (encoder fitted on the training
-rows only), runs \code{caret::rfe()} on the training set, evaluates the fitted
-RFE model on the held-out test rows, and optionally trains a final caret
-model on the training rows.
+Finds how few predictors a model needs before its resampled performance
+starts to drop. \code{fs_recursivefeature()} splits the data into stratified
+training and test rows, runs \code{caret::rfe()} on the training rows, and
+scores the chosen subset on the test rows. It can also one-hot encode the
+predictors first and fit a final caret model on the selected ones.
 }
 \details{
-RFE is a wrapper method: it refits the underlying model once per candidate
-subset size per resample, so it is by far the most expensive method here,
-and its answer is specific to the model family in \code{rfe_control$functions}
-rather than being a general statement about the features. In exchange, the
-subset it reports is tuned to the model you actually intend to use, and the
-subset size is chosen by resampling instead of by a threshold you invent.
+Recursive feature elimination (RFE) fits a model on all candidate
+predictors and ranks them by importance, then refits on the top \code{k} for
+each subset size \code{k} in \code{sizes}, inside every resample of \code{rfe_control}.
+The size with the best resampled performance wins, so you do not have to
+pick a cutoff yourself. The price is one model fit per candidate size per
+resample, which makes RFE one of the slowest methods in featR. The answer
+is also tied to the model family in \code{rfe_control$functions} (random forests by
+default): it tells you which predictors that model needs, not which
+predictors are informative in general.
 
-Requires the suggested package 'caret'. The RFE function set comes from
-\code{rfe_control$functions} and defaults to \code{caret::rfFuncs}, which fits random
-forests, so the suggested package 'randomForest' must also be installed
-unless you supply a different set (for example
-\code{rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)});
-it is also needed for the default final model (\code{model_method = "rf"}) when
-\code{return_final_model = TRUE}. Both are checked before any fitting starts.
-Parallel execution additionally requires 'foreach' and 'doParallel';
-classification metrics use \code{caret::postResample()}, which needs 'e1071'
-(also checked before any fitting starts).
+The honest performance estimate is \code{details$test_metrics}. The
+\href{https://elkronos.github.io/featR/articles/validation-and-leakage.html}{Validation and leakage}
+article lists which numbers in each featR result are held out and which
+are optimistic.
+\subsection{Required packages}{
 
-Everything that could leak is fitted on the training rows: the one-hot
-encoder, the factor levels the test columns are aligned to, the elimination
-itself, and the final model. \code{details$test_metrics} is therefore a genuine
-held-out estimate. It applies \code{caret::postResample()} to the predictions of
-the fitted \code{rfe} object (caret's own refit on all the training rows,
-restricted to the optimal subset) on test rows that took no part in choosing
-either the features or the subset size.
+'caret' is always required. The default function set, \code{caret::rfFuncs},
+fits random forests and needs 'randomForest'; so does the default final
+model (\code{model_method = "rf"}) when \code{return_final_model = TRUE}. To avoid
+random forests, pass another set, for example
+\code{rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)}.
+Classification also needs 'e1071', because the metrics come from
+\code{caret::postResample()}. \code{parallel = TRUE} needs 'foreach' and
+'doParallel'. All of these are checked before any model is fitted.
+}
 
-The metrics are caret's: for regression \code{RMSE}, \code{Rsquared} and \code{MAE}, where
-\code{Rsquared} is the \emph{squared Pearson correlation} between predictions
-and observations, not \code{1 - SSE/SST}. It is never negative and ignores bias
-and scale errors, so it is not comparable with an \code{R2} defined as
-\code{1 - SSE/SST} (for example \code{fs_randomforest()}'s \code{details$metrics$R2}).
-For classification they are \code{Accuracy} (proportion of held-out rows
-classified correctly) and \code{Kappa} (Cohen's kappa, accuracy corrected for
-chance agreement).
+\subsection{What the held-out rows see}{
 
-Two other summaries on the result are \emph{not} held-out estimates, by
-construction. \code{details$resampling_results} summarizes resampling performed
-inside the training rows across candidate subset sizes, and, when
-\code{return_final_model = TRUE}, \code{model$results} reports \code{train_control}
-resampling inside those same training rows on features that were already
-selected. Only \code{details$test_metrics} is computed on data the search never
-saw.
+Everything learned from data is learned on the training rows: the one-hot
+encoder, the factor levels the test columns are aligned to, the
+elimination itself, and the final model. The test rows play no part in
+choosing either the predictors or the subset size.
 
-Predictor names that are not syntactic R names (for example \code{"a b"}) are
-replaced by their \code{make.names()} versions inside the \code{rfe} object and the
-final model, because caret's function sets cannot handle them; \code{selected},
-\code{scores}, \code{details$variable_importance} and \code{details$final_model_variables}
+\code{details$test_metrics} applies \code{caret::postResample()} to the test-row
+predictions of the fitted \code{rfe} object, which is caret's refit on all
+training rows restricted to the optimal subset. It is the only held-out
+estimate on the result. Two other summaries reuse the training rows and
+are optimistic:
+\itemize{
+\item \code{details$resampling_results} is the resampled performance at each
+candidate size, computed inside the training rows. The size RFE picked
+is the best of these, so its entry is biased upward.
+\item With \code{return_final_model = TRUE}, \code{model$results} reports
+\code{train_control} resampling inside the same training rows, on
+predictors that were already chosen using those rows.
+}
+}
+
+\subsection{Reading the metrics}{
+
+The metrics are caret's. For regression they are \code{RMSE}, \code{Rsquared} and
+\code{MAE}, where \code{Rsquared} is the squared Pearson correlation between
+predictions and observations, not \code{1 - SSE/SST}. It is never negative and
+ignores bias and scale errors, so it cannot be compared with an \code{R2}
+defined as \code{1 - SSE/SST}, such as \code{details$metrics$R2} from
+\code{\link[=fs_randomforest]{fs_randomforest()}}. For classification they are \code{Accuracy} (the
+proportion of test rows classified correctly) and \code{Kappa} (Cohen's kappa,
+accuracy corrected for chance agreement).
+}
+
+\subsection{Data preparation and requirements}{
+
+\itemize{
+\item Infinite values (\code{Inf}, \code{-Inf}) anywhere in \code{data} are an error.
+\item Missing values in the training predictors are an error; impute or
+drop incomplete rows before calling. Missing values in the test rows
+are not imputed. Depending on the function set, \code{predict()} then
+either stops (random forests) or returns \code{NA} for those rows, which
+\code{caret::postResample()} leaves out of \code{details$test_metrics}. A warning
+reports how many rows were left out.
+\item Character and logical predictors become factors. Factor predictors
+keep only the levels observed in the training rows; a test value with
+a level the training rows never saw becomes missing, with a warning.
+\item Predictors that are constant on the training rows (a single value,
+or a factor with one observed level) are removed with a warning before
+RFE. They carry no information, and a random forest fitted on a single
+constant predictor never returns.
+\item Predictor names that are not syntactic R names, such as \code{"a b"},
+break caret's function sets, so the \code{rfe} object and the final model
+use their \code{make.names()} versions. \code{selected}, \code{scores},
+\code{details$variable_importance} and \code{details$final_model_variables}
 report the original names.
+\item With \code{handle_categorical = TRUE}, the encoded test rows are checked
+against the input row count, so an encoding that loses rows is an
+error instead of a misaligned metric.
+}
+}
 
-Infinite values (\code{Inf}/\code{-Inf}) anywhere in \code{data} are an error.
-Predictors that are constant on the training rows (a single value, or a
-factor with a single observed level) are removed before RFE with a
-warning; they carry no information, and a random forest fitted on a single
-constant predictor never returns. Factor predictors keep only the levels
-observed in the training rows; a held-out value with a level the training
-rows never saw is treated as missing, with a warning.
+\subsection{Seeds and parallel runs}{
 
-Missing values in the \emph{training} predictors are rejected with an error;
-impute or drop incomplete rows before calling. NAs in the held-out rows are
-not imputed: depending on the function set, \code{predict()} either stops (random
-forests) or returns \code{NA} for those rows, which \code{caret::postResample()} then
-leaves out of \code{details$test_metrics}; a warning reports how many rows were
-left out. With \code{handle_categorical = TRUE} the encoded test
-rows are row-count checked against their input, so an encoding that quietly
-loses rows becomes an error rather than a silently misaligned metric.
+\code{seed} covers the split and the RFE resampling. It is applied for the
+duration of the call only, and the previous RNG state is restored on
+exit. With \code{seed = NULL} the call draws from your current RNG stream
+without reseeding it. Under
+\code{parallel = TRUE}, a seed also sets \code{rfe_control$seeds = NULL} unless you
+supplied \code{seeds}, so caret draws one seed per resample from the locally
+seeded RNG. That is what makes two seeded parallel runs agree. The workers
+also get L'Ecuyer-CMRG streams, but those alone would not be enough,
+because foreach hands each resample to whichever worker is free. A seeded
+parallel run need not match a seeded sequential one, because the
+sequential run keeps caret's default \code{seeds = NA}. See
+\href{https://elkronos.github.io/featR/articles/reproducibility.html}{Reproducibility and parallelism}.
+}
 }
 \examples{
 \donttest{

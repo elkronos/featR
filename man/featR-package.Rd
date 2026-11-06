@@ -6,94 +6,112 @@
 \alias{featR-package}
 \title{featR: A Unified Toolkit for Feature Selection}
 \description{
-featR gathers filter, regularization, wrapper, and dimensionality-reduction
-methods for choosing predictors and puts them behind one calling convention
-and one return type, so that trying a different method is a one-word change
-rather than a rewrite. Each method is a single function call on a data
-frame; there is no pipeline object to build first.
+featR collects filter, regularization, wrapper, and dimensionality-reduction
+methods for choosing predictors. Every selection method is one function
+call on a data frame and returns the same kind of object, so switching
+from \code{fs_lasso()} to \code{fs_boruta()} changes the function name and its
+method-specific options and leaves the surrounding code alone.
+
+The package website has longer guides. Start with
+\href{https://elkronos.github.io/featR/articles/featR.html}{Getting started},
+\href{https://elkronos.github.io/featR/articles/choosing-a-method.html}{Choosing a method},
+and \href{https://elkronos.github.io/featR/articles/validation-and-leakage.html}{Validation and leakage},
+which explains which reported numbers are held-out and which are
+optimistic.
 }
-\details{
-\strong{Calling convention.} Selection functions are called as
-\verb{fs_<method>(data, target, ...)}. \code{data} holds the observations
-(a data.frame, or a data.table or matrix where the method accepts one) and
-\code{target} is the \emph{name} of the outcome column inside \code{data},
-never a separate vector. Method-specific options follow, and housekeeping
-arguments (\code{seed}, \code{verbose}, \code{n_cores}) come last wherever a
-method supports them. The functions with no outcome to name take no
-\code{target}: \code{\link{fs_unsupervised}} and \code{\link{fs_correlation}}
-score features without one, and \code{\link{fs_pca}} and
-\code{\link{fs_svd}} decompose a numeric table.
+\section{Calling convention}{
 
-\strong{Return value.} Every selection function returns an object of class
-\code{fs_result}, a list with the elements:
-\itemize{
-\item \code{selected}: character vector of the chosen feature names
-(possibly empty).
-\item \code{scores}: per-feature scores, usually a named numeric vector
-covering every candidate feature (a data.frame for a few methods), or
-\code{NULL} when the method produces no comparable per-feature score.
-\item \code{method}: single string naming what actually ran, for example
-\code{"supervised_correlation"}, \code{"lasso"}, or \code{"svm_linear"}.
-\item \code{task}: \code{"classification"}, \code{"regression"}, or
-\code{NA} when the method has no task.
-\item \code{model}: the fitted model when the method fits one, otherwise
-\code{NULL}.
-\item \code{details}: named list of method-specific extras, documented
-per function.
-\item \code{call}: the matched call.
+Selection functions are called as \verb{fs_<method>(data, target, ...)}. \code{data}
+holds the observations (a data frame, or a data.table or matrix where the
+method accepts one), and \code{target} is the name of the outcome column inside
+\code{data}, never a separate vector. Method-specific options follow, and
+housekeeping arguments (\code{seed}, \code{verbose}, \code{n_cores}) come last wherever a
+method has them.
+
+Four functions take no \code{target}. \code{\link[=fs_unsupervised]{fs_unsupervised()}} and
+\code{\link[=fs_correlation]{fs_correlation()}} score features without an outcome, and \code{\link[=fs_pca]{fs_pca()}} and
+\code{\link[=fs_svd]{fs_svd()}} decompose a numeric table.
 }
-Results have \code{print()} and \code{summary()} methods, and
-\code{\link{selected}} extracts the chosen names.
-\code{\link{fs_pca}} and \code{\link{fs_svd}} are dimensionality reduction
-rather than selection, so they are the two exceptions: each returns its own
-plain list, documented on its own help page.
 
-\strong{Dependencies.} Only data.table, parallel, stats, utils, and withr
-are hard dependencies. Every modeling engine (caret, glmnet, kernlab,
-randomForest, Boruta, earth, MASS, brms, RSpectra, and the rest) is a
-suggested package, loaded only on the code path that needs it and checked
-at the point of use: if one is missing you get an error naming the packages
-and the exact \code{install.packages()} call to run, rather than a cryptic
-failure deep in a model fit.
+\section{The result object}{
 
-\strong{Reproducibility and resources.} featR never seeds the RNG on its
-own. Functions that use randomness take \code{seed = NULL}; supplying a
-seed sets it for that call only and restores the caller's RNG state on
-exit. Every function is sequential by default, parallelism is opt-in
-through \code{n_cores} (or \code{parallel = TRUE}), worker requests are
-capped at the detected core count, and any cluster featR starts is stopped
-when the call returns.
+Every selection function returns an \code{fs_result}, a list of seven elements:
+\describe{
+\item{\code{selected}}{Character vector of the chosen feature names, possibly
+empty.}
+\item{\code{scores}}{Per-feature scores: usually a named numeric vector
+covering every candidate feature, a data frame for a few methods, or
+\code{NULL} when the method has no comparable per-feature score. What a
+score means depends on the method; see each function's Value section.}
+\item{\code{method}}{A single string naming what ran, for example
+\code{"supervised_correlation"}, \code{"lasso"}, or \code{"svm_linear"}.}
+\item{\code{task}}{\code{"classification"}, \code{"regression"}, or \code{NA} when the
+method has no task.}
+\item{\code{model}}{The fitted model when the method fits one, otherwise
+\code{NULL}.}
+\item{\code{details}}{A named list of method-specific extras, documented on
+each function's help page.}
+\item{\code{call}}{The matched call.}
+}
+Results have \link[=print.fs_result]{print()} and \link[=summary.fs_result]{summary()}
+methods, and \code{\link[=selected]{selected()}} extracts the chosen names. \code{\link[=fs_pca]{fs_pca()}} and
+\code{\link[=fs_svd]{fs_svd()}} are the exceptions: they build new components rather than
+choosing columns, and each returns its own plain list. The
+\href{https://elkronos.github.io/featR/articles/fs-result.html}{fs_result guide}
+tabulates what \code{scores} holds for each function.
+}
 
-\strong{Available methods.}
+\section{Methods}{
+
 \describe{
 \item{Filters}{No model is fitted, so they are cheap and scale to wide
-data. \code{\link{fs_supervised}} (absolute Pearson correlation or
-one-way ANOVA F against the target), \code{\link{fs_unsupervised}}
-(variance, MAD, IQR, range, missingness, distinct values),
-\code{\link{fs_chi}} (chi-squared tests for categorical features),
-\code{\link{fs_infogain}} (information gain and gain ratio), and
-\code{\link{fs_correlation}} (drops redundant members of highly
-correlated groups).}
+data. \code{\link[=fs_supervised]{fs_supervised()}} scores each feature by absolute Pearson
+correlation or one-way ANOVA F against the target;
+\code{\link[=fs_unsupervised]{fs_unsupervised()}} by variance, MAD, IQR, range, missingness, or
+number of distinct values; \code{\link[=fs_chi]{fs_chi()}} by a chi-squared test for
+categorical features; and \code{\link[=fs_infogain]{fs_infogain()}} by information gain or gain
+ratio. \code{\link[=fs_correlation]{fs_correlation()}} drops redundant members of highly correlated
+groups.}
 \item{Regularization and embedded importance}{One model fit whose own
-structure names the survivors. \code{\link{fs_lasso}} (L1 penalty),
-\code{\link{fs_elastic}} (L1/L2 mixture), \code{\link{fs_randomforest}}
-(permutation importance with held-out evaluation), and
-\code{\link{fs_mars}} (the predictors an earth model retains).}
-\item{Wrappers}{A model is refitted over candidate subsets: the most
-expensive family, and the most closely tailored to the model you intend
-to use. \code{\link{fs_recursivefeature}} (caret recursive feature
-elimination), \code{\link{fs_svm}} (SVM-RFE, or random-forest
-screening, plus a tuned SVM), \code{\link{fs_boruta}} (all-relevant
-selection against shadow features), \code{\link{fs_stepwise}} (AIC
-stepwise regression), and \code{\link{fs_bayes}} (brms models compared
-with loo).}
+structure picks the survivors. \code{\link[=fs_lasso]{fs_lasso()}} uses an L1 penalty,
+\code{\link[=fs_elastic]{fs_elastic()}} an L1/L2 mixture, \code{\link[=fs_randomforest]{fs_randomforest()}} permutation
+importance with held-out evaluation, and \code{\link[=fs_mars]{fs_mars()}} keeps the
+predictors an earth model retains.}
+\item{Wrappers}{A model is refitted over candidate subsets. These are
+the most expensive methods and the most closely tied to the model you
+intend to use. \code{\link[=fs_recursivefeature]{fs_recursivefeature()}} runs caret recursive feature
+elimination; \code{\link[=fs_svm]{fs_svm()}} tunes an SVM, optionally after SVM-RFE or
+random-forest screening; \code{\link[=fs_boruta]{fs_boruta()}} tests each feature against
+shuffled shadow copies; \code{\link[=fs_stepwise]{fs_stepwise()}} runs AIC stepwise regression;
+and \code{\link[=fs_bayes]{fs_bayes()}} compares brms models with loo.}
 \item{Dimensionality reduction}{New components replace the original
-columns instead of a subset being kept. \code{\link{fs_pca}} (principal
-components with tidy output and an optional plot) and
-\code{\link{fs_svd}} (truncated singular value decomposition with an
-optional approximate solver).}
+columns. \code{\link[=fs_pca]{fs_pca()}} returns principal components with tidy output and
+an optional plot, and \code{\link[=fs_svd]{fs_svd()}} a truncated singular value
+decomposition with an optional approximate solver.}
 }
 }
+
+\section{Dependencies}{
+
+The hard dependencies are data.table, methods, parallel, stats, utils, and
+withr. Every modeling engine (caret, glmnet, kernlab, randomForest,
+Boruta, earth, MASS, brms, RSpectra, and the rest) is a suggested package,
+loaded only on the code path that needs it. If one is missing, the call
+stops with an error that names the missing packages and gives the
+\code{install.packages()} call to run.
+}
+
+\section{Reproducibility and parallelism}{
+
+featR never seeds the random number generator on its own. Functions that
+use randomness take \code{seed = NULL}; a supplied seed applies to that call
+only, and the caller's RNG state is restored on exit. Every function runs
+sequentially by default. Parallelism is opt-in through \code{n_cores} (or
+\code{parallel = TRUE}), worker requests are capped at the detected core count,
+and any cluster featR starts is stopped when the call returns. See
+\href{https://elkronos.github.io/featR/articles/reproducibility.html}{Reproducibility and parallelism}.
+}
+
 \seealso{
 Useful links:
 \itemize{

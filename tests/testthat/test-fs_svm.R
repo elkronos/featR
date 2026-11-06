@@ -726,6 +726,7 @@ test_that("fs_svm rejects a fractional seed before any work", {
 })
 
 test_that("encoded names keep literal backticks and backslashes (svm_encode)", {
+  skip_if_not_installed("caret")
   # REGRESSION: svm_encode() deleted every backtick from dummyVars()'s names,
   # but backtick() escapes a literal backtick as \`, so column "a`b" was
   # reported as "a\b" -- the name of a different column.

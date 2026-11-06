@@ -193,7 +193,6 @@ either setting. The target must be free of NA, NaN and Inf.
 }
 
 \examples{
-\donttest{
 if (requireNamespace("glmnet", quietly = TRUE)) {
   n <- 100
   df <- data.frame(
@@ -203,9 +202,8 @@ if (requireNamespace("glmnet", quietly = TRUE)) {
   )
   df$y <- 2 * df$x1 - 3 * df$x2 + rnorm(n)
   res <- fs_lasso(df, "y", seed = 123)
-  selected(res)
-  head(res$scores)
-}
+  print(selected(res))
+  print(head(res$scores))
 }
 }
 \seealso{

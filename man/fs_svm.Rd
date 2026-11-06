@@ -312,7 +312,6 @@ A seeded parallel run need not match a seeded sequential one. See
 }
 }
 \examples{
-\donttest{
 if (requireNamespace("caret", quietly = TRUE) &&
     requireNamespace("kernlab", quietly = TRUE) &&
     requireNamespace("e1071", quietly = TRUE)) {
@@ -325,7 +324,7 @@ if (requireNamespace("caret", quietly = TRUE) &&
     tune_grid = data.frame(C = 1),
     seed = 42
   )
-  res$details$performance
+  print(res$details$performance)
 
   # SVM-RFE keeps the two most useful measurements
   sel <- fs_svm(
@@ -340,9 +339,8 @@ if (requireNamespace("caret", quietly = TRUE) &&
     n_features = 2,
     seed = 42
   )
-  sel$selected
-  sel$scores
-}
+  print(sel$selected)
+  print(sel$scores)
 }
 }
 \seealso{

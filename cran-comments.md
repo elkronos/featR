@@ -2,38 +2,29 @@
 
 ## Submission notes
 
-This is a new submission of featR to CRAN.
+This is an update of featR from 0.1.0 to 0.2.0.
 
-featR collects filter, wrapper, and embedded feature-selection methods behind
-one calling convention -- `fs_<method>(data, target, ...)` -- and one return
-type, an `fs_result` object with `selected`, `scores`, `method`, `task`,
-`model`, and `details` components.
+It is a correctness release. Two statistical, methodological, and
+programmatic reviews of the whole package fixed silent wrong answers, hangs,
+crashes, and documentation that did not match behaviour. Each fix has a
+regression test; the test suite grew from 2013 to 2560 passing assertions.
+Some fixes change results or turn previously accepted, invalid input into an
+informative error. NEWS.md lists every change, with behaviour changes first.
 
 ## Test environments
 
-Checked via GitHub Actions (r-lib/actions), all passing:
-
-* macOS latest, R release
-* Windows latest, R release
-* Ubuntu latest, R devel
-* Ubuntu latest, R release
-* Ubuntu latest, R oldrel-1
-
-Also checked locally on macOS 26.5 (aarch64-apple-darwin23), R 4.6.1, with
-every suggested package installed and a working Stan toolchain, so the full
-test suite runs with no skipped tests (2013 passing assertions).
+* GitHub Actions (r-lib/actions): macOS latest (R release), Windows latest
+  (R release), Ubuntu latest (R devel, R release, R oldrel-1).
+* Ubuntu (R release) with every suggested package except Boruta, bigstatsr,
+  and PRROC installed: 2560 passing assertions, 7 skipped for those packages.
 
 ## R CMD check results
 
-0 errors | 0 warnings | 1 note
+0 errors | 0 warnings | 0 notes
 
-The note is the expected one for a first-time submission:
+## Reverse dependencies
 
-```
-checking CRAN incoming feasibility ... NOTE
-  Maintainer: 'Justin Chase <jchase.msu@gmail.com>'
-  New submission
-```
+There are no reverse dependencies on CRAN.
 
 ## Notes for reviewers
 

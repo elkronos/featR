@@ -399,7 +399,14 @@ test_that("parallel = TRUE never leaks its plan or replaces the caller's plan", 
   )
   real_plan(future::sequential, substitute = FALSE)
   set_calls <- 0L
-  real_plan(future::multicore, workers = 2L, substitute = FALSE)
+  # multicore silently falls back to sequential where forking is unsupported
+  # (Windows), and fs_chi() would then correctly install its own plan; use
+  # multisession there instead (its workers need featR installed, as under
+  # R CMD check).
+  user_strategy <- if (future::supportsMulticore()) future::multicore else
+    future::multisession
+  real_plan(user_strategy, workers = 2L, substitute = FALSE)
+  expect_false(inherits(real_plan(), "sequential"))
   before <- real_plan()
   res <- fs_chi(d, "y", parallel = TRUE, n_cores = 2L)
   expect_identical(set_calls, 0L)

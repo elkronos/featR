@@ -171,3 +171,7 @@ res$details$pairs
 # Both members of every flagged pair, with nothing dropped
 fs_correlation(d, threshold = 0.9, prune = FALSE)$selected
 }
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/filters.html}{Filter methods}
+guide, which runs this function on a worked example.
+}

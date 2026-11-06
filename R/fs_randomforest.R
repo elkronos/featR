@@ -417,6 +417,8 @@ rf_pool_importance_sd <- function(forests) {
 #'   print(res$details$metrics)
 #' }
 #' }
+#' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_randomforest <- function(data,
                             target,

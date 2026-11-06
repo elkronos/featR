@@ -607,6 +607,8 @@ ig_collisions <- function(tab, score_col) {
 #' df1 <- data.frame(A = rep(1:5, 20), target = rep(1:2, 50))
 #' df2 <- data.frame(B = rep(c("yes", "no"), 50), target = rep(letters[1:2], 50))
 #' fs_infogain(list(df1 = df1, df2 = df2), target = "target")
+#' @seealso The [Filter methods](https://elkronos.github.io/featR/articles/filters.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_infogain <- function(data,
                         target,

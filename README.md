@@ -7,9 +7,9 @@ and one return type: statistical filters, regularized and tree-based models,
 and wrappers, plus two dimensionality-reduction helpers. Every supervised
 selection function takes `(data, target, ...)` and returns an `fs_result`, so
 comparing the lasso with Boruta or recursive feature elimination is a one-word
-change. The modeling
-engines (glmnet, caret, Boruta, randomForest, brms, and others) are optional;
-each function checks for the one it needs and tells you what to install.
+change. The modeling engines (glmnet, caret, Boruta, randomForest, brms, and
+others) are optional; each function checks for the one it needs and tells you
+what to install.
 
 Documentation: <https://elkronos.github.io/featR/>
 

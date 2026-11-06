@@ -1048,9 +1048,11 @@ svm_performance <- function(predictions, actuals, task) {
 #'     only into the test rows.
 #'   \item Unused factor levels are dropped before encoding, so they produce
 #'     no all-zero dummy columns.
-#'   \item If a dummy column name (`<factor><level>`) matches another column
-#'     or the target, for example factor `g` with level `"1"` next to a
-#'     numeric `g1`, the call stops and asks for a rename.
+#'   \item Dummy columns are named by caret's `dummyVars()`: `color.green`
+#'     for a factor with three or more levels, `g1` for a two-level factor
+#'     `g`. If a dummy name matches another column or the target (factor `g`
+#'     with levels `"0"` and `"1"` next to a numeric `g1`), the call stops
+#'     and asks for a rename.
 #' }
 #'
 #' ## Packages, seeds and parallel runs
@@ -1196,6 +1198,8 @@ svm_performance <- function(predictions, actuals, task) {
 #'   sel$scores
 #' }
 #' }
+#' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_svm <- function(data,
                    target,

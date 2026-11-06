@@ -84,8 +84,8 @@ non-sequential future plan, `fs_chi()` uses that plan as is, ignores
 ### Seeded parallel runs
 
 For most functions, two seeded parallel runs agree with each other because
-everything random is decided in the main R process from the local seed: the train/test split, the
-resampling folds, and, for the caret-based `fs_svm()`,
+everything random is decided in the main R process from the local seed: the
+train/test split, the resampling folds, and, for the caret-based `fs_svm()`,
 `fs_recursivefeature()`, and `fs_mars()`, one seed per resample that caret
 draws and hands to whichever worker fits that resample. Seeding the workers'
 own RNG streams would not be enough on its own. foreach gives each resample

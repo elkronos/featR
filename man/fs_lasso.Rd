@@ -177,9 +177,9 @@ round-off: standardization would otherwise inflate that round-off into a
 full-scale predictor with a raw coefficient around 1e15, so such columns
 are held at 0 during the fit. A coefficient whose standardized value is at
 most \code{1e-10} times the largest standardized coefficient is floating-point
-residue and is set to exactly 0. Without that step the redundant dummy of the first factor,
-which is collinear with the intercept, kept a coefficient around 1e-13 and
-was selected.
+residue and is set to exactly 0. Without that step, the redundant dummy of
+the first factor, which is collinear with the intercept, would keep a
+coefficient around 1e-13 and be selected.
 }
 
 \section{Missing values}{
@@ -207,4 +207,8 @@ if (requireNamespace("glmnet", quietly = TRUE)) {
   head(res$scores)
 }
 }
+}
+\seealso{
+The \href{https://elkronos.github.io/featR/articles/regularization.html}{Regularization and embedded importance}
+guide, which runs this function on a worked example.
 }

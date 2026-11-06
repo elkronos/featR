@@ -138,6 +138,8 @@
 #'
 #' # Both members of every flagged pair, with nothing dropped
 #' fs_correlation(d, threshold = 0.9, prune = FALSE)$selected
+#' @seealso The [Filter methods](https://elkronos.github.io/featR/articles/filters.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_correlation <- function(data, threshold, method = "pearson", prune = TRUE,
                            na.rm = FALSE, sample_frac = 1,

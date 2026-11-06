@@ -310,6 +310,8 @@ step_term_scores <- function(model, coefs, term_labels) {
 #'   print(stats::formula(refit))
 #' }
 #' }
+#' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_stepwise <- function(data,
                         target,

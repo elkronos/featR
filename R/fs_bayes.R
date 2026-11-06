@@ -910,6 +910,8 @@ bayes_pick_model <- function(results, idx, comparison = NULL,
 #'   }
 #' }
 #' }
+#' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_bayes <- function(data,
                      target,

@@ -273,6 +273,8 @@ svd_truncate <- function(svd_result, n_singular_values) {
 #' recon <- full$left_singular_vectors %*%
 #'   (full$singular_values * t(full$right_singular_vectors))
 #' all.equal(recon, m)
+#' @seealso The [Dimensionality reduction](https://elkronos.github.io/featR/articles/dimensionality-reduction.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_svd <- function(x,
                    n_singular_values = NULL,

@@ -13,8 +13,6 @@ values, and which optional packages it needs.
 
 ## Start with the question
 
-Each method answers a different question, so pick the question first:
-
 | Question | Function |
 |---|---|
 | Which columns are constant, near-constant, or mostly missing? | `fs_unsupervised()` |
@@ -23,7 +21,7 @@ Each method answers a different question, so pick the question first:
 | Which categorical columns are associated with a categorical outcome? | `fs_chi()`, `fs_infogain()` |
 | How much does each column reduce uncertainty about the outcome, whatever its type? | `fs_infogain()` |
 | Which predictors survive in a sparse linear model? | `fs_lasso()`, `fs_elastic()` |
-| Which predictors carry *any* information, including redundant ones? | `fs_boruta()` |
+| Which predictors carry *any* information about the outcome? | `fs_boruta()`; set `cutoff_cor = NULL` to keep redundant ones too |
 | How does each predictor rank in a random forest, and how good is that forest on held-out rows? | `fs_randomforest()` |
 | Which predictors does a model with automatic non-linearities and interactions use? | `fs_mars()` |
 | What is the smallest subset a particular model needs? | `fs_recursivefeature()`, `fs_svm()` |
@@ -43,12 +41,9 @@ A **filter** scores each feature without fitting a predictive model. The
 filters are `fs_unsupervised()`, `fs_supervised()`, `fs_chi()`,
 `fs_infogain()`, and `fs_correlation()`. They are fast and scale to thousands
 of columns. The cost is that they look at one feature at a time (or, for
-`fs_correlation()`, one pair at a time):
-
-* Two copies of the same signal both score highly.
-* A feature that matters only in combination with another scores low.
-
-Use filters for a first cut, then refine with something else.
+`fs_correlation()`, one pair at a time), so two copies of the same signal both
+score highly, and a feature that matters only in combination with another
+scores low. Use filters for a first cut, then refine with something else.
 
 An **embedded method** fits one model and reads the selection off its
 structure: non-zero coefficients, importance, or retained terms. The embedded
@@ -76,8 +71,8 @@ For a new tabular problem:
 4. On the training rows, run the selector that matches your final model:
    `fs_lasso()` for a linear model, `fs_recursivefeature()` (random forests by
    default) for a forest, `fs_svm(feature_select = TRUE)` for an SVM. Use
-   `fs_boruta()` instead when you want every informative feature rather than
-   a compact set.
+   `fs_boruta(cutoff_cor = NULL)` instead when you want every informative
+   feature rather than a compact set.
 5. Evaluate the final model on the test rows.
 
 The [validation and leakage](validation-and-leakage.html) article runs this
@@ -86,9 +81,9 @@ data.
 
 ## Reference: what each function accepts
 
-Every selection function takes `data` first. The functions that use an
-outcome take `target`, the name of the outcome column as a string, second.
-Four functions break the pattern:
+The [calling convention](featR.html#the-calling-convention) is `data` first,
+then `target` as a string for the functions that use an outcome. Four
+functions break the pattern:
 
 * `fs_svm()` requires `task = "classification"` or `"regression"` and will not
   guess it.
@@ -132,8 +127,10 @@ doing any work and prints the `install.packages()` call you need. A few are
 optional extras with a fallback instead of an error: without bigstatsr,
 `fs_pca()` uses `prcomp()` on large data; without pROC, `fs_randomforest()`
 reports no AUC and `fs_mars()` tunes on accuracy instead of ROC and skips
-the test ROC AUC; without PRROC, `fs_mars()` skips the PR AUC; without pbapply, `fs_bayes()` shows no
-progress bar.
+the test ROC AUC; without PRROC, `fs_mars()` skips the PR AUC; without
+pbapply, `fs_bayes()` shows no progress bar. [Optional
+dependencies](reproducibility.html#optional-dependencies) has one command
+that installs every suggested package.
 
 | Function | Missing values | Suggests packages |
 |---|---|---|

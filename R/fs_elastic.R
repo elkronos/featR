@@ -677,6 +677,8 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #'   res$details$best_alpha
 #' }
 #' }
+#' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_elastic <- function(data,
                        target,

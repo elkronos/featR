@@ -361,6 +361,8 @@ boruta_prune_correlated <- function(predictors,
 #'   res$scores
 #' }
 #' }
+#' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
+#'   guide, which runs this function on a worked example.
 #' @export
 fs_boruta <- function(data,
                       target,

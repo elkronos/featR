@@ -25,7 +25,8 @@ The five wrappers answer different questions:
 - `fs_recursivefeature()` and `fs_svm()` rank the predictors with one model
   and keep the subset size whose cross-validated performance is best.
 - `fs_boruta()` looks for every predictor that carries any information about
-  the outcome, redundant ones included.
+  the outcome, then by default keeps only the most important member of each
+  correlated group.
 - `fs_stepwise()` keeps the terms that lower AIC in a linear regression.
 - `fs_bayes()` compares Bayesian models on every candidate subset by
   approximate leave-one-out cross-validation.
@@ -33,7 +34,7 @@ The five wrappers answer different questions:
 [Choosing a method](choosing-a-method.html) compares them with the filter and
 embedded methods.
 
-## `fs_recursivefeature()`: recursive feature elimination
+## `fs_recursivefeature()`
 
 Recursive feature elimination (RFE) fits a model on all predictors, ranks
 them by the model's importance, and refits on the top-ranked subset of each
@@ -84,7 +85,7 @@ not `1 - SSE/SST`, so it is never negative and ignores bias. It cannot be
 compared with an `R2` defined as `1 - SSE/SST`, such as the one
 `fs_randomforest()` reports.
 
-## `fs_svm()`: SVM-RFE
+## `fs_svm()`
 
 [`fs_svm()`](../reference/fs_svm.html) trains a support vector machine
 through caret and kernlab, and with `feature_select = TRUE` it selects
@@ -139,17 +140,19 @@ is selected or dropped on its own. On wide data the elimination is slow,
 because it refits the SVM at every step; screen first with a filter such as
 [`fs_supervised()`](../reference/fs_supervised.html).
 
-## `fs_boruta()`: all-relevant selection
+## `fs_boruta()`
 
 [`fs_boruta()`](../reference/fs_boruta.html) asks which features carry any
 information about the outcome, rather than which small subset predicts best.
 Boruta (Kursa and Rudnicki, 2010) adds a shuffled "shadow" copy of every
 feature, grows random forests, and confirms each feature whose importance
-beats the best shadow significantly more often than chance. Features that are
-redundant but informative are all confirmed, which helps when you want to
-understand a data set and hurts when you want a compact model. A factor target is
-treated as classification and a numeric one as regression. Missing values
-are an error.
+beats the best shadow significantly more often than chance. Boruta itself
+confirms every informative feature, redundant ones included, which helps when
+you want to understand a data set and hurts when you want a compact model.
+featR adds a pruning step on top: with the default `cutoff_cor = 0.7`, it
+keeps only the most important member of each group of confirmed features
+correlated above 0.7. A factor target is treated as classification and a
+numeric one as regression. Missing values are an error.
 
 The example below has one real predictor (`signal`), a noisy copy of it
 (`echo`), and two predictors generated independently of `y`.
@@ -173,9 +176,8 @@ selected(fs_boruta(bd, "y", maxRuns = 50, cutoff_cor = 0.7, seed = 1))
 ```
 
 The first call turns off featR's correlation pruning, so `signal` and `echo`
-can both be confirmed. The second call uses the default `cutoff_cor = 0.7`,
-which keeps only the more important member of each group of confirmed
-features correlated above 0.7.
+can both be confirmed. The second call uses the default `cutoff_cor = 0.7`
+and keeps only the more important of the two.
 
 `noise2` is confirmed too, although it has nothing to do with `y`. Two things
 combine here. In this particular sample `noise2` happens to carry some
@@ -185,15 +187,16 @@ and confirms it in two of three seeds after 250. Then
 undecided with `Boruta::TentativeRoughFix()`. That function confirms a
 feature whenever its median importance beats the median of the best shadow,
 a weaker test than the one used during the run. In a simulation of 20 data
-sets like this one (100 runs each), Boruta alone confirmed 5% of the
-pure-noise features, and 8.3% after the rough fix.
+sets with one real and three pure-noise predictors (150 rows, 100 runs each),
+Boruta alone confirmed 5% of the noise features, and 8.3% after the rough
+fix.
 
 So Boruta limits false discoveries but does not eliminate them. When they are
 costly, set `resolve_tentative = FALSE`, inspect `details$decisions`, raise
 `maxRuns` (default 250), and validate the confirmed set on held-out data.
 Results vary from run to run unless you pass `seed`.
 
-## `fs_stepwise()`: AIC stepwise regression
+## `fs_stepwise()`
 
 Stepwise regression adds or removes one term at a time, keeping each move
 that lowers AIC. [`fs_stepwise()`](../reference/fs_stepwise.html) runs
@@ -223,7 +226,7 @@ compare models fitted on the same rows. To refit the returned model with
 `update()`, pass the data explicitly, for example
 `update(st$model, . ~ . - am, data = mtcars)`.
 
-## `fs_bayes()`: Bayesian model comparison
+## `fs_bayes()`
 
 [`fs_bayes()`](../reference/fs_bayes.html) fits a brms model for every
 candidate subset of `predictors` and compares them by approximate

@@ -494,7 +494,6 @@ pca_plot <- function(pca_result, label_col) {
 #' res$var_explained
 #' head(res$pca_df)
 #'
-#' \donttest{
 #' if (requireNamespace("ggplot2", quietly = TRUE)) {
 #'   # plot = FALSE (the default) draws nothing, but $plot is built anyway
 #'   res <- fs_pca(iris, label_col = "Species", verbose = TRUE)
@@ -502,7 +501,6 @@ pca_plot <- function(pca_result, label_col) {
 #'
 #'   # plot = TRUE draws it as well
 #'   res <- fs_pca(iris, label_col = "Species", plot = TRUE)
-#' }
 #' }
 #' @seealso The [Dimensionality reduction](https://elkronos.github.io/featR/articles/dimensionality-reduction.html)
 #'   guide, which runs this function on a worked example.

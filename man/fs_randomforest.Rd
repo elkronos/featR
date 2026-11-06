@@ -289,7 +289,6 @@ relative to the target's magnitude.
 }
 }
 \examples{
-\donttest{
 if (requireNamespace("randomForest", quietly = TRUE) &&
     requireNamespace("caret", quietly = TRUE)) {
   res <- fs_randomforest(
@@ -303,7 +302,6 @@ if (requireNamespace("randomForest", quietly = TRUE) &&
   print(res$selected)
   print(res$scores)
   print(res$details$metrics)
-}
 }
 }
 \seealso{

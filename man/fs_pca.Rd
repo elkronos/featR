@@ -133,7 +133,6 @@ res <- fs_pca(mtcars, num_pc = 2, label_col = "cyl")
 res$var_explained
 head(res$pca_df)
 
-\donttest{
 if (requireNamespace("ggplot2", quietly = TRUE)) {
   # plot = FALSE (the default) draws nothing, but $plot is built anyway
   res <- fs_pca(iris, label_col = "Species", verbose = TRUE)
@@ -141,7 +140,6 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 
   # plot = TRUE draws it as well
   res <- fs_pca(iris, label_col = "Species", plot = TRUE)
-}
 }
 }
 \seealso{

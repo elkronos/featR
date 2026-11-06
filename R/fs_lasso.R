@@ -531,7 +531,6 @@ lasso_importance <- function(coefs) {
 #'     and `n_features` (number of design-matrix columns considered).}
 #'   \item{call}{The matched call.}
 #' @examples
-#' \donttest{
 #' if (requireNamespace("glmnet", quietly = TRUE)) {
 #'   n <- 100
 #'   df <- data.frame(
@@ -541,9 +540,8 @@ lasso_importance <- function(coefs) {
 #'   )
 #'   df$y <- 2 * df$x1 - 3 * df$x2 + rnorm(n)
 #'   res <- fs_lasso(df, "y", seed = 123)
-#'   selected(res)
-#'   head(res$scores)
-#' }
+#'   print(selected(res))
+#'   print(head(res$scores))
 #' }
 #' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
 #'   guide, which runs this function on a worked example.

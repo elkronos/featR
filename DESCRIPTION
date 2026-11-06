@@ -7,12 +7,12 @@ Authors@R:
 Description: Filter, wrapper, and embedded feature-selection methods behind a
     consistent set of functions that share one calling convention and one
     return type: univariate threshold filters, correlation and chi-squared
-    filters, information gain, LASSO and elastic net, Bayesian model
-    comparison, Boruta, recursive feature
-    elimination, random forest importance, multivariate adaptive regression
-    splines, support vector machine recursive feature elimination, stepwise
-    selection, and principal component / singular value decomposition
-    helpers. The implemented methods follow
+    filters, information gain, the least absolute shrinkage and selection
+    operator (LASSO) and elastic net, Bayesian model comparison, Boruta,
+    recursive feature elimination, random forest importance, multivariate
+    adaptive regression splines, support vector machine recursive feature
+    elimination, stepwise selection, and principal component / singular
+    value decomposition helpers. The implemented methods follow
     Tibshirani (1996) <doi:10.1111/j.2517-6161.1996.tb02080.x>,
     Zou and Hastie (2005) <doi:10.1111/j.1467-9868.2005.00503.x>,
     Friedman (1991) <doi:10.1214/aos/1176347963>,
@@ -35,7 +35,7 @@ Imports:
     parallel,
     stats,
     utils,
-    withr
+    withr (>= 2.4.0)
 Suggests:
     bigstatsr,
     Boruta,

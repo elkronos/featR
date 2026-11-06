@@ -660,7 +660,6 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #'     `use_pca = TRUE`).}
 #'   \item{call}{The matched call.}
 #' @examples
-#' \donttest{
 #' if (requireNamespace("caret", quietly = TRUE) &&
 #'     requireNamespace("glmnet", quietly = TRUE) &&
 #'     requireNamespace("Matrix", quietly = TRUE)) {
@@ -672,10 +671,9 @@ elastic_check_categorical_levels <- function(data, predictors) {
 #'   )
 #'   df$y <- 2 * df$x1 - df$x2 + 0.1 * cos(seq_len(60) * 3)
 #'   res <- fs_elastic(df, "y", alpha_seq = c(0.5, 1), seed = 1)
-#'   selected(res)
-#'   res$scores
-#'   res$details$best_alpha
-#' }
+#'   print(selected(res))
+#'   print(res$scores)
+#'   print(res$details$best_alpha)
 #' }
 #' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
 #'   guide, which runs this function on a worked example.

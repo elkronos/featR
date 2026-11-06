@@ -733,7 +733,6 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #' }
 #'
 #' @examples
-#' \donttest{
 #' if (requireNamespace("caret", quietly = TRUE) &&
 #'     requireNamespace("earth", quietly = TRUE)) {
 #'   # x1 and x2 drive y; x3 is noise
@@ -745,10 +744,9 @@ mars_evaluate <- function(model, test, target, verbose = FALSE) {
 #'   df$y <- 2 * df$x1 - df$x2 + rnorm(150, sd = 0.5)
 #'   res <- fs_mars(df, "y", degree = 1, nprune = c(5, 10),
 #'                  number = 3, repeats = 1, seed = 42)
-#'   res$selected
-#'   res$scores
-#'   res$details$metrics
-#' }
+#'   print(res$selected)
+#'   print(res$scores)
+#'   print(res$details$metrics)
 #' }
 #' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
 #'   guide, which runs this function on a worked example.

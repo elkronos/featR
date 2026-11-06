@@ -823,7 +823,6 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #' }
 #'
 #' @examples
-#' \donttest{
 #' if (requireNamespace("caret", quietly = TRUE) &&
 #'     requireNamespace("randomForest", quietly = TRUE) &&
 #'     requireNamespace("e1071", quietly = TRUE)) {
@@ -838,7 +837,6 @@ rfe_train_final <- function(data_df, target, optimal_vars,
 #'   print(res$details$optimal_size)
 #'   # the only held-out estimate on the object
 #'   print(res$details$test_metrics)
-#' }
 #' }
 #' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
 #'   guide, which runs this function on a worked example.

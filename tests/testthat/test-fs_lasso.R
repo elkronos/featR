@@ -410,6 +410,7 @@ test_that("unbacktick_names restores escaped control characters", {
 })
 
 test_that("fs_lasso handles a nonzero constant or tiny-unit predictor", {
+  skip_if_not_installed("glmnet")
   # REGRESSION: the design matrix was handed to glmnet as a sparse matrix,
   # whose standardization turns a constant column (or one whose squares
   # underflow) into a NaN lambda path; cv.glmnet() then failed with

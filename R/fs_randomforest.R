@@ -401,7 +401,6 @@ rf_pool_importance_sd <- function(forests) {
 #' }
 #'
 #' @examples
-#' \donttest{
 #' if (requireNamespace("randomForest", quietly = TRUE) &&
 #'     requireNamespace("caret", quietly = TRUE)) {
 #'   res <- fs_randomforest(
@@ -415,7 +414,6 @@ rf_pool_importance_sd <- function(forests) {
 #'   print(res$selected)
 #'   print(res$scores)
 #'   print(res$details$metrics)
-#' }
 #' }
 #' @seealso The [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html)
 #'   guide, which runs this function on a worked example.

@@ -1166,7 +1166,6 @@ svm_performance <- function(predictions, actuals, task) {
 #'   \item{call}{The matched call.}
 #' }
 #' @examples
-#' \donttest{
 #' if (requireNamespace("caret", quietly = TRUE) &&
 #'     requireNamespace("kernlab", quietly = TRUE) &&
 #'     requireNamespace("e1071", quietly = TRUE)) {
@@ -1179,7 +1178,7 @@ svm_performance <- function(predictions, actuals, task) {
 #'     tune_grid = data.frame(C = 1),
 #'     seed = 42
 #'   )
-#'   res$details$performance
+#'   print(res$details$performance)
 #'
 #'   # SVM-RFE keeps the two most useful measurements
 #'   sel <- fs_svm(
@@ -1194,9 +1193,8 @@ svm_performance <- function(predictions, actuals, task) {
 #'     n_features = 2,
 #'     seed = 42
 #'   )
-#'   sel$selected
-#'   sel$scores
-#' }
+#'   print(sel$selected)
+#'   print(sel$scores)
 #' }
 #' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
 #'   guide, which runs this function on a worked example.

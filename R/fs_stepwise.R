@@ -298,7 +298,6 @@ step_term_scores <- function(model, coefs, term_labels) {
 #' }
 #'
 #' @examples
-#' \donttest{
 #' if (requireNamespace("MASS", quietly = TRUE)) {
 #'   res <- fs_stepwise(mtcars, target = "mpg", direction = "both")
 #'   print(res$selected)
@@ -308,7 +307,6 @@ step_term_scores <- function(model, coefs, term_labels) {
 #'   # the returned model is an ordinary lm, but update() needs 'data'
 #'   refit <- stats::update(res$model, . ~ . - wt, data = mtcars)
 #'   print(stats::formula(refit))
-#' }
 #' }
 #' @seealso The [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html)
 #'   guide, which runs this function on a worked example.

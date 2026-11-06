@@ -125,7 +125,6 @@ written for the older interface still runs, without the effect it asked
 for. Check your argument names against the list below.
 }
 \examples{
-\donttest{
 if (requireNamespace("MASS", quietly = TRUE)) {
   res <- fs_stepwise(mtcars, target = "mpg", direction = "both")
   print(res$selected)
@@ -135,7 +134,6 @@ if (requireNamespace("MASS", quietly = TRUE)) {
   # the returned model is an ordinary lm, but update() needs 'data'
   refit <- stats::update(res$model, . ~ . - wt, data = mtcars)
   print(stats::formula(refit))
-}
 }
 }
 \seealso{

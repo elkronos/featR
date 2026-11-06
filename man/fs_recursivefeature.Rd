@@ -261,7 +261,6 @@ sequential run keeps caret's default \code{seeds = NA}. See
 }
 }
 \examples{
-\donttest{
 if (requireNamespace("caret", quietly = TRUE) &&
     requireNamespace("randomForest", quietly = TRUE) &&
     requireNamespace("e1071", quietly = TRUE)) {
@@ -276,7 +275,6 @@ if (requireNamespace("caret", quietly = TRUE) &&
   print(res$details$optimal_size)
   # the only held-out estimate on the object
   print(res$details$test_metrics)
-}
 }
 }
 \seealso{

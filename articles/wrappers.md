@@ -1,19 +1,46 @@
 # Wrapper methods
 
-Wrappers refit a model over many candidate subsets and keep the subset
-that model likes best. They are the most expensive methods in featR, and
-their answer is specific to the model family they wrap. The search
-itself can overfit too, so always validate the chosen set on rows the
-search never saw.
+A **wrapper** method fits a model to many candidate subsets of the
+predictors and keeps the subset that model scores best. Because it
+refits the model for each candidate, a wrapper costs far more than a
+filter, and its answer only holds for the model family it wraps: the
+subset a random forest prefers can differ from the one a linear model
+prefers. The search also uses the data to pick a winner, so the winner’s
+own score is optimistic. Each section below names the number that is
+computed on rows the search never saw; [Validation and
+leakage](https://elkronos.github.io/featR/articles/validation-and-leakage.md)
+has the full table of held-out and optimistic quantities.
 
-## `fs_recursivefeature()`: recursive feature elimination
+The five wrappers answer different questions:
 
+- [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
+  and [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
+  rank the predictors with one model and keep the subset size whose
+  cross-validated performance is best.
+- [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
+  looks for every predictor that carries any information about the
+  outcome, then by default keeps only the most important member of each
+  correlated group.
+- [`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md)
+  keeps the terms that lower AIC in a linear regression.
+- [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)
+  compares Bayesian models on every candidate subset by approximate
+  leave-one-out cross-validation.
+
+[Choosing a
+method](https://elkronos.github.io/featR/articles/choosing-a-method.md)
+compares them with the filter and embedded methods.
+
+## `fs_recursivefeature()`
+
+Recursive feature elimination (RFE) fits a model on all predictors,
+ranks them by the model’s importance, and refits on the top-ranked
+subset of each candidate size.
 [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
 wraps [`caret::rfe()`](https://rdrr.io/pkg/caret/man/rfe.html). It first
-splits the data. On the training rows it fits a model, ranks the
-predictors by its importance, and refits on the top-ranked subset of
-each candidate size. Resampling chooses the subset size. It then
-evaluates the result on the held-out rows.
+makes a stratified train/test split (`train_ratio = 0.8` by default),
+runs the elimination on the training rows, lets cross-validation choose
+the subset size, and then scores the result on the test rows.
 
 ``` r
 
@@ -38,28 +65,51 @@ rfe$details$resampling_results   # inside the training rows
 #> 4         4 0.9500000 0.925  0.0186339 0.02795085
 ```
 
-By default the elimination uses random forests
-([`caret::rfFuncs`](https://rdrr.io/pkg/caret/man/caretFuncs.html)).
-Pass another caret function set to match your model, for example
-`rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)`
-for linear regression. `handle_categorical = TRUE` one-hot encodes
-factors with an encoder fitted on the training rows only.
-`return_final_model = TRUE` also trains a caret model (`model_method`)
-on the selected features.
+On `iris` the search keeps two predictors, `Petal.Width` and
+`Petal.Length`, with a cross-validated accuracy of 0.967 at size 2,
+against 0.933 for one predictor and 0.950 for three or four. The
+held-out accuracy on the 30 test rows is also 0.967.
 
 Only `details$test_metrics` is a held-out estimate. `resampling_results`
-is computed inside the training rows over the candidate sizes, and the
-size with the best score is chosen from it, so the winning size’s score
-is optimistic.
+is computed inside the training rows, and the size is chosen as the best
+row of that table, so the winning row’s score is optimistic. The same
+applies to `model$results` when you set `return_final_model = TRUE`:
+that tuning resampling runs on features that were already selected on
+the same rows.
 
-## `fs_svm()`: SVM-RFE
+By default the elimination fits random forests
+([`caret::rfFuncs`](https://rdrr.io/pkg/caret/man/caretFuncs.html)). To
+match the model you intend to use, pass another caret function set, for
+example
+`rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)`
+for linear regression. A factor, character, or logical target is treated
+as classification and anything else as regression. Predictors with
+missing values are an error, so impute or drop them first. Factor
+predictors are passed to the model as they are unless you set
+`handle_categorical = TRUE`, which one-hot encodes them with an encoder
+fitted on the training rows only. `return_final_model = TRUE` also
+trains a caret model (`model_method`, default `"rf"`) on the selected
+features.
+
+The regression metrics are caret’s `RMSE`, `Rsquared`, and `MAE`.
+caret’s `Rsquared` is the squared correlation between predictions and
+observations, not `1 - SSE/SST`, so it is never negative and ignores
+bias. It cannot be compared with an `R2` defined as `1 - SSE/SST`, such
+as the one
+[`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)
+reports.
+
+## `fs_svm()`
 
 [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
-trains a support vector machine through caret and kernlab. It can run
-**SVM-RFE** (Guyon et al., 2002) first. SVM-RFE fits a linear SVM on
-centered and scaled training data, ranks features by their squared
-weight `w^2`, drops the weakest, and refits, until one feature is left.
-The order in which features were eliminated gives the ranking.
+trains a support vector machine through caret and kernlab, and with
+`feature_select = TRUE` it selects features first. The default selector
+is **SVM-RFE** (Guyon et al., 2002): fit a linear SVM on the centered
+and scaled training data, rank the features by their squared weight
+`w^2`, drop the weakest, and refit, until one feature is left. The order
+of elimination is the ranking, so the feature removed last ranks first.
+Use it when you want the selector and the final model to come from the
+same family.
 
 ``` r
 
@@ -82,31 +132,55 @@ sv$details$performance$overall[c("Accuracy", "Kappa")]
 #> 0.9333333 0.9000000
 ```
 
-Without `n_features`, the number of features to keep is chosen by
-cross-validation over a short ladder of sizes (1, 2, 4, 8, …, p, at most
-six of them). You must state `task` explicitly. SVM-RFE needs
-`kernel = "linear"`, because the ranking uses the primal weight vector,
-which exists only for a linear kernel. For other kernels, use
+Here SVM-RFE ranks `Petal.Width` first and keeps it alone. The tuned SVM
+on that one feature classifies 0.933 of the test rows correctly.
+
+You must state `task` explicitly;
+[`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md) does
+not guess it from the target. SVM-RFE needs `kernel = "linear"`, because
+the ranking uses the primal weight vector, which exists only for a
+linear kernel. For a radial or polynomial kernel, use
 `select_method = "rf_rfe"`, which screens with random forests instead.
-Selection always runs on the training split, and `details$performance`
-comes from the test split; it is the honest estimate. Two other numbers
-are not. Each entry of `details$selection$size_scores` is a nested
-cross-validation estimate for its own size, but the chosen size is the
-best of up to six noisy estimates, so its score is optimistic. And with
-`feature_select = TRUE` the final model’s tuning cross-validation
-(`sv$model$results`, what printing `sv$model` shows) reuses the training
-rows the selector already used, so on pure noise it can approach perfect
-accuracy. Selection works on the **dummy-encoded** predictors, so factor
-levels are selected individually.
+Without `n_features`, cross-validation chooses how many features to keep
+from a short ladder of sizes: the powers of two up to the number of
+features plus the full size, at most six sizes, always including 1.
+Missing values in the target or predictors are an error.
 
-## `fs_boruta()`: all-relevant selection
+Selection runs on the training split (`train_ratio = 0.7` by default),
+and `details$performance` comes from the untouched test split, so it is
+the honest estimate. Two other numbers are optimistic. Each entry of
+`details$selection$size_scores` is a nested cross-validation estimate
+for its own size, but the chosen size is the best of up to six noisy
+estimates. And with `feature_select = TRUE`, the final model’s tuning
+cross-validation (`sv$model$results`, which is what printing `sv$model`
+shows) reuses the training rows the selector already used, so on pure
+noise it can approach perfect accuracy. For regression, `Rsquared` in
+`details$performance` is caret’s squared correlation, as for
+[`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md).
 
-Boruta asks a different question: which features carry *any* information
-about the outcome? It adds “shadow” copies of every feature with their
-values shuffled, grows random forests, and confirms each feature that
-beats the best shadow significantly more often than chance. Redundant
-but informative features are **all** confirmed. That is useful for
-understanding a data set, and less useful when you want a compact model.
+Selection works on the dummy-encoded predictors, so each level of a
+factor is selected or dropped on its own. On wide data the elimination
+is slow, because it refits the SVM at every step; screen first with a
+filter such as
+[`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md).
+
+## `fs_boruta()`
+
+[`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
+asks which features carry any information about the outcome, rather than
+which small subset predicts best. Boruta (Kursa and Rudnicki, 2010) adds
+a shuffled “shadow” copy of every feature, grows random forests, and
+confirms each feature whose importance beats the best shadow
+significantly more often than chance. Boruta itself confirms every
+informative feature, redundant ones included, which helps when you want
+to understand a data set and hurts when you want a compact model. featR
+adds a pruning step on top: with the default `cutoff_cor = 0.7`, it
+keeps only the most important member of each group of confirmed features
+correlated above 0.7. A factor target is treated as classification and a
+numeric one as regression. Missing values are an error.
+
+The example below has one real predictor (`signal`), a noisy copy of it
+(`echo`), and two predictors generated independently of `y`.
 
 ``` r
 
@@ -132,29 +206,38 @@ selected(fs_boruta(bd, "y", maxRuns = 50, cutoff_cor = 0.7, seed = 1))
 #> [1] "signal" "noise2"
 ```
 
-Look at `noise2`. It was generated independently of `y`, yet it is
-confirmed. Two things combine here. In this particular sample `noise2`
-happens to carry some random-forest importance: Boruta on its own leaves
-it Tentative after 50 runs and confirms it in two of three seeds after
-250. Then `resolve_tentative = TRUE` (the default) settles every feature
-still undecided with
+The first call turns off featR’s correlation pruning, so `signal` and
+`echo` can both be confirmed. The second call uses the default
+`cutoff_cor = 0.7` and keeps only the more important of the two.
+
+`noise2` is confirmed too, although it has nothing to do with `y`. Two
+things combine here. In this particular sample `noise2` happens to carry
+some random-forest importance: Boruta on its own leaves it Tentative
+after 50 runs and confirms it in two of three seeds after 250. Then
+`resolve_tentative = TRUE` (the default) settles every feature still
+undecided with
 [`Boruta::TentativeRoughFix()`](https://rdrr.io/pkg/Boruta/man/TentativeRoughFix.html).
-That compares median importance with the median of the best shadow,
-which is a weaker test than the one used during the run. In a simulation
-of 20 data sets like this one, Boruta alone confirmed 5% of the
-pure-noise features, and 8.3% after the rough fix.
+That function confirms a feature whenever its median importance beats
+the median of the best shadow, a weaker test than the one used during
+the run. In a simulation of 20 data sets with one real and three
+pure-noise predictors (150 rows, 100 runs each), Boruta alone confirmed
+5% of the noise features, and 8.3% after the rough fix.
 
-So Boruta limits false discoveries; it does not eliminate them. When
+So Boruta limits false discoveries but does not eliminate them. When
 they are costly, set `resolve_tentative = FALSE`, inspect
-`details$decisions`, raise `maxRuns`, and validate the confirmed set on
-held-out data.
+`details$decisions`, raise `maxRuns` (default 250), and validate the
+confirmed set on held-out data. Results vary from run to run unless you
+pass `seed`.
 
-## `fs_stepwise()`: AIC stepwise regression
+## `fs_stepwise()`
 
+Stepwise regression adds or removes one term at a time, keeping each
+move that lowers AIC.
 [`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md)
 runs [`MASS::stepAIC()`](https://rdrr.io/pkg/MASS/man/stepAIC.html) on a
-linear regression. It is cheap, deterministic, and returns an ordinary
-`lm`.
+linear regression of the target on every other column. It is the
+cheapest wrapper in featR, it is deterministic (there is no `seed`
+argument), and it returns an ordinary `lm`.
 
 ``` r
 
@@ -166,22 +249,39 @@ st$scores
 #> 5.506882 4.246676 2.080819
 ```
 
-Pass `k = log(nrow(data))` to use BIC, which usually selects fewer
-terms. Stepwise search is greedy and unstable: small changes to the data
-can change the answer. The *t* statistics in `scores` and the p-values
-in `details$coefficients` are computed after selection on the same data,
-so they are biased toward significance. **Do not use them for
-inference.**
+On `mtcars` the search keeps `wt`, `qsec`, and `am`. The scores are
+absolute *t* statistics: 5.51, 4.25, and 2.08.
 
-## `fs_bayes()`: Bayesian model comparison
+Those *t* statistics, and the p-values in `details$coefficients`, are
+computed on the same data that drove the search, so they are biased
+toward significance. Use them to order the retained terms, not for
+inference. The search is also greedy, so it can miss the AIC-best
+subset, and unstable, so small changes to the data can change the
+answer. Pass `k = log(nrow(data))` to use BIC, which usually keeps fewer
+terms.
+
+The target must be numeric. Rows with a missing value in any column are
+dropped with a warning before the search, because `stepAIC()` can only
+compare models fitted on the same rows. To refit the returned model with
+[`update()`](https://rdrr.io/r/stats/update.html), pass the data
+explicitly, for example `update(st$model, . ~ . - am, data = mtcars)`.
+
+## `fs_bayes()`
 
 [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)
-fits a brms model for every candidate predictor subset and compares them
-by approximate leave-one-out cross-validation, using
+fits a brms model for every candidate subset of `predictors` and
+compares them by approximate leave-one-out cross-validation (PSIS-LOO;
+Vehtari et al., 2017) with
 [`loo::loo_compare()`](https://mc-stan.org/loo/reference/loo_compare.html).
-By default it applies a one-standard-error rule: the chosen subset is
-the smallest one whose expected log predictive density is within one
-standard error of the best.
+The default `rule = "1se"` picks the smallest subset whose expected log
+predictive density (elpd) is within one standard error of the best;
+`rule = "best"` takes the maximum. The model family comes from
+`brm_family`, for example
+[`stats::gaussian()`](https://rdrr.io/r/stats/family.html) (the default)
+or
+[`brms::bernoulli()`](https://paulbuerkner.com/brms/reference/brmsfamily.html).
+Rows with a missing value in the target, any candidate predictor, or
+`date_col` are dropped before fitting.
 
 ``` r
 
@@ -195,18 +295,21 @@ selected(res)
 res$details$loo_comparison
 ```
 
-This is the most expensive method in featR. With `p` candidates it fits
-`2^p - 1` models, and each one compiles and samples a Stan program.
-Bound the search with `max_comb_size` or `sample_combinations`. It needs
-brms, loo, and a working C++ toolchain, which is why this example is not
-run here. `details$mae` and `details$rmse` are in-sample, and the
-posterior of the returned model is post-selection, so neither is an
-honest estimate on its own. `details$best_elpd` is approximately
+This example is not run here, because each candidate model compiles and
+samples its own Stan program, which needs brms, loo, and a working C++
+toolchain. It is the most expensive method in featR: with `p` candidates
+it fits `2^p - 1` models, seven for the three predictors above. Bound
+the search with `max_comb_size` or `sample_combinations`.
+
+None of the numbers it returns is a held-out estimate. `details$mae` and
+`details$rmse` are in-sample. `details$best_elpd` would be roughly
 unbiased for a single fixed model, but it belongs to the model that won
-a search over up to `2^p - 1` candidates, so it is optimistic too
+a search over up to `2^p - 1` candidates, so it is optimistic
 (selection-induced bias; Piironen and Vehtari, 2017), and so are the
-differences in `details$loo_comparison`. Judge the chosen subset on data
-the search did not use.
+differences in `details$loo_comparison`. Posterior intervals from the
+returned model are post-selection. To judge the chosen subset, use data
+the search did not see, or repeat the whole search inside an outer
+cross-validation.
 
 ## References
 

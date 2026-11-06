@@ -5,12 +5,12 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<title>Reproducibility, randomness, and parallelism • featR</title>
+<title>Reproducibility and parallelism • featR</title>
 <script src="../deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
 <script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
-<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Reproducibility, randomness, and parallelism">
+<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Reproducibility and parallelism">
 </head>
 <body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -32,23 +32,22 @@
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -71,7 +70,7 @@
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
 
-      <h1>Reproducibility, randomness, and parallelism</h1>
+      <h1>Reproducibility and parallelism</h1>
             
       
       <small class="dont-index">Source: <a href="https://github.com/elkronos/featR/blob/main/vignettes/articles/reproducibility.Rmd" class="external-link"><code>vignettes/articles/reproducibility.Rmd</code></a></small>
@@ -80,18 +79,18 @@
 
     
     
+<p>featR leaves your random number generator alone unless you pass
+<code>seed</code>, runs on one core unless you ask for more, and loads
+its modeling engines only when a function needs them.</p>
 <div class="section level2">
-<h2 id="featr-does-not-touch-your-random-stream">featR does not touch your random stream<a class="anchor" aria-label="anchor" href="#featr-does-not-touch-your-random-stream"></a>
+<h2 id="seeds">Seeds<a class="anchor" aria-label="anchor" href="#seeds"></a>
 </h2>
 <p>No featR function calls <code><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed()</a></code> unless you pass
-<code>seed</code>. When you do, the seed applies <strong>for that call
-only</strong>. Your previous RNG state is restored when the function
-returns, even when it errors. Two consequences follow:</p>
-<ul>
-<li>Two calls with the same <code>seed</code> give the same answer.</li>
-<li>Calling featR with a seed does not change the random numbers your
-own code draws afterwards.</li>
-</ul>
+<code>seed</code>. When you do, the seed applies to that call only, and
+your previous RNG state is restored when the function returns, even if
+it errors. So two calls with the same <code>seed</code> give the same
+answer, and a seeded featR call does not change the random numbers your
+own code draws afterwards:</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">d</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>a <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Trig.html" class="external-link">sin</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">50</span><span class="op">)</span>, b <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Trig.html" class="external-link">cos</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">50</span><span class="op">)</span>, c <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Trig.html" class="external-link">sin</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">50</span><span class="op">)</span> <span class="op">+</span> <span class="fl">0.1</span> <span class="op">*</span> <span class="fu"><a href="https://rdrr.io/r/base/Trig.html" class="external-link">cos</a></span><span class="op">(</span><span class="fl">3</span><span class="op">:</span><span class="fl">52</span><span class="op">)</span><span class="op">)</span></span>
 <span></span>
@@ -105,98 +104,200 @@ own code draws afterwards.</li>
 <span><span class="co"># The seeded call left the caller's stream exactly where it was</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical</a></span><span class="op">(</span><span class="va">expected</span>, <span class="va">observed</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
-<p>Without a <code>seed</code>, randomized methods draw from your global
-stream like any other R function, so <code><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed()</a></code> before the
-call also works for sequential runs. Parallel workers do not draw from
-your global stream, so pass <code>seed</code> to make a parallel run
-reproducible. For <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, whose workers grow the
-trees, <code>seed</code> is the only way.</p>
-<div class="section level3">
-<h3 id="which-functions-use-randomness">Which functions use randomness<a class="anchor" aria-label="anchor" href="#which-functions-use-randomness"></a>
-</h3>
-<ul>
-<li>
-<strong>Train/test splits:</strong> <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>,
+<p>Without <code>seed</code>, a randomized function draws from your
+global stream like any other R function, so calling
+<code><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed()</a></code> first also makes a sequential run repeatable.
+Parallel workers do not draw from your global stream, so a parallel run
+needs <code>seed</code>. For <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> with more
+than one worker, <code>seed</code> is the only way to get the same
+forest twice.</p>
+</div>
+<div class="section level2">
+<h2 id="which-functions-use-randomness">Which functions use randomness<a class="anchor" aria-label="anchor" href="#which-functions-use-randomness"></a>
+</h2>
+<table class="table">
+<colgroup>
+<col width="50%">
+<col width="50%">
+</colgroup>
+<thead><tr class="header">
+<th>Source of randomness</th>
+<th>Functions</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td>Train/test split</td>
+<td>
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, <code><a href="../reference/fs_mars.html">fs_mars()</a></code>,
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>
+</td>
+</tr>
+<tr class="even">
+<td>Cross-validation folds</td>
+<td>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>,
 <code><a href="../reference/fs_mars.html">fs_mars()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>,
-<code><a href="../reference/fs_svm.html">fs_svm()</a></code>.</li>
-<li>
-<strong>Cross-validation folds:</strong> <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>,
-<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, <code><a href="../reference/fs_mars.html">fs_mars()</a></code>,
-<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>.</li>
-<li>
-<strong>Model fitting:</strong> <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> and
-<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> grow random forests.</li>
-<li>
-<strong>Monte-Carlo p-values:</strong> <code><a href="../reference/fs_chi.html">fs_chi()</a></code>, when
-expected cell counts are small.</li>
-<li>
-<strong>Row sampling:</strong>
-<code>fs_correlation(sample_frac &lt; 1)</code>.</li>
-<li>
-<strong>Subset sampling:</strong>
-<code>fs_bayes(sample_combinations = ...)</code>.</li>
-<li>
-<strong>Deterministic:</strong> <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>,
-<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>, <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>,
-<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>, <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, and
-<code><a href="../reference/fs_svd.html">fs_svd()</a></code> with the exact solver.</li>
-</ul>
-<p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> also fits models by MCMC. Its
-<code>seed</code> controls which subsets are sampled and, unless you
-pass <code>brm_args = list(seed = ...)</code>, also draws one Stan seed
-per candidate model, so a seeded call reproduces the MCMC fits too,
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code>
+</td>
+</tr>
+<tr class="odd">
+<td>Random forests</td>
+<td>
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code>
+</td>
+</tr>
+<tr class="even">
+<td>Monte Carlo p-values, when expected cell counts are small</td>
+<td><code><a href="../reference/fs_chi.html">fs_chi()</a></code></td>
+</tr>
+<tr class="odd">
+<td>Row down-sampling</td>
+<td>
+<code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> with <code>sample_frac &lt; 1</code>,
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> above <code>sample_size</code> rows (default
+10000), <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> with
+<code>control$sample_size</code>
+</td>
+</tr>
+<tr class="even">
+<td>Subset sampling and MCMC</td>
+<td><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code></td>
+</tr>
+<tr class="odd">
+<td>None</td>
+<td>
+<code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>, <code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>,
+<code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>, <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>,
+<code><a href="../reference/fs_pca.html">fs_pca()</a></code>, <code><a href="../reference/fs_svd.html">fs_svd()</a></code>
+</td>
+</tr>
+</tbody>
+</table>
+<p><code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>, <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, and the other
+deterministic functions have no <code>seed</code> argument because they
+never touch the RNG.</p>
+<p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> fits each candidate model by MCMC. Its
+<code>seed</code> controls which subsets
+<code>sample_combinations</code> draws and, unless you pass
+<code>brm_args = list(seed = ...)</code>, also draws one Stan seed per
+candidate model. A seeded call therefore reproduces the MCMC fits too,
 including under <code>parallel_combinations = TRUE</code>. An explicit
 <code>brm_args$seed</code> is used for every model instead.</p>
 </div>
-</div>
 <div class="section level2">
-<h2 id="parallelism-is-opt-in-and-bounded">Parallelism is opt-in and bounded<a class="anchor" aria-label="anchor" href="#parallelism-is-opt-in-and-bounded"></a>
+<h2 id="parallelism">Parallelism<a class="anchor" aria-label="anchor" href="#parallelism"></a>
 </h2>
-<p>Every function runs on one core unless you ask for more. The rules
-are:</p>
-<ul>
-<li>Worker requests are <strong>capped</strong> at
-<code><a href="https://rdrr.io/r/parallel/detectCores.html" class="external-link">parallel::detectCores()</a></code>. Asking for 64 on a 4-core laptop
-gives 4.</li>
-<li>Clusters featR creates are <strong>stopped when the call
-returns</strong>, including on error.</li>
-<li>Parallel backends you registered yourself are restored
-afterwards.</li>
-<li>With a <code>seed</code>, two seeded parallel runs agree with each
-other. What makes them agree is that everything random is decided in the
-main R process from the local seed, not on the workers: the train/test
-split and the resampling folds, and, for the caret-based
-<code><a href="../reference/fs_svm.html">fs_svm()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> and
-<code><a href="../reference/fs_mars.html">fs_mars()</a></code>, one seed per resample that caret draws from that
-seed and hands to whichever worker fits the resample.
-<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> need nothing more,
-because glmnet fits are deterministic once the folds are fixed. Seeding
-the workers’ own RNG streams would not be enough on its own: foreach
-gives each resample to whichever worker is free, so which stream fits
-which resample changes from run to run. The exception is
-<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, which hands each worker one fixed block
-of trees and seeds the workers with L’Ecuyer-CMRG streams. A seeded
-parallel run need not agree with a seeded <em>sequential</em> one.</li>
-</ul>
+<p>Every function runs on one core unless you ask for more:</p>
+<table class="table">
+<colgroup>
+<col width="33%">
+<col width="33%">
+<col width="33%">
+</colgroup>
+<thead><tr class="header">
+<th>Function</th>
+<th>How to ask</th>
+<th>Workers when you ask</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code></td>
+<td><code>parallel = TRUE</code></td>
+<td>
+<code>n_cores</code>, default 2</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_chi.html">fs_chi()</a></code></td>
+<td><code>parallel = TRUE</code></td>
+<td>
+<code>n_cores</code>, default 2, or the future plan you already
+set</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code></td>
+<td>
+<code>parallel = TRUE</code>, <code>method = "pointbiserial"</code>
+only</td>
+<td>
+<code>n_cores</code>, default 2</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code></td>
+<td><code>parallel = TRUE</code></td>
+<td>2</td>
+</tr>
+<tr class="odd">
+<td>
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, <code><a href="../reference/fs_mars.html">fs_mars()</a></code>,
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>
+</td>
+<td>
+<code>n_cores</code> greater than 1</td>
+<td><code>n_cores</code></td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code></td>
+<td><code>parallel_combinations = TRUE</code></td>
+<td>
+<code>n_cores</code>; not available on Windows</td>
+</tr>
+</tbody>
+</table>
+<p>Worker requests are capped at <code><a href="https://rdrr.io/r/parallel/detectCores.html" class="external-link">parallel::detectCores()</a></code>,
+so asking for 64 workers on a 4-core laptop gives 4. Clusters featR
+creates are stopped when the call returns, including on error, and a
+foreach backend or future plan you registered yourself is restored
+afterwards. If you have already set a non-sequential future plan,
+<code><a href="../reference/fs_chi.html">fs_chi()</a></code> uses that plan as is, ignores
+<code>n_cores</code>, and leaves your workers running.</p>
+<div class="section level3">
+<h3 id="seeded-parallel-runs">Seeded parallel runs<a class="anchor" aria-label="anchor" href="#seeded-parallel-runs"></a>
+</h3>
+<p>For most functions, two seeded parallel runs agree with each other
+because everything random is decided in the main R process from the
+local seed: the train/test split, the resampling folds, and, for the
+caret-based <code><a href="../reference/fs_svm.html">fs_svm()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>,
+and <code><a href="../reference/fs_mars.html">fs_mars()</a></code>, one seed per resample that caret draws and
+hands to whichever worker fits that resample. Seeding the workers’ own
+RNG streams would not be enough on its own. foreach gives each resample
+to whichever worker is free, so which stream fits which resample changes
+from run to run. <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>
+need nothing more, because glmnet fits are deterministic once the folds
+are fixed.</p>
+<p><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> works differently. It hands each
+worker a fixed block of trees and seeds the workers with L’Ecuyer-CMRG
+streams.</p>
+<p>A seeded parallel run need not match a seeded sequential one.
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> guarantees that its two runs agree.
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code> and <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> make no
+such promise, and <code><a href="../reference/fs_chi.html">fs_chi()</a></code>’s parallel p-values come from
+furrr’s own streams, so they differ from the sequential ones for the
+same <code>seed</code>.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/fs_randomforest.html">fs_randomforest</a></span><span class="op">(</span><span class="va">big_data</span>, <span class="st">"y"</span>, task <span class="op">=</span> <span class="st">"regression"</span>, n_cores <span class="op">=</span> <span class="fl">4</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">big_data</span>, <span class="st">"y"</span>, parallel <span class="op">=</span> <span class="cn">TRUE</span>, n_cores <span class="op">=</span> <span class="fl">4</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span></code></pre></div>
-<p>One caveat: when <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> grows its forest on
-more than one worker, the pieces are merged with
-<code><a href="https://rdrr.io/pkg/randomForest/man/combine.html" class="external-link">randomForest::combine()</a></code>. That drops the out-of-bag error
-estimates, so <code>details$oob</code> is <code>NULL</code>. Use
-<code>n_cores = 1</code> if you need the OOB numbers.</p>
+<p>When <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> grows its forest on more than one
+worker, it merges the pieces with <code><a href="https://rdrr.io/pkg/randomForest/man/combine.html" class="external-link">randomForest::combine()</a></code>,
+which drops the out-of-bag error estimates, so <code>details$oob</code>
+is <code>NULL</code>. Use <code>n_cores = 1</code> if you need the OOB
+numbers. <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> with
+<code>parallel_combinations = TRUE</code> holds each model to a single
+MCMC chain, so cross-chain diagnostics such as R-hat are not available;
+it warns when that happens.</p>
+</div>
 </div>
 <div class="section level2">
 <h2 id="optional-dependencies">Optional dependencies<a class="anchor" aria-label="anchor" href="#optional-dependencies"></a>
 </h2>
-<p>The only hard dependencies are data.table, parallel, stats, utils,
-and withr. Every modeling engine is in <code>Suggests</code> and is
-loaded only on the code path that needs it. A missing package gives an
-actionable error:</p>
-<pre><code>Error: Packages 'glmnet', 'Matrix' are required for lasso feature selection
-but not installed. Install with: install.packages(c("glmnet", "Matrix"))</code></pre>
-<p>To install everything at once:</p>
+<p>featR’s hard dependencies are data.table, methods, parallel, stats,
+utils, and withr. Every modeling engine is in <code>Suggests</code> and
+is loaded only on the code path that needs it. A missing package stops
+the call with the command to fix it:</p>
+<pre><code>Error: Package 'glmnet' is required for lasso feature selection but not
+installed. Install with: install.packages(c("glmnet"))</code></pre>
+<p>The <a href="choosing-a-method.html">choosing a method</a> guide
+lists which packages each function needs. To install all of them at
+once:</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  <span class="st">"Boruta"</span>, <span class="st">"brms"</span>, <span class="st">"caret"</span>, <span class="st">"doParallel"</span>, <span class="st">"e1071"</span>, <span class="st">"earth"</span>, <span class="st">"foreach"</span>,</span>
@@ -204,9 +305,9 @@ but not installed. Install with: install.packages(c("glmnet", "Matrix"))</code><
 <span>  <span class="st">"MLmetrics"</span>, <span class="st">"pbapply"</span>, <span class="st">"polycor"</span>, <span class="st">"pROC"</span>, <span class="st">"PRROC"</span>, <span class="st">"randomForest"</span>,</span>
 <span>  <span class="st">"RSpectra"</span>, <span class="st">"bigstatsr"</span></span>
 <span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
-<p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> also needs a working C++ toolchain for Stan.
-See the <a href="https://github.com/paul-buerkner/brms#how-do-i-install-brms" class="external-link">brms
-installation notes</a>.</p>
+<p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> also needs a working C++ toolchain for Stan;
+the <a href="https://github.com/paul-buerkner/brms#how-do-i-install-brms" class="external-link">brms
+installation notes</a> explain how to set one up.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

@@ -1,8 +1,8 @@
-# Unsupervised Filter-Based Feature Selection
+# Unsupervised filter that scores each feature without a target
 
-Performs unsupervised, univariate, filter-based feature selection by
-scoring each feature using a chosen unsupervised criterion and selecting
-or dropping features based on a threshold on that score.
+Scores each column of `data` with a summary that ignores any outcome
+(variance, spread, missingness, or number of distinct values) and keeps
+or drops each column by comparing its score with `threshold`.
 
 ## Usage
 
@@ -24,159 +24,154 @@ fs_unsupervised(
 
 - data:
 
-  A data.frame, data.table, or matrix; all columns must be numeric.
+  A data.frame, data.table, or matrix whose columns are all numeric.
   Every column is a candidate feature. The input is copied, never
   modified in place.
 
 - method:
 
   One of `"variance"` (default), `"mad"`, `"iqr"`, `"range"`,
-  `"missing_prop"`, `"n_unique"`.
+  `"missing_prop"`, or `"n_unique"`. See Details.
 
 - threshold:
 
-  Non-negative, finite numeric scalar threshold applied to the feature
-  scores. Default 0. The scales differ by method (a variance is in
-  squared units, `"missing_prop"` is in `[0, 1]`, `"n_unique"` is a
-  count), so a threshold is not portable between methods.
+  Non-negative, finite number compared with each feature's score.
+  Default 0. Each method has its own scale (a variance is in squared
+  units, `"missing_prop"` lies in `[0, 1]`, `"n_unique"` is a count), so
+  a threshold chosen for one method does not carry over to another.
 
 - direction:
 
-  One of `"above"` (default), `"below"`; compares scores to `threshold`.
+  `"above"` (default) or `"below"`: which side of `threshold` a score
+  must fall on to meet the condition.
 
 - action:
 
-  One of `"keep"` (default), `"remove"`; determines whether features
-  meeting the condition are retained or dropped.
+  `"keep"` (default) retains the features that meet the condition;
+  `"remove"` drops them.
 
 - include_equal:
 
-  Logical; if TRUE, comparisons are inclusive (greater/less than or
-  equal) instead of strict. Default FALSE.
+  Logical. If `TRUE`, a score equal to `threshold` meets the condition.
+  Default `FALSE`.
 
 - na_rm:
 
-  Logical; if TRUE (the default), remove NAs when computing scores. Has
-  no effect on `"missing_prop"` and `"n_unique"`, which always account
-  for NAs the same way.
+  Logical. If `TRUE` (the default), `NA`s are removed before computing
+  `"variance"`, `"mad"`, `"iqr"`, and `"range"`; if `FALSE`, an `NA` in
+  a column makes its score `NA` under those methods. `"missing_prop"`
+  and `"n_unique"` ignore `na_rm`.
 
 - output:
 
-  One of `"result"` (default), `"matrix"`, `"dt"`, `"data.frame"`,
-  `"mask"`, `"indices"`, `"names"`, `"list"`.
+  Shape of the return value.
 
   - `"result"` (default): an `fs_result` object (see Value).
 
-  - `"matrix"`: numeric matrix of the selected features.
-
-  - `"dt"`: data.table of the selected features.
-
-  - `"data.frame"`: data.frame of the selected features.
+  - `"matrix"`, `"dt"`, `"data.frame"`: the selected features as a
+    numeric matrix, a data.table, or a data.frame.
 
   - `"mask"`: logical vector of length `ncol(data)`, named after the
-    columns of `data`; TRUE marks a selected column.
+    columns of `data`; `TRUE` marks a selected column.
 
-  - `"indices"`: integer vector of the selected column indices, named
-    after the selected columns.
+  - `"indices"`: integer positions of the selected columns, named after
+    them.
 
   - `"names"`: character vector of the selected column names.
 
-  - `"list"`: list with components `filtered` (matrix), `mask`,
-    `indices`, `names`, `scores` (all as above), and `meta`, a list
-    recording `method`, `threshold`, `direction`, `action`,
-    `include_equal`, `na_rm`, `n_input_cols`, and `n_kept_cols`.
+  - `"list"`: a list with `filtered` (matrix), `mask`, `indices`,
+    `names`, `scores`, and `meta`. `meta` records `method`, `threshold`,
+    `direction`, `action`, `include_equal`, `na_rm`, `n_input_cols`, and
+    `n_kept_cols`.
 
 - verbose:
 
-  Logical; emit progress messages. Default FALSE.
+  Logical; print progress messages. Default `FALSE`.
 
 ## Value
 
-With the default `output = "result"`, an object of class `fs_result`
-with elements:
+With `output = "result"` (the default), an `fs_result` object:
 
 - `selected`: character vector of selected feature names.
 
-- `scores`: named numeric vector of per-feature scores, in column order,
-  `NA` where the score is undefined.
+- `scores`: named numeric vector with one score per column, in column
+  order, `NA` where the score is undefined.
 
-- `method`: `"unsupervised_"` followed by the scoring method, for
-  example `"unsupervised_variance"`.
+- `method`: `"unsupervised_"` followed by the method, for example
+  `"unsupervised_variance"`.
 
-- `task`: `NA_character_` (unsupervised selection has no task).
+- `task`: `NA_character_`, since there is no target.
 
 - `model`: `NULL`.
 
 - `details`: a list holding, in this order, `mask` (the logical
-  keep-mask over the candidate features), `indices` (the selected column
-  indices, named after the selected columns), `filtered` (the selected
-  columns as a data.table), `threshold`, `direction`, `action`, and
-  `n_features` (the number of candidate features, that is `ncol(data)`).
+  keep-mask over the columns), `indices` (selected positions, named),
+  `filtered` (the selected columns as a data.table), `threshold`,
+  `direction`, `action`, and `n_features` (`ncol(data)`).
 
 - `call`: the matched call.
 
-Any other `output` returns that shape instead, exactly as documented
-above. When no feature meets the selection criteria, a warning is issued
-and the tabular shapes come back empty: `"matrix"` and `"data.frame"`
-have zero columns and keep the input row count, while the `"dt"` shape
-(and `details$filtered`) is only guaranteed to have zero columns –
-data.table represents a zero-column table as having zero rows, so its
-row count is not preserved.
+Any other `output` returns the shape described under `output`.
+
+When no feature meets the criteria, a warning is issued and the tabular
+shapes come back empty. `"matrix"` and `"data.frame"` then have zero
+columns and keep the input row count. The `"dt"` shape and
+`details$filtered` have zero columns and also zero rows, because
+data.table represents a zero-column table that way.
 
 ## Details
 
-No target is involved, so this is the right tool for the first cleaning
-pass – dropping constant or near-constant columns, columns that are
-mostly missing, or columns with too few distinct values – and it is safe
-to run before a train/test split, since nothing about the outcome
-informs it. It says nothing about whether a feature is *useful*: a
-high-variance column can be pure noise, and a low-variance one can be
-the best predictor you have. Use
+Use it for the first cleaning pass: dropping constant or near-constant
+columns, columns that are mostly missing, or columns with too few
+distinct values. No outcome informs the scores, so it is safe to run
+before a train/test split. For the same reason it says nothing about
+whether a feature is useful. A high-variance column can be pure noise
+and a low-variance one can be your best predictor;
 [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
-or a model-based method for that judgment.
+or a model-based method answers that question.
 
-Supported methods:
+The six values of `method`:
 
-- `"variance"`: Sample variance (denominator n - 1), in squared units.
-  For values below about `1e-162` in magnitude the variance is smaller
-  than the smallest double and is reported as 0, so to screen for
-  constant columns on data in extreme units use `"range"` (threshold 0)
-  or `"n_unique"` (threshold 1).
+- `"variance"` (default): sample variance (denominator n - 1), in
+  squared units. For values below about `1e-162` in magnitude the
+  variance underflows to 0, so to find constant columns in extreme units
+  use `"range"` with threshold 0 or `"n_unique"` with threshold 1.
 
-- `"mad"`: Median absolute deviation, computed with
-  [`stats::mad()`](https://rdrr.io/r/stats/mad.html)'s default
-  consistency constant 1.4826 (normal-consistent). Scores are therefore
-  on the standard-deviation (sigma) estimate scale, not the raw
-  median-absolute-deviation scale, and thresholds should be chosen
-  accordingly.
+- `"mad"`: median absolute deviation from
+  [`stats::mad()`](https://rdrr.io/r/stats/mad.html), which multiplies
+  by the consistency constant 1.4826. Scores are on the scale of a
+  standard-deviation estimate, not the raw median absolute deviation;
+  choose thresholds on that scale.
 
-- `"iqr"`: Interquartile range.
+- `"iqr"`: interquartile range.
 
-- `"range"`: Max - Min.
+- `"range"`: maximum minus minimum.
 
-- `"missing_prop"`: Proportion of missing values, in `[0, 1]`. Note that
-  with the default `threshold = 0`, `direction = "above"`, and
-  `action = "keep"`, this KEEPS the features with the most missing
-  values, which is almost never the intent; a warning suggests
-  `action = "remove"` or `direction = "below"`. The warning fires only
-  when all three of `threshold`, `direction`, and `action` are left at
-  their defaults, so passing any one of them explicitly opts out of the
-  advisory.
+- `"missing_prop"`: proportion of missing values, in `[0, 1]`. With the
+  default `threshold = 0`, `direction = "above"`, and `action = "keep"`,
+  this keeps the columns that have any missing values and drops the
+  complete ones, which is almost never what you want. A warning then
+  suggests `action = "remove"` or `direction = "below"`. The warning
+  fires only when all three of `threshold`, `direction`, and `action`
+  are left at their defaults; passing any one of them explicitly
+  silences it.
 
-- `"n_unique"`: Number of unique non-NA values.
+- `"n_unique"`: number of distinct non-`NA` values.
 
-`na_rm` affects only the methods that summarize the observed values
-(`"variance"`, `"mad"`, `"iqr"`, `"range"`); `"missing_prop"` and
-`"n_unique"` always look at the whole column and treat NA as NA.
+A feature whose score is `NA` is never selected, whether `action` is
+`"keep"` or `"remove"`, and a warning reports how many features were
+excluded this way.
 
-Features whose score is undefined (`NA`) are never selected, under both
-`action = "keep"` and `action = "remove"`; a warning reports how many
-such features were excluded.
+Columns are subset by position, never by name, so duplicated column
+names cannot pull in the wrong column. Every column needs a non-empty,
+non-`NA` name. A matrix keeps its own column names; `V1`, `V2`, ... are
+used only when it has none.
 
-Columns are subset by integer index, never by name, so duplicated column
-names cannot select the wrong columns. Every column must have a
-non-empty, non-NA name; a matrix keeps its own column names (`V1`, `V2`,
-... are used only when it has none).
+## See also
+
+The [Filter
+methods](https://elkronos.github.io/featR/articles/filters.html) guide,
+which runs this function on a worked example.
 
 ## Examples
 

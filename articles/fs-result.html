@@ -31,24 +31,23 @@
       <ul class="navbar-nav me-auto">
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
-<li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+<li class="nav-item dropdown">
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
-<li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+<li class="active nav-item dropdown">
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -81,13 +80,16 @@
     
     
 <p>Fourteen of featR’s sixteen functions return the same object, an
-<code>fs_result</code>. This article covers what is in it, how to read
-it, and how to use it to compare methods. The two exceptions,
-<code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code>, do dimensionality
-reduction and return their own lists. The <a href="dimensionality-reduction.html">dimensionality reduction</a>
-article covers them.</p>
+<code>fs_result</code>. The two exceptions, <code><a href="../reference/fs_pca.html">fs_pca()</a></code> and
+<code><a href="../reference/fs_svd.html">fs_svd()</a></code>, do dimensionality reduction and return their own
+lists; the <a href="dimensionality-reduction.html">dimensionality
+reduction</a> article covers them. <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> and
+<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code> also have an <code>output</code> argument
+that can return the filtered data, a logical mask, or column indices
+instead; its default, <code>"result"</code>, gives an
+<code>fs_result</code>.</p>
 <div class="section level2">
-<h2 id="anatomy">Anatomy<a class="anchor" aria-label="anchor" href="#anatomy"></a>
+<h2 id="the-seven-components">The seven components<a class="anchor" aria-label="anchor" href="#the-seven-components"></a>
 </h2>
 <p>An <code>fs_result</code> is a plain list with seven elements, always
 in this order:</p>
@@ -176,8 +178,16 @@ or <code>"svm_linear"</code>.</td>
 <span><span class="co">#&gt; Selected 2 of 3 features</span></span>
 <span><span class="co">#&gt;   signal, flip</span></span>
 <span><span class="co">#&gt; Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)</span></span></code></pre></div>
-<p><code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> adds the call and a ranked score table. An
-asterisk marks the features that were kept:</p>
+<p>The first line names the method and, in parentheses, the task. The
+second counts the kept features against the candidates, and the third
+lists the kept names, cut off after the first 10
+(<code>print(res, n = 20)</code> shows more). A <code>Model:</code> line
+appears when the method stored a fitted model, and the last line names
+the elements of <code>details</code>, which are described under Value on
+each function’s help page.</p>
+<p><code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> adds the call and a table of up to 20 scores
+(set <code>n</code> for more), ranked strongest first. An asterisk marks
+the features that were kept:</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">res</span><span class="op">)</span></span>
 <span><span class="co">#&gt; &lt;fs_result&gt; supervised_correlation (regression)</span></span>
@@ -194,6 +204,10 @@ asterisk marks the features that were kept:</p>
 <span><span class="co">#&gt;   signal 0.9978        *</span></span>
 <span><span class="co">#&gt;    noise 0.4775         </span></span>
 <span><span class="co">#&gt; (* = selected)</span></span></code></pre></div>
+<p>Here <code>scores</code> is the absolute correlation with
+<code>y</code>. <code>flip</code> is a perfect negative correlation, so
+it scores 1 and ranks above <code>signal</code> (0.998).
+<code>noise</code> scores 0.48, just under the 0.5 threshold.</p>
 <p><code><a href="../reference/selected.html">selected()</a></code> is the stable accessor for the chosen names.
 Prefer it to <code>res$selected</code> in code you intend to keep:</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
@@ -203,14 +217,9 @@ Prefer it to <code>res$selected</code> in code you intend to keep:</p>
 <div class="section level2">
 <h2 id="what-scores-means-method-by-method">What <code>scores</code> means, method by method<a class="anchor" aria-label="anchor" href="#what-scores-means-method-by-method"></a>
 </h2>
-<p>Scores are only comparable <strong>within</strong> one method. A
-correlation of 0.8 and a Boruta importance of 0.8 have nothing in
-common. The direction also differs: for <code><a href="../reference/fs_chi.html">fs_chi()</a></code>, smaller
-is better. <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> knows this and sorts accordingly. For
-<code><a href="../reference/fs_mars.html">fs_mars()</a></code> and <code>fs_correlation(prune = TRUE)</code>,
-which do not select by a cut on the score, <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> lists
-the selected features first (each group ordered by score) so a kept
-feature is never ranked below a dropped one.</p>
+<p>A correlation of 0.8 and a Boruta importance of 0.8 have nothing in
+common, so compare scores only within one method. The table gives the
+quantity each function reports and which direction is stronger.</p>
 <table class="table">
 <colgroup>
 <col width="33%">
@@ -220,107 +229,173 @@ feature is never ranked below a dropped one.</p>
 <thead><tr class="header">
 <th>Function</th>
 <th><code>scores</code></th>
-<th>Better is</th>
+<th>Stronger is</th>
 </tr></thead>
 <tbody>
 <tr class="odd">
-<td><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code></td>
-<td>absolute Pearson <em>r</em> (numeric target) or ANOVA <em>F</em>
-(factor target)</td>
-<td>larger</td>
-</tr>
-<tr class="even">
 <td><code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code></td>
-<td>variance, MAD, IQR, range, missing proportion, or distinct
-count</td>
-<td>depends on the criterion</td>
-</tr>
-<tr class="odd">
-<td><code><a href="../reference/fs_chi.html">fs_chi()</a></code></td>
-<td>multiplicity-adjusted p-value</td>
-<td><strong>smaller</strong></td>
-</tr>
-<tr class="even">
-<td><code><a href="../reference/fs_infogain.html">fs_infogain()</a></code></td>
-<td>information gain in bits, or gain ratio</td>
-<td>larger</td>
-</tr>
-<tr class="odd">
-<td><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code></td>
-<td>each variable’s largest absolute correlation with any other
-variable</td>
-<td>larger means <strong>more redundant</strong>
+<td>the chosen criterion per column: variance, MAD (on the
+standard-deviation scale), IQR, range, proportion missing, or number of
+distinct values; <code>NA</code> when undefined</td>
+<td>depends on the criterion and on <code>direction</code>
 </td>
 </tr>
 <tr class="even">
+<td><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code></td>
+<td>each variable’s largest absolute correlation with any other
+variable; <code>NA</code> when none could be computed</td>
+<td>larger means more redundant</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code></td>
+<td>absolute Pearson <em>r</em> for a numeric outcome, in [0, 1];
+one-way ANOVA <em>F</em> for a categorical outcome, <code>Inf</code> for
+perfect separation; <code>NA</code> for a constant feature</td>
+<td>larger</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_chi.html">fs_chi()</a></code></td>
+<td>p-value adjusted for multiple testing (Bonferroni by default);
+<code>NA</code> for a feature that could not be tested</td>
+<td>smaller</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_infogain.html">fs_infogain()</a></code></td>
+<td>information gain in bits, or the gain ratio with
+<code>normalize = "gain_ratio"</code>; sorted, largest first</td>
+<td>larger</td>
+</tr>
+<tr class="even">
 <td><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code></td>
-<td>data.frame of standardized coefficients (<code>AbsCoefficient</code>
-ranks)</td>
+<td>a data.frame with <code>Variable</code>, signed
+<code>Coefficient</code>, and <code>AbsCoefficient</code>, one row per
+design-matrix column, zeros included; standardized (coefficient times
+the column’s standard deviation) when <code>standardize = TRUE</code>,
+the default. Raw coefficients are in
+<code>details$coefficients</code>
+</td>
 <td>larger magnitude</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_elastic.html">fs_elastic()</a></code></td>
-<td>absolute coefficients on the scale the model saw (<code>NULL</code>
-for multinomial)</td>
+<td>absolute coefficients at the winning alpha and lambda, on the scale
+of the columns the model saw (not standardized), zeros included;
+<code>NULL</code> for multinomial fits</td>
 <td>larger</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code></td>
-<td>permutation importance (mean decrease in accuracy, or %IncMSE)</td>
-<td>larger</td>
+<td>permutation importance: mean decrease in accuracy, or mean increase
+in MSE for regression; divided by its standard error unless
+<code>control$scale_importance = FALSE</code>; <code>NULL</code> when
+<code>control$importance = FALSE</code>
+</td>
+<td>larger; negative means worse than a permuted copy</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_mars.html">fs_mars()</a></code></td>
-<td>earth variable importance via <code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code>
-</td>
-<td>larger</td>
+<td>unscaled earth variable importance from
+<code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code>, one entry per original predictor; pruned
+predictors score 0, and a predictor the final model uses can score 0 or
+less; <code>NULL</code> if <code>varImp()</code> fails</td>
+<td>larger, but <code>selected</code> is the predictors in the final
+model, not a cut on the score</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code></td>
-<td>importance in the full-size RFE fit (every candidate present),
-averaged over all resamples</td>
+<td>each candidate’s importance in the full-size fit (all candidates
+present), averaged over every resample; falls back to
+<code><a href="https://rdrr.io/pkg/caret/man/varImp.html" class="external-link">caret::varImp()</a></code> when the function set records no
+per-resample importance</td>
 <td>larger</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_svm.html">fs_svm()</a></code></td>
-<td>SVM-RFE criterion <code>w^2</code>, or random-forest importance
-(<code>NULL</code> without selection)</td>
+<td>with SVM-RFE, the squared weight <code>w^2</code> of each column in
+the first, full-feature linear SVM; with
+<code>select_method = "rf_rfe"</code>, random-forest importance averaged
+over resamples; <code>NULL</code> when
+<code>feature_select = FALSE</code>
+</td>
 <td>larger</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_boruta.html">fs_boruta()</a></code></td>
-<td>median Boruta importance</td>
+<td>median Boruta importance over the runs; <code>NA</code> for a
+feature with no importance history</td>
 <td>larger</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code></td>
-<td>absolute <em>t</em> statistics of the retained terms (not valid for
-inference)</td>
+<td>one entry per retained term: the absolute <em>t</em> statistic, or
+the largest absolute <em>t</em> among a factor’s or interaction’s
+coefficients. Biased upward by the selection, so not valid for
+inference</td>
 <td>larger</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code></td>
 <td>
-<code>NULL</code>: selection is between whole models, so there is no
+<code>NULL</code>: the method compares whole models, so there is no
 per-feature score</td>
 <td>not applicable</td>
 </tr>
 </tbody>
 </table>
-<p>Some methods score <strong>design-matrix columns</strong> rather than
-original columns. <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>,
-<code><a href="../reference/fs_svm.html">fs_svm()</a></code>, and
-<code>fs_recursivefeature(handle_categorical = TRUE)</code> all do this,
-and so do the <code>scores</code> of <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> (one
-<em>t</em> statistic per coefficient). A factor predictor
-<code>colour</code> therefore shows up as <code>colourgreen</code>,
-<code>colourred</code>, and so on. Map the names back yourself if you
-need the original variables.</p>
+<p><code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> ranks by these rules:</p>
+<ul>
+<li>Smaller ranks first for <code><a href="../reference/fs_chi.html">fs_chi()</a></code>, for
+<code>fs_correlation(prune = TRUE)</code> (which keeps the least
+redundant variables), and for <code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code> and
+<code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> when the kept side is the low one
+(<code>direction = "below"</code> with <code>action = "keep"</code>, or
+<code>"above"</code> with <code>"remove"</code>).</li>
+<li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> ranks by absolute coefficient. Every other
+method ranks by the signed value, so a negative permutation or Boruta
+importance ranks below a useful feature instead of above it.</li>
+<li>For <code><a href="../reference/fs_mars.html">fs_mars()</a></code> and
+<code>fs_correlation(prune = TRUE)</code>, which do not select by a cut
+on the score, the selected features are listed first, each group in
+score order, so a kept feature is never ranked below a dropped one.</li>
+</ul>
+<div class="section level3">
+<h3 id="design-matrix-columns">Design-matrix columns<a class="anchor" aria-label="anchor" href="#design-matrix-columns"></a>
+</h3>
+<p>Some methods expand each factor or character predictor into one
+column per level and then score and select those columns. A factor
+<code>color</code> then shows up under its level columns, and you have
+to map them back yourself if you want the original variables.</p>
+<ul>
+<li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> paste the
+level onto the name: <code>colorgreen</code>,
+<code>colorred</code>.</li>
+<li>
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code> and
+<code>fs_recursivefeature(handle_categorical = TRUE)</code> use caret’s
+<code>dummyVars()</code>, which puts a dot between name and level for
+factors with three or more levels (<code>color.green</code>,
+<code>color.red</code>) and none for a two-level factor (<code>g1</code>
+for factor <code>g</code> with levels <code>"0"</code> and
+<code>"1"</code>).</li>
+<li>
+<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> keys <code>scores</code> and
+<code>selected</code> by term, so the factor appears once as
+<code>color</code>. The per-coefficient values (<code>colorgreen</code>,
+<code>colorred</code>) are in
+<code>details$coefficient_scores</code>.</li>
+<li>
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> attributes each dummy’s importance back to
+its source predictor and reports <code>color</code>.</li>
+</ul>
+</div>
 </div>
 <div class="section level2">
 <h2 id="comparing-methods">Comparing methods<a class="anchor" aria-label="anchor" href="#comparing-methods"></a>
 </h2>
-<p>Because every result has the same shape, a comparison is a loop:</p>
+<p>Because every result has the same shape, comparing methods is a
+loop:</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">d2</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
 <span>  x1 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">2.1</span>, <span class="fl">3.9</span>, <span class="fl">6.2</span>, <span class="fl">7.8</span>, <span class="fl">10.1</span>, <span class="fl">12.2</span>, <span class="fl">13.8</span>, <span class="fl">16.1</span>, <span class="fl">18.2</span>, <span class="fl">19.9</span><span class="op">)</span>,</span>
@@ -340,23 +415,34 @@ need the original variables.</p>
 <span><span class="co">#&gt; $infogain</span></span>
 <span><span class="co">#&gt; [1] "x1" "x2"</span></span></code></pre></div>
 <p>Agreement between methods that work on different principles is weak
-evidence that a feature matters. Disagreement tells you to look closer.
-Neither is a substitute for validating the final set on data that played
-no part in choosing it. The <a href="validation-and-leakage.html">validation and leakage</a> article
-covers that.</p>
+evidence that a feature matters, and disagreement is a reason to look
+closer. Neither replaces validating the final set on data that played no
+part in choosing it; the <a href="validation-and-leakage.html">validation and leakage</a> article
+shows how.</p>
 </div>
 <div class="section level2">
 <h2 id="empty-selections">Empty selections<a class="anchor" aria-label="anchor" href="#empty-selections"></a>
 </h2>
 <p>When nothing passes, <code>selected</code> is
-<code>character(0)</code> and a warning says so. Code that consumes
-results should handle a length-zero selection:</p>
+<code>character(0)</code>. <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> and
+<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code> also warn that nothing met the criteria;
+the other functions do not warn about an empty selection. Code that
+consumes results should handle a length-zero selection:</p>
 <div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">none</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/warning.html" class="external-link">suppressWarnings</a></span><span class="op">(</span><span class="fu"><a href="../reference/fs_unsupervised.html">fs_unsupervised</a></span><span class="op">(</span><span class="va">d</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span>, threshold <span class="op">=</span> <span class="fl">1e6</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">none</span><span class="op">)</span></span>
 <span><span class="co">#&gt; character(0)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/length.html" class="external-link">length</a></span><span class="op">(</span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">none</span><span class="op">)</span><span class="op">)</span> <span class="op">==</span> <span class="fl">0</span></span>
 <span><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
+<p>An empty selection from a threshold filter usually means the
+threshold is stricter than every score. <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> still
+ranks every scored feature, so read the scores there before you choose a
+new cut. An empty <code><a href="../reference/fs_chi.html">fs_chi()</a></code> result can also come from Monte
+Carlo p-values that cannot get below <code>sig_level</code> after the
+multiple-testing adjustment; featR warns when that happens, and <a href="filters.html">Filter methods</a> explains the fix. If
+<code>fs_lasso(lambda = "1se")</code> keeps nothing, the default
+<code>lambda = "min"</code> selects at a smaller penalty and usually
+keeps more.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

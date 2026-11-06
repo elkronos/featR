@@ -1,9 +1,9 @@
 # Extract the selected features from a featR result
 
-The generic accessor for the one thing every featR method produces: the
-names of the features it kept. Equivalent to `x$selected`, but stable
-against future changes in the internal layout, and safe to call on the
-result of any `fs_*()` selection function.
+Returns the names of the features a selection function kept. It gives
+the same value as `x$selected` and works on the result of any `fs_*()`
+selection function. Code that calls `selected()` keeps working if the
+internal layout of the result changes.
 
 ## Usage
 
@@ -26,8 +26,8 @@ selected(x, ...)
 
 ## Value
 
-A character vector of selected feature names, possibly empty when
-nothing met the selection criteria.
+A character vector of selected feature names. When nothing met the
+selection criteria it is `character(0)`, never `NULL`.
 
 ## Examples
 

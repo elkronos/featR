@@ -1,6 +1,7 @@
 # Summarize a featR result
 
-Prints the result, the call that produced it, and a ranked score table.
+Prints the result, the call that produced it, and a table of scores
+ranked strongest first.
 
 ## Usage
 
@@ -17,7 +18,7 @@ summary(object, n = 20L, ...)
 
 - n:
 
-  Maximum number of scored features to show (default 20).
+  Maximum number of rows in the score table. Default 20.
 
 - ...:
 
@@ -25,51 +26,62 @@ summary(object, n = 20L, ...)
 
 ## Value
 
-`object`, invisibly. Called for its printed output.
+`object`, invisibly. Called for the printed output.
 
 ## Details
 
-Everything [`print()`](https://rdrr.io/r/base/print.html) shows, then
-the recorded call, then – for methods that produce per-feature scores –
-a table of every scored feature, ranked strongest first, with columns
-`feature`, `score` (four significant digits) and `selected` (`*` marks
-the features that were kept). The table is truncated to `n` rows with a
-"... (m more)" tail.
+The output starts with everything
+[`print()`](https://rdrr.io/r/base/print.html) shows, then the recorded
+call. For methods that produce per-feature scores it ends with a table
+of every scored feature, with columns `feature`, `score` (rounded to
+four significant digits), and `selected` (`*` marks the kept features).
+The table is truncated to `n` rows with a "... (m more)" tail.
 
-The ranking direction follows the method. For most methods a larger
-score means a stronger feature, and rows are ordered by decreasing
-score, so a negative importance (a feature that did worse than its
-permuted copy) ranks below every positive one. The exception is
-[`fs_lasso`](https://elkronos.github.io/featR/reference/fs_lasso.md),
-whose scores are signed standardized coefficients: those are ordered by
-decreasing absolute value, since the sign is the direction of the
-effect, not its strength. For methods that score by p-value, where
-smaller is better, rows are ordered ascending instead, so the most
-significant feature is listed first. The same ascending order is used
-for the threshold filters
-([`fs_unsupervised`](https://elkronos.github.io/featR/reference/fs_unsupervised.md),
-[`fs_supervised`](https://elkronos.github.io/featR/reference/fs_supervised.md))
-when they kept the low side of the threshold (`direction = "below"` with
-`action = "keep"`, or `"above"` with `"remove"`), so the kept features
-come first.
+## How rows are ranked
 
-Two methods select features by something other than a cut on the score,
-and for them the selected features are listed first (each group ordered
-by score), so a kept feature is never ranked below, or truncated out
-behind, a dropped one.
-[`fs_mars`](https://elkronos.github.io/featR/reference/fs_mars.md)
-selects every predictor the final model uses, which can have a zero or
-negative GCV importance while pruned predictors score 0.
-[`fs_correlation`](https://elkronos.github.io/featR/reference/fs_correlation.md)
-with `prune = TRUE` scores each variable by its largest absolute
-correlation with any other (larger = more redundant) and keeps one
-member of each redundant pair; its rows are ordered ascending within
-each group, least redundant first. With `prune = FALSE` the selection is
-the redundant set, ordered by decreasing score.
+For most methods a larger score means a stronger feature, so rows are in
+decreasing order of score. A negative importance (a feature that did
+worse than its permuted copy) therefore ranks below every positive one.
+The other rules are:
 
-The `selected` marks are matched by position when the result records a
-per-feature keep-mask (`details$mask`, as the threshold filters do), so
-features sharing a name are marked individually; otherwise by name.
+- [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md)
+  scores are signed standardized coefficients. The sign gives the
+  direction of the effect, not its strength, so rows are in decreasing
+  order of absolute value.
+
+- [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md)
+  scores are adjusted p-values, where smaller is stronger, so rows are
+  in increasing order and the most significant feature comes first.
+
+- [`fs_unsupervised()`](https://elkronos.github.io/featR/reference/fs_unsupervised.md)
+  and
+  [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
+  also use increasing order when they kept the low side of the threshold
+  (`direction = "below"` with `action = "keep"`, or `"above"` with
+  `"remove"`), so the kept features come first.
+
+Two methods select by something other than a cut on the score. For them
+the selected features are listed first, each group ordered by score, so
+a kept feature is never ranked below, or truncated out behind, a dropped
+one:
+
+- [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
+  selects every predictor the final earth model uses. A used predictor
+  can have a zero or negative GCV importance while pruned predictors
+  score 0.
+
+- [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
+  with `prune = TRUE` scores each variable by its largest absolute
+  correlation with any other (larger means more redundant) and keeps one
+  member of each redundant pair. Rows are in increasing order within
+  each group, least redundant first. With `prune = FALSE` the selection
+  is the redundant set itself, and rows are in decreasing order of
+  score.
+
+When the result records a per-feature keep-mask (`details$mask`, as the
+threshold filters do), the `selected` marks are matched by position, so
+two features sharing a name are marked separately. Otherwise they are
+matched by name.
 
 ## Examples
 

@@ -32,23 +32,22 @@
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -80,21 +79,45 @@
 
     
     
-<p>Wrappers refit a model over many candidate subsets and keep the
-subset that model likes best. They are the most expensive methods in
-featR, and their answer is specific to the model family they wrap. The
-search itself can overfit too, so always validate the chosen set on rows
-the search never saw.</p>
+<p>A <strong>wrapper</strong> method fits a model to many candidate
+subsets of the predictors and keeps the subset that model scores best.
+Because it refits the model for each candidate, a wrapper costs far more
+than a filter, and its answer only holds for the model family it wraps:
+the subset a random forest prefers can differ from the one a linear
+model prefers. The search also uses the data to pick a winner, so the
+winner’s own score is optimistic. Each section below names the number
+that is computed on rows the search never saw; <a href="validation-and-leakage.html">Validation and leakage</a> has the
+full table of held-out and optimistic quantities.</p>
+<p>The five wrappers answer different questions:</p>
+<ul>
+<li>
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> and <code><a href="../reference/fs_svm.html">fs_svm()</a></code> rank
+the predictors with one model and keep the subset size whose
+cross-validated performance is best.</li>
+<li>
+<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> looks for every predictor that carries any
+information about the outcome, then by default keeps only the most
+important member of each correlated group.</li>
+<li>
+<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> keeps the terms that lower AIC in a
+linear regression.</li>
+<li>
+<code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> compares Bayesian models on every candidate
+subset by approximate leave-one-out cross-validation.</li>
+</ul>
+<p><a href="choosing-a-method.html">Choosing a method</a> compares them
+with the filter and embedded methods.</p>
 <div class="section level2">
-<h2 id="fs_recursivefeature-recursive-feature-elimination">
-<code>fs_recursivefeature()</code>: recursive feature
-elimination<a class="anchor" aria-label="anchor" href="#fs_recursivefeature-recursive-feature-elimination"></a>
+<h2 id="fs_recursivefeature">
+<code>fs_recursivefeature()</code><a class="anchor" aria-label="anchor" href="#fs_recursivefeature"></a>
 </h2>
-<p><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> wraps <code><a href="https://rdrr.io/pkg/caret/man/rfe.html" class="external-link">caret::rfe()</a></code>.
-It first splits the data. On the training rows it fits a model, ranks
-the predictors by its importance, and refits on the top-ranked subset of
-each candidate size. Resampling chooses the subset size. It then
-evaluates the result on the held-out rows.</p>
+<p>Recursive feature elimination (RFE) fits a model on all predictors,
+ranks them by the model’s importance, and refits on the top-ranked
+subset of each candidate size. <a href="../reference/fs_recursivefeature.html"><code>fs_recursivefeature()</code></a>
+wraps <code><a href="https://rdrr.io/pkg/caret/man/rfe.html" class="external-link">caret::rfe()</a></code>. It first makes a stratified train/test
+split (<code>train_ratio = 0.8</code> by default), runs the elimination
+on the training rows, lets cross-validation choose the subset size, and
+then scores the result on the test rows.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">rfe</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_recursivefeature.html">fs_recursivefeature</a></span><span class="op">(</span></span>
 <span>  <span class="va">iris</span>, <span class="st">"Species"</span>,</span>
@@ -115,29 +138,52 @@ evaluates the result on the held-out rows.</p>
 <span><span class="co">#&gt; 2         2 0.9666667 0.950  0.0186339 0.02795085</span></span>
 <span><span class="co">#&gt; 3         3 0.9500000 0.925  0.0186339 0.02795085</span></span>
 <span><span class="co">#&gt; 4         4 0.9500000 0.925  0.0186339 0.02795085</span></span></code></pre></div>
-<p>By default the elimination uses random forests
-(<code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::rfFuncs</a></code>). Pass another caret function set to match
-your model, for example
-<code>rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)</code>
-for linear regression. <code>handle_categorical = TRUE</code> one-hot
-encodes factors with an encoder fitted on the training rows only.
-<code>return_final_model = TRUE</code> also trains a caret model
-(<code>model_method</code>) on the selected features.</p>
+<p>On <code>iris</code> the search keeps two predictors,
+<code>Petal.Width</code> and <code>Petal.Length</code>, with a
+cross-validated accuracy of 0.967 at size 2, against 0.933 for one
+predictor and 0.950 for three or four. The held-out accuracy on the 30
+test rows is also 0.967.</p>
 <p>Only <code>details$test_metrics</code> is a held-out estimate.
-<code>resampling_results</code> is computed inside the training rows
-over the candidate sizes, and the size with the best score is chosen
-from it, so the winning size’s score is optimistic.</p>
+<code>resampling_results</code> is computed inside the training rows,
+and the size is chosen as the best row of that table, so the winning
+row’s score is optimistic. The same applies to
+<code>model$results</code> when you set
+<code>return_final_model = TRUE</code>: that tuning resampling runs on
+features that were already selected on the same rows.</p>
+<p>By default the elimination fits random forests
+(<code><a href="https://rdrr.io/pkg/caret/man/caretFuncs.html" class="external-link">caret::rfFuncs</a></code>). To match the model you intend to use,
+pass another caret function set, for example
+<code>rfe_control = list(method = "cv", number = 5, functions = caret::lmFuncs)</code>
+for linear regression. A factor, character, or logical target is treated
+as classification and anything else as regression. Predictors with
+missing values are an error, so impute or drop them first. Factor
+predictors are passed to the model as they are unless you set
+<code>handle_categorical = TRUE</code>, which one-hot encodes them with
+an encoder fitted on the training rows only.
+<code>return_final_model = TRUE</code> also trains a caret model
+(<code>model_method</code>, default <code>"rf"</code>) on the selected
+features.</p>
+<p>The regression metrics are caret’s <code>RMSE</code>,
+<code>Rsquared</code>, and <code>MAE</code>. caret’s
+<code>Rsquared</code> is the squared correlation between predictions and
+observations, not <code>1 - SSE/SST</code>, so it is never negative and
+ignores bias. It cannot be compared with an <code>R2</code> defined as
+<code>1 - SSE/SST</code>, such as the one <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>
+reports.</p>
 </div>
 <div class="section level2">
-<h2 id="fs_svm-svm-rfe">
-<code>fs_svm()</code>: SVM-RFE<a class="anchor" aria-label="anchor" href="#fs_svm-svm-rfe"></a>
+<h2 id="fs_svm">
+<code>fs_svm()</code><a class="anchor" aria-label="anchor" href="#fs_svm"></a>
 </h2>
-<p><code><a href="../reference/fs_svm.html">fs_svm()</a></code> trains a support vector machine through caret
-and kernlab. It can run <strong>SVM-RFE</strong> (Guyon et al., 2002)
-first. SVM-RFE fits a linear SVM on centered and scaled training data,
-ranks features by their squared weight <code>w^2</code>, drops the
-weakest, and refits, until one feature is left. The order in which
-features were eliminated gives the ranking.</p>
+<p><a href="../reference/fs_svm.html"><code>fs_svm()</code></a> trains a
+support vector machine through caret and kernlab, and with
+<code>feature_select = TRUE</code> it selects features first. The
+default selector is <strong>SVM-RFE</strong> (Guyon et al., 2002): fit a
+linear SVM on the centered and scaled training data, rank the features
+by their squared weight <code>w^2</code>, drop the weakest, and refit,
+until one feature is left. The order of elimination is the ranking, so
+the feature removed last ranks first. Use it when you want the selector
+and the final model to come from the same family.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">sv</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_svm.html">fs_svm</a></span><span class="op">(</span></span>
 <span>  <span class="va">iris</span>, <span class="st">"Species"</span>,</span>
@@ -156,36 +202,57 @@ features were eliminated gives the ranking.</p>
 <span><span class="va">sv</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">performance</span><span class="op">$</span><span class="va">overall</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"Accuracy"</span>, <span class="st">"Kappa"</span><span class="op">)</span><span class="op">]</span></span>
 <span><span class="co">#&gt;  Accuracy     Kappa </span></span>
 <span><span class="co">#&gt; 0.9333333 0.9000000</span></span></code></pre></div>
-<p>Without <code>n_features</code>, the number of features to keep is
-chosen by cross-validation over a short ladder of sizes (1, 2, 4, 8, …,
-p, at most six of them). You must state <code>task</code> explicitly.
-SVM-RFE needs <code>kernel = "linear"</code>, because the ranking uses
-the primal weight vector, which exists only for a linear kernel. For
-other kernels, use <code>select_method = "rf_rfe"</code>, which screens
-with random forests instead. Selection always runs on the training
-split, and <code>details$performance</code> comes from the test split;
-it is the honest estimate. Two other numbers are not. Each entry of
-<code>details$selection$size_scores</code> is a nested cross-validation
-estimate for its own size, but the chosen size is the best of up to six
-noisy estimates, so its score is optimistic. And with
-<code>feature_select = TRUE</code> the final model’s tuning
-cross-validation (<code>sv$model$results</code>, what printing
+<p>Here SVM-RFE ranks <code>Petal.Width</code> first and keeps it alone.
+The tuned SVM on that one feature classifies 0.933 of the test rows
+correctly.</p>
+<p>You must state <code>task</code> explicitly; <code><a href="../reference/fs_svm.html">fs_svm()</a></code>
+does not guess it from the target. SVM-RFE needs
+<code>kernel = "linear"</code>, because the ranking uses the primal
+weight vector, which exists only for a linear kernel. For a radial or
+polynomial kernel, use <code>select_method = "rf_rfe"</code>, which
+screens with random forests instead. Without <code>n_features</code>,
+cross-validation chooses how many features to keep from a short ladder
+of sizes: the powers of two up to the number of features plus the full
+size, at most six sizes, always including 1. Missing values in the
+target or predictors are an error.</p>
+<p>Selection runs on the training split (<code>train_ratio = 0.7</code>
+by default), and <code>details$performance</code> comes from the
+untouched test split, so it is the honest estimate. Two other numbers
+are optimistic. Each entry of <code>details$selection$size_scores</code>
+is a nested cross-validation estimate for its own size, but the chosen
+size is the best of up to six noisy estimates. And with
+<code>feature_select = TRUE</code>, the final model’s tuning
+cross-validation (<code>sv$model$results</code>, which is what printing
 <code>sv$model</code> shows) reuses the training rows the selector
-already used, so on pure noise it can approach perfect accuracy.
-Selection works on the <strong>dummy-encoded</strong> predictors, so
-factor levels are selected individually.</p>
+already used, so on pure noise it can approach perfect accuracy. For
+regression, <code>Rsquared</code> in <code>details$performance</code> is
+caret’s squared correlation, as for
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>.</p>
+<p>Selection works on the dummy-encoded predictors, so each level of a
+factor is selected or dropped on its own. On wide data the elimination
+is slow, because it refits the SVM at every step; screen first with a
+filter such as <a href="../reference/fs_supervised.html"><code>fs_supervised()</code></a>.</p>
 </div>
 <div class="section level2">
-<h2 id="fs_boruta-all-relevant-selection">
-<code>fs_boruta()</code>: all-relevant selection<a class="anchor" aria-label="anchor" href="#fs_boruta-all-relevant-selection"></a>
+<h2 id="fs_boruta">
+<code>fs_boruta()</code><a class="anchor" aria-label="anchor" href="#fs_boruta"></a>
 </h2>
-<p>Boruta asks a different question: which features carry <em>any</em>
-information about the outcome? It adds “shadow” copies of every feature
-with their values shuffled, grows random forests, and confirms each
-feature that beats the best shadow significantly more often than chance.
-Redundant but informative features are <strong>all</strong> confirmed.
-That is useful for understanding a data set, and less useful when you
-want a compact model.</p>
+<p><a href="../reference/fs_boruta.html"><code>fs_boruta()</code></a>
+asks which features carry any information about the outcome, rather than
+which small subset predicts best. Boruta (Kursa and Rudnicki, 2010) adds
+a shuffled “shadow” copy of every feature, grows random forests, and
+confirms each feature whose importance beats the best shadow
+significantly more often than chance. Boruta itself confirms every
+informative feature, redundant ones included, which helps when you want
+to understand a data set and hurts when you want a compact model. featR
+adds a pruning step on top: with the default
+<code>cutoff_cor = 0.7</code>, it keeps only the most important member
+of each group of confirmed features correlated above 0.7. A factor
+target is treated as classification and a numeric one as regression.
+Missing values are an error.</p>
+<p>The example below has one real predictor (<code>signal</code>), a
+noisy copy of it (<code>echo</code>), and two predictors generated
+independently of <code>y</code>.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">3</span><span class="op">)</span></span>
 <span><span class="va">bd</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
@@ -207,29 +274,38 @@ want a compact model.</p>
 <span><span class="co"># featR addition: within each correlated group, keep the most important member</span></span>
 <span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="fu"><a href="../reference/fs_boruta.html">fs_boruta</a></span><span class="op">(</span><span class="va">bd</span>, <span class="st">"y"</span>, maxRuns <span class="op">=</span> <span class="fl">50</span>, cutoff_cor <span class="op">=</span> <span class="fl">0.7</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] "signal" "noise2"</span></span></code></pre></div>
-<p>Look at <code>noise2</code>. It was generated independently of
-<code>y</code>, yet it is confirmed. Two things combine here. In this
-particular sample <code>noise2</code> happens to carry some
-random-forest importance: Boruta on its own leaves it Tentative after 50
-runs and confirms it in two of three seeds after 250. Then
-<code>resolve_tentative = TRUE</code> (the default) settles every
-feature still undecided with <code><a href="https://rdrr.io/pkg/Boruta/man/TentativeRoughFix.html" class="external-link">Boruta::TentativeRoughFix()</a></code>.
-That compares median importance with the median of the best shadow,
-which is a weaker test than the one used during the run. In a simulation
-of 20 data sets like this one, Boruta alone confirmed 5% of the
-pure-noise features, and 8.3% after the rough fix.</p>
-<p>So Boruta limits false discoveries; it does not eliminate them. When
+<p>The first call turns off featR’s correlation pruning, so
+<code>signal</code> and <code>echo</code> can both be confirmed. The
+second call uses the default <code>cutoff_cor = 0.7</code> and keeps
+only the more important of the two.</p>
+<p><code>noise2</code> is confirmed too, although it has nothing to do
+with <code>y</code>. Two things combine here. In this particular sample
+<code>noise2</code> happens to carry some random-forest importance:
+Boruta on its own leaves it Tentative after 50 runs and confirms it in
+two of three seeds after 250. Then <code>resolve_tentative = TRUE</code>
+(the default) settles every feature still undecided with
+<code><a href="https://rdrr.io/pkg/Boruta/man/TentativeRoughFix.html" class="external-link">Boruta::TentativeRoughFix()</a></code>. That function confirms a
+feature whenever its median importance beats the median of the best
+shadow, a weaker test than the one used during the run. In a simulation
+of 20 data sets with one real and three pure-noise predictors (150 rows,
+100 runs each), Boruta alone confirmed 5% of the noise features, and
+8.3% after the rough fix.</p>
+<p>So Boruta limits false discoveries but does not eliminate them. When
 they are costly, set <code>resolve_tentative = FALSE</code>, inspect
-<code>details$decisions</code>, raise <code>maxRuns</code>, and validate
-the confirmed set on held-out data.</p>
+<code>details$decisions</code>, raise <code>maxRuns</code> (default
+250), and validate the confirmed set on held-out data. Results vary from
+run to run unless you pass <code>seed</code>.</p>
 </div>
 <div class="section level2">
-<h2 id="fs_stepwise-aic-stepwise-regression">
-<code>fs_stepwise()</code>: AIC stepwise regression<a class="anchor" aria-label="anchor" href="#fs_stepwise-aic-stepwise-regression"></a>
+<h2 id="fs_stepwise">
+<code>fs_stepwise()</code><a class="anchor" aria-label="anchor" href="#fs_stepwise"></a>
 </h2>
-<p><code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> runs <code><a href="https://rdrr.io/pkg/MASS/man/stepAIC.html" class="external-link">MASS::stepAIC()</a></code> on a
-linear regression. It is cheap, deterministic, and returns an ordinary
-<code>lm</code>.</p>
+<p>Stepwise regression adds or removes one term at a time, keeping each
+move that lowers AIC. <a href="../reference/fs_stepwise.html"><code>fs_stepwise()</code></a> runs
+<code><a href="https://rdrr.io/pkg/MASS/man/stepAIC.html" class="external-link">MASS::stepAIC()</a></code> on a linear regression of the target on
+every other column. It is the cheapest wrapper in featR, it is
+deterministic (there is no <code>seed</code> argument), and it returns
+an ordinary <code>lm</code>.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">st</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_stepwise.html">fs_stepwise</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, direction <span class="op">=</span> <span class="st">"both"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">st</span><span class="op">)</span></span>
@@ -237,24 +313,38 @@ linear regression. It is cheap, deterministic, and returns an ordinary
 <span><span class="va">st</span><span class="op">$</span><span class="va">scores</span></span>
 <span><span class="co">#&gt;       wt     qsec       am </span></span>
 <span><span class="co">#&gt; 5.506882 4.246676 2.080819</span></span></code></pre></div>
-<p>Pass <code>k = log(nrow(data))</code> to use BIC, which usually
-selects fewer terms. Stepwise search is greedy and unstable: small
-changes to the data can change the answer. The <em>t</em> statistics in
-<code>scores</code> and the p-values in
-<code>details$coefficients</code> are computed after selection on the
-same data, so they are biased toward significance. <strong>Do not use
-them for inference.</strong></p>
+<p>On <code>mtcars</code> the search keeps <code>wt</code>,
+<code>qsec</code>, and <code>am</code>. The scores are absolute
+<em>t</em> statistics: 5.51, 4.25, and 2.08.</p>
+<p>Those <em>t</em> statistics, and the p-values in
+<code>details$coefficients</code>, are computed on the same data that
+drove the search, so they are biased toward significance. Use them to
+order the retained terms, not for inference. The search is also greedy,
+so it can miss the AIC-best subset, and unstable, so small changes to
+the data can change the answer. Pass <code>k = log(nrow(data))</code> to
+use BIC, which usually keeps fewer terms.</p>
+<p>The target must be numeric. Rows with a missing value in any column
+are dropped with a warning before the search, because
+<code>stepAIC()</code> can only compare models fitted on the same rows.
+To refit the returned model with <code><a href="https://rdrr.io/r/stats/update.html" class="external-link">update()</a></code>, pass the data
+explicitly, for example
+<code>update(st$model, . ~ . - am, data = mtcars)</code>.</p>
 </div>
 <div class="section level2">
-<h2 id="fs_bayes-bayesian-model-comparison">
-<code>fs_bayes()</code>: Bayesian model comparison<a class="anchor" aria-label="anchor" href="#fs_bayes-bayesian-model-comparison"></a>
+<h2 id="fs_bayes">
+<code>fs_bayes()</code><a class="anchor" aria-label="anchor" href="#fs_bayes"></a>
 </h2>
-<p><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> fits a brms model for every candidate
-predictor subset and compares them by approximate leave-one-out
-cross-validation, using <code><a href="https://mc-stan.org/loo/reference/loo_compare.html" class="external-link">loo::loo_compare()</a></code>. By default it
-applies a one-standard-error rule: the chosen subset is the smallest one
-whose expected log predictive density is within one standard error of
-the best.</p>
+<p><a href="../reference/fs_bayes.html"><code>fs_bayes()</code></a> fits
+a brms model for every candidate subset of <code>predictors</code> and
+compares them by approximate leave-one-out cross-validation (PSIS-LOO;
+Vehtari et al., 2017) with <code><a href="https://mc-stan.org/loo/reference/loo_compare.html" class="external-link">loo::loo_compare()</a></code>. The default
+<code>rule = "1se"</code> picks the smallest subset whose expected log
+predictive density (elpd) is within one standard error of the best;
+<code>rule = "best"</code> takes the maximum. The model family comes
+from <code>brm_family</code>, for example <code><a href="https://rdrr.io/r/stats/family.html" class="external-link">stats::gaussian()</a></code>
+(the default) or <code><a href="https://paulbuerkner.com/brms/reference/brmsfamily.html" class="external-link">brms::bernoulli()</a></code>. Rows with a missing
+value in the target, any candidate predictor, or <code>date_col</code>
+are dropped before fitting.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">res</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_bayes.html">fs_bayes</a></span><span class="op">(</span></span>
 <span>  <span class="va">mtcars</span>, <span class="st">"mpg"</span>,</span>
@@ -264,20 +354,22 @@ the best.</p>
 <span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">res</span><span class="op">)</span></span>
 <span><span class="va">res</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">loo_comparison</span></span></code></pre></div>
-<p>This is the most expensive method in featR. With <code>p</code>
-candidates it fits <code>2^p - 1</code> models, and each one compiles
-and samples a Stan program. Bound the search with
-<code>max_comb_size</code> or <code>sample_combinations</code>. It needs
-brms, loo, and a working C++ toolchain, which is why this example is not
-run here. <code>details$mae</code> and <code>details$rmse</code> are
-in-sample, and the posterior of the returned model is post-selection, so
-neither is an honest estimate on its own. <code>details$best_elpd</code>
-is approximately unbiased for a single fixed model, but it belongs to
-the model that won a search over up to <code>2^p - 1</code> candidates,
-so it is optimistic too (selection-induced bias; Piironen and Vehtari,
-2017), and so are the differences in
-<code>details$loo_comparison</code>. Judge the chosen subset on data the
-search did not use.</p>
+<p>This example is not run here, because each candidate model compiles
+and samples its own Stan program, which needs brms, loo, and a working
+C++ toolchain. It is the most expensive method in featR: with
+<code>p</code> candidates it fits <code>2^p - 1</code> models, seven for
+the three predictors above. Bound the search with
+<code>max_comb_size</code> or <code>sample_combinations</code>.</p>
+<p>None of the numbers it returns is a held-out estimate.
+<code>details$mae</code> and <code>details$rmse</code> are in-sample.
+<code>details$best_elpd</code> would be roughly unbiased for a single
+fixed model, but it belongs to the model that won a search over up to
+<code>2^p - 1</code> candidates, so it is optimistic (selection-induced
+bias; Piironen and Vehtari, 2017), and so are the differences in
+<code>details$loo_comparison</code>. Posterior intervals from the
+returned model are post-selection. To judge the chosen subset, use data
+the search did not see, or repeat the whole search inside an outer
+cross-validation.</p>
 </div>
 <div class="section level2">
 <h2 id="references">References<a class="anchor" aria-label="anchor" href="#references"></a>

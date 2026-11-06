@@ -18,20 +18,19 @@
       <ul class="navbar-nav me-auto"><li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="active nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides"><li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods"><li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul></li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly"><li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results"><li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul></li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
@@ -51,7 +50,7 @@
     <div class="section level2">
       <h2 id="working-with-results">Working with results<a class="anchor" aria-label="anchor" href="#working-with-results"></a></h2>
 
-      <div class="section-desc"><p>Every selection function returns an <code>fs_result</code>. These are its accessor and display methods.</p></div>
+      <div class="section-desc"><p>Every selection function except <code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> returns an <code>fs_result</code>. These functions print it, summarize it, and extract the selected names.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -81,7 +80,7 @@
       </dl></div><div class="section level2">
       <h2 id="filters">Filters<a class="anchor" aria-label="anchor" href="#filters"></a></h2>
 
-      <div class="section-desc"><p>Score each feature without fitting a predictive model. Cheap, and suitable for a first cut on wide data, but they judge features one at a time.</p></div>
+      <div class="section-desc"><p>Score each feature without fitting a predictive model. They are fast and work on wide data, but they judge one feature at a time, so they miss features that only help in combination.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -93,39 +92,39 @@
           <code><a href="fs_supervised.html">fs_supervised()</a></code>
 
         </dt>
-        <dd>Supervised Filter-Based Feature Selection</dd>
+        <dd>Supervised filter that scores each feature against a target</dd>
 
         <dt>
 
           <code><a href="fs_unsupervised.html">fs_unsupervised()</a></code>
 
         </dt>
-        <dd>Unsupervised Filter-Based Feature Selection</dd>
+        <dd>Unsupervised filter that scores each feature without a target</dd>
 
         <dt>
 
           <code><a href="fs_chi.html">fs_chi()</a></code>
 
         </dt>
-        <dd>Chi-square feature selection for categorical features</dd>
+        <dd>Chi-squared tests for categorical features</dd>
 
         <dt>
 
           <code><a href="fs_infogain.html">fs_infogain()</a></code>
 
         </dt>
-        <dd>Feature Selection via Information Gain</dd>
+        <dd>Rank features by information gain</dd>
 
         <dt>
 
           <code><a href="fs_correlation.html">fs_correlation()</a></code>
 
         </dt>
-        <dd>Correlation-based feature selection</dd>
+        <dd>Find and prune highly correlated variables</dd>
       </dl></div><div class="section level2">
       <h2 id="regularization-and-embedded-importance">Regularization and embedded importance<a class="anchor" aria-label="anchor" href="#regularization-and-embedded-importance"></a></h2>
 
-      <div class="section-desc"><p>One model fit whose own structure names the survivors.</p></div>
+      <div class="section-desc"><p>Fit one model and keep the features it uses: nonzero coefficients for the lasso and elastic net, variable importance for random forests, and the terms of the final MARS model.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -137,21 +136,21 @@
           <code><a href="fs_lasso.html">fs_lasso()</a></code>
 
         </dt>
-        <dd>Lasso Feature Selection with Cross-Validation</dd>
+        <dd>Lasso feature selection with cross-validation</dd>
 
         <dt>
 
           <code><a href="fs_elastic.html">fs_elastic()</a></code>
 
         </dt>
-        <dd>Elastic Net Feature Selection and Model Training</dd>
+        <dd>Elastic-net feature selection with tuned alpha and lambda</dd>
 
         <dt>
 
           <code><a href="fs_randomforest.html">fs_randomforest()</a></code>
 
         </dt>
-        <dd>Random forest importance and held-out evaluation</dd>
+        <dd>Random forest importance with a held-out evaluation</dd>
 
         <dt>
 
@@ -162,7 +161,7 @@
       </dl></div><div class="section level2">
       <h2 id="wrappers">Wrappers<a class="anchor" aria-label="anchor" href="#wrappers"></a></h2>
 
-      <div class="section-desc"><p>Refit a model over candidate subsets. The most expensive family, and the one most closely tied to the model you intend to use.</p></div>
+      <div class="section-desc"><p>Refit a model on many candidate subsets and keep the best one. They are the slowest family, and their choice is tied to the model they refit.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -188,25 +187,25 @@
           <code><a href="fs_boruta.html">fs_boruta()</a></code>
 
         </dt>
-        <dd>Feature selection using Boruta</dd>
+        <dd>All-relevant feature selection with Boruta</dd>
 
         <dt>
 
           <code><a href="fs_stepwise.html">fs_stepwise()</a></code>
 
         </dt>
-        <dd>Stepwise linear-regression feature selection via AIC</dd>
+        <dd>Stepwise linear-regression feature selection by AIC</dd>
 
         <dt>
 
           <code><a href="fs_bayes.html">fs_bayes()</a></code>
 
         </dt>
-        <dd>Bayesian feature selection for model optimization</dd>
+        <dd>Bayesian predictor-subset selection with brms and LOO</dd>
       </dl></div><div class="section level2">
       <h2 id="dimensionality-reduction">Dimensionality reduction<a class="anchor" aria-label="anchor" href="#dimensionality-reduction"></a></h2>
 
-      <div class="section-desc"><p>Replace the original columns with new components instead of keeping a subset. These return their own list rather than an <code>fs_result</code>.</p></div>
+      <div class="section-desc"><p>Replace the original columns with new components instead of keeping a subset. These return a list of their own rather than an <code>fs_result</code>.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -225,7 +224,7 @@
           <code><a href="fs_svd.html">fs_svd()</a></code>
 
         </dt>
-        <dd>Singular Value Decomposition with Optional Scaling and Truncation</dd>
+        <dd>Singular value decomposition with optional scaling and truncation</dd>
       </dl></div><div class="section level2">
       <h2 id="package">Package<a class="anchor" aria-label="anchor" href="#package"></a></h2>
 

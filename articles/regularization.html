@@ -32,23 +32,22 @@
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -80,16 +79,33 @@
 
     
     
-<p>These methods fit <strong>one</strong> model and read the selection
-off its structure: non-zero coefficients (<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>,
-<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>), permutation importance
-(<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>), or the terms a spline model retains
-(<code><a href="../reference/fs_mars.html">fs_mars()</a></code>). Unlike filters, they judge each predictor in
-the presence of the others.</p>
-<p>The examples use a simulated regression problem with a known answer.
-<code>x1</code>–<code>x3</code> matter, <code>x1_copy</code> duplicates
-<code>x1</code>, <code>x4</code>–<code>x10</code> are noise, and
-<code>x_nl</code> has a purely non-linear effect.</p>
+<p>The four functions on this page each fit one model and read the
+selection off that model’s structure. <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> keep the predictors whose penalized
+coefficients are not zero, <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> ranks
+predictors by permutation importance, and <code><a href="../reference/fs_mars.html">fs_mars()</a></code> keeps
+the predictors that appear in its pruned spline terms. Because every
+predictor is in the model at once, each one is judged in the presence of
+the others, which a univariate filter cannot do.</p>
+<p><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> fit linear
+models, so they miss a predictor whose effect is curved, and neither
+holds out any rows, so neither gives you an honest performance estimate.
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> and <code><a href="../reference/fs_mars.html">fs_mars()</a></code> pick up
+non-linear effects, and both report metrics on a held-out split that the
+selection never saw.</p>
+<p>For which quantities are honest and which are optimistic across all
+of featR, see <a href="validation-and-leakage.html">Validation and
+leakage</a>. For help choosing between these and the filter or wrapper
+methods, see <a href="choosing-a-method.html">Choosing a method</a>.</p>
+<div class="section level2">
+<h2 id="example-data">Example data<a class="anchor" aria-label="anchor" href="#example-data"></a>
+</h2>
+<p>Every example below uses the same simulated regression problem, so
+you can check each method against the known answer. <code>y</code>
+depends on <code>x1</code>, <code>x2</code> and <code>x3</code> linearly
+and on <code>x_nl</code> through a U-shaped curve with almost no linear
+trend. <code>x1_copy</code> is <code>x1</code> plus a little noise, and
+<code>x4</code> to <code>x10</code> are pure noise.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">11</span><span class="op">)</span></span>
 <span><span class="va">n</span> <span class="op">&lt;-</span> <span class="fl">300</span></span>
@@ -98,14 +114,19 @@ the presence of the others.</p>
 <span><span class="va">d</span><span class="op">$</span><span class="va">x1_copy</span> <span class="op">&lt;-</span> <span class="va">d</span><span class="op">$</span><span class="va">x1</span> <span class="op">+</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="va">n</span>, sd <span class="op">=</span> <span class="fl">0.1</span><span class="op">)</span></span>
 <span><span class="va">d</span><span class="op">$</span><span class="va">x_nl</span>    <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="va">n</span>, <span class="op">-</span><span class="fl">2</span>, <span class="fl">2</span><span class="op">)</span></span>
 <span><span class="va">d</span><span class="op">$</span><span class="va">y</span> <span class="op">&lt;-</span> <span class="fl">2</span> <span class="op">*</span> <span class="va">d</span><span class="op">$</span><span class="va">x1</span> <span class="op">-</span> <span class="fl">1.5</span> <span class="op">*</span> <span class="va">d</span><span class="op">$</span><span class="va">x2</span> <span class="op">+</span> <span class="fl">0.75</span> <span class="op">*</span> <span class="va">d</span><span class="op">$</span><span class="va">x3</span> <span class="op">+</span> <span class="fl">1.5</span> <span class="op">*</span> <span class="op">(</span><span class="va">d</span><span class="op">$</span><span class="va">x_nl</span><span class="op">^</span><span class="fl">2</span> <span class="op">-</span> <span class="fl">4</span> <span class="op">/</span> <span class="fl">3</span><span class="op">)</span> <span class="op">+</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="va">n</span><span class="op">)</span></span></code></pre></div>
+</div>
 <div class="section level2">
 <h2 id="fs_lasso">
 <code>fs_lasso()</code><a class="anchor" aria-label="anchor" href="#fs_lasso"></a>
 </h2>
-<p><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> fits an L1-penalized linear model with
-<code><a href="https://glmnet.stanford.edu/reference/cv.glmnet.html" class="external-link">glmnet::cv.glmnet()</a></code> and keeps the predictors with non-zero
-coefficients at the cross-validated penalty. It handles numeric outcomes
-only (gaussian family).</p>
+<p>The lasso is linear regression with an L1 penalty on the
+coefficients. The penalty shrinks coefficients toward zero and sets some
+of them exactly to zero, and the predictors left with a non-zero
+coefficient are the selection. <a href="../reference/fs_lasso.html"><code>fs_lasso()</code></a> fits it
+with <code><a href="https://glmnet.stanford.edu/reference/cv.glmnet.html" class="external-link">glmnet::cv.glmnet()</a></code>, choosing the penalty strength by
+cross-validation (<code>nfolds = 5</code> by default). It handles
+numeric outcomes only (gaussian family); for classification, use
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">las</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">d</span>, <span class="st">"y"</span>, nfolds <span class="op">=</span> <span class="fl">5</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
 <span><span class="va">las</span></span>
@@ -121,87 +142,137 @@ only (gaussian family).</p>
 <span><span class="co">#&gt; 4       x3   0.6011092      0.6011092</span></span>
 <span><span class="co">#&gt; 5     x_nl   0.2535626      0.2535626</span></span>
 <span><span class="co">#&gt; 6       x4   0.0425803      0.0425803</span></span></code></pre></div>
-<p>Things to know:</p>
-<ul>
-<li>
-<strong>Which penalty.</strong> <code>lambda = "min"</code> (the
-default) uses the penalty that minimizes cross-validated error. That
-choice is tuned for prediction and usually keeps some noise variables.
-<code>lambda = "1se"</code> uses the largest penalty within one standard
-error of the minimum, which gives a sparser and more stable set.</li>
-</ul>
+<p>The lasso kept 8 of the 12 predictors: the four real ones,
+<code>x1_copy</code>, and three noise columns (<code>x4</code>,
+<code>x5</code>, <code>x9</code>). The default,
+<code>lambda = "min"</code>, selects at the penalty that minimizes
+cross-validated error. That penalty is tuned for prediction, and it
+usually lets some noise through. <code>lambda = "1se"</code> uses the
+largest penalty whose error is within one standard error of the minimum,
+which gives a sparser and more stable set. On this data it drops the
+three noise columns:</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="fu"><a href="../reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">d</span>, <span class="st">"y"</span>, nfolds <span class="op">=</span> <span class="fl">5</span>, seed <span class="op">=</span> <span class="fl">1</span>, lambda <span class="op">=</span> <span class="st">"1se"</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] "x2"      "x1"      "x1_copy" "x3"      "x_nl"</span></span></code></pre></div>
+<p>Both penalty values are stored in <code>details$lambda_min</code> and
+<code>details$lambda_1se</code>, whichever one you select at.</p>
+<p><code>scores</code> holds each coefficient multiplied by its column’s
+standard deviation, so predictors measured in different units can be
+ranked against each other. The raw coefficients are in
+<code>details$coefficients</code>. With <code>standardize = FALSE</code>
+the two tables are identical, and you should compare them only across
+predictors that share a scale.</p>
+<p>Read the selection with three limits in mind:</p>
 <ul>
+<li>Among strongly correlated predictors, the lasso tends to keep one
+and zero out the rest, so a missing predictor is not evidence that it is
+unrelated to the outcome. Here <code>x1</code> and <code>x1_copy</code>
+both survive, but they split one effect between them (scores 1.09 and
+0.76, which together come close to the true coefficient of 2), so
+neither coefficient measures it alone.</li>
+<li>The model is linear. <code>x_nl</code> has one of the strongest
+effects in the data, but its score is 0.25 against 1.42 for
+<code>x2</code>, coming only from whatever linear trend this sample
+happens to contain. Compare the random forest and MARS results
+below.</li>
 <li>
-<strong>Correlated predictors.</strong> The lasso tends to keep one
-member of a correlated group and zero out the rest, so an absent feature
-is <strong>not</strong> evidence that it is unrelated to the outcome.
-Here <code>x1</code> and <code>x1_copy</code> both survive, but they
-split one effect between them, so neither coefficient measures it on its
-own.</li>
-<li>
-<strong>Linear only.</strong> <code>x_nl</code> has a strong
-U-shaped effect but almost no linear one. The lasso gives it only a
-small coefficient, from whatever linear trend this sample happens to
-contain, and badly understates how much it matters. Compare the random
-forest and MARS results below.</li>
-<li>
-<strong>Scores.</strong> <code>scores</code> holds coefficients
-multiplied by each column’s standard deviation. That makes them
-comparable across predictors measured in different units. The raw
-coefficients are in <code>details$coefficients</code>.</li>
-<li>
-<strong>Factors</strong> are expanded into dummy columns, and the
-selection names those columns (<code>colourred</code>, not
-<code>colour</code>). A factor with only one observed level, or a dummy
-name that collides with another column (factor <code>g</code> with level
-<code>b</code> next to a column called <code>gb</code>), is an error
-rather than a silent mistake; so are infinite values.</li>
-<li>
-<strong>Missing values</strong> are an error by default.
-Mean-imputing on the full data before cross-validation leaks information
-between folds.</li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> reports no performance estimate. If you keep
+the fitted model (<code>return_model = TRUE</code>), its cross-validated
+error is the one the penalty was chosen to minimize, so it is
+optimistic.</li>
 </ul>
+<p>Factors and character columns are expanded into dummy columns, and
+the selection names those columns (<code>colorred</code>, not
+<code>color</code>). A factor with fewer than two observed levels is an
+error, and so is a dummy name that collides with another column (factor
+<code>g</code> with level <code>b</code> next to a column called
+<code>gb</code>). Infinite values are an error too.</p>
+<p>Missing predictor values are an error under the default
+<code>impute = "none"</code>. <code>impute = "mean"</code> fills them
+with column means computed on the whole data set, before
+cross-validation, so the folds see each other; featR warns when you use
+it. If you need imputation, do it inside your own resampling loop.</p>
+<p><code>alpha</code> defaults to 1. A value between 0 and 1 gives an
+elastic-net penalty at that fixed mixing value;
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> tunes it for you instead.</p>
 </div>
 <div class="section level2">
 <h2 id="fs_elastic">
 <code>fs_elastic()</code><a class="anchor" aria-label="anchor" href="#fs_elastic"></a>
 </h2>
-<p><code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> tunes both the mixing parameter
-<code>alpha</code> and the penalty <code>lambda</code> by resampling,
-through <code>caret::train(method = "glmnet")</code>. It also supports
-classification. When the winning <code>alpha</code> is below 1, the
-ridge part of the penalty spreads weight across correlated predictors,
-so a correlated group tends to survive together.</p>
+<p>The elastic net mixes the lasso’s L1 penalty with the L2 (ridge)
+penalty. The mixing parameter <code>alpha</code> runs from 0 (pure
+ridge) to 1 (pure lasso). <a href="../reference/fs_elastic.html"><code>fs_elastic()</code></a> tunes
+<code>alpha</code> and the penalty strength <code>lambda</code> together
+by resampling, through <code>caret::train(method = "glmnet")</code>,
+with 5-fold cross-validation unless you pass your own
+<code>trControl</code>. Unlike <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, it also handles
+classification.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">el</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_elastic.html">fs_elastic</a></span><span class="op">(</span><span class="va">d</span>, <span class="st">"y"</span>, alpha_seq <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0.25</span>, <span class="fl">0.5</span>, <span class="fl">1</span><span class="op">)</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
 <span><span class="va">el</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">best_alpha</span></span>
 <span><span class="co">#&gt; [1] 0.5</span></span>
+<span><span class="va">el</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">metric_value</span></span>
+<span><span class="co">#&gt; [1] 2.110188</span></span>
 <span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">el</span><span class="op">)</span></span>
 <span><span class="co">#&gt;  [1] "x1"      "x2"      "x3"      "x4"      "x5"      "x7"      "x8"     </span></span>
 <span><span class="co">#&gt;  [8] "x9"      "x1_copy" "x_nl"</span></span></code></pre></div>
-<p>The default grid is <code>seq(0.1, 1, by = 0.1)</code>. It
-deliberately excludes <code>alpha = 0</code>, pure ridge, which never
-sets a coefficient to zero: if ridge won the tuning, every predictor
-would be “selected”. <code>scores</code> here are absolute coefficients
-on the scale of the columns as supplied, so standardize the predictors
-first if you want to compare them. <code>use_pca = TRUE</code> fits the
-model on principal components that are recomputed inside every resample,
-and then the selection names components (<code>PC1</code>, …) rather
-than your columns.</p>
+<p>The winning <code>alpha</code> was 0.5, and 10 of the 12 predictors
+survived, including five of the seven noise columns. When
+<code>alpha</code> is below 1, the ridge part of the penalty spreads
+weight across correlated predictors, so a group like <code>x1</code> and
+<code>x1_copy</code> tends to stay in together rather than being cut to
+one representative. The cost, as here, is a less sparse selection.</p>
+<p>The winner is the pair with the best resampled metric, and picking
+the best of many candidates leans toward too little penalty. On
+pure-noise data (100 rows, 50 predictors) the default selected 8.5
+predictors on average and at least one in every run. Passing a
+<code><a href="https://rdrr.io/pkg/caret/man/trainControl.html" class="external-link">caret::trainControl()</a></code> with
+<code>selectionFunction = "oneSE"</code> picks the most penalized pair
+within one standard error of the best, which selected 1.8 on average in
+the same simulation.</p>
+<p>The same optimism applies to <code>details$metric_value</code>, the
+resampled RMSE of the winning pair (2.11 here). It is the best value
+over the whole grid, and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> holds out no test
+rows, so treat it as optimistic and wrap the whole call in an outer
+resampling loop if you need an honest estimate. In
+<code>model$results</code>, caret’s <code>Rsquared</code> is the squared
+correlation between predictions and observations, not
+<code>1 - SSE/SST</code>.</p>
+<p>The default <code>alpha_seq</code> is
+<code>seq(0.1, 1, by = 0.1)</code>. It leaves out <code>alpha = 0</code>
+because ridge never sets a coefficient exactly to zero; if you add 0
+yourself and it wins, every predictor is “selected” and featR warns.
+<code>scores</code> are absolute coefficients on the scale of the
+columns as supplied (<code>NULL</code> for an outcome with more than two
+classes, where each predictor has one coefficient per class).
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> does not rescale them the way
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> does, so standardize the predictors first if you
+want to rank by <code>scores</code>.</p>
+<p>Rows with a missing outcome or any missing predictor are dropped
+before fitting. Factors are expanded into k - 1 dummy columns, and the
+selection names those columns. With <code>use_pca = TRUE</code> (and
+<code>nPCs</code> set), the model is fit on principal components that
+are recomputed inside every resample, and the selection then names
+components (<code>PC1</code>, <code>PC2</code>, …) rather than your
+columns.</p>
 </div>
 <div class="section level2">
 <h2 id="fs_randomforest">
 <code>fs_randomforest()</code><a class="anchor" aria-label="anchor" href="#fs_randomforest"></a>
 </h2>
-<p><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> splits the data, grows a forest on the
-training rows, and reports <strong>permutation importance</strong> plus
-metrics on the held-out rows. A forest <em>ranks</em> rather than
-<em>selects</em>. Unless you pass a <code>control$feature_select</code>
-hook, <code>selected</code> is every predictor, ordered by
-importance.</p>
+<p>A random forest averages many decision trees, each grown on a
+bootstrap sample with a random subset of predictors tried at each split.
+<a href="../reference/fs_randomforest.html"><code>fs_randomforest()</code></a>
+splits the data (<code>train_ratio = 0.75</code> by default, set through
+<code>control</code>), grows the forest on the training rows, and
+reports permutation importance plus metrics on the held-out rows.
+Permutation importance measures how much the forest’s error grows when
+one predictor’s values are shuffled.</p>
+<p><code>task</code> defaults to <code>"classification"</code>, because
+a numeric column can be a class label, so pass
+<code>task = "regression"</code> for a numeric outcome. featR warns when
+a numeric target meets the default.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">rf</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_randomforest.html">fs_randomforest</a></span><span class="op">(</span><span class="va">d</span>, <span class="st">"y"</span>, task <span class="op">=</span> <span class="st">"regression"</span>,</span>
 <span>                      control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>ntree <span class="op">=</span> <span class="fl">300</span><span class="op">)</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
@@ -217,12 +288,22 @@ importance.</p>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; $R2</span></span>
 <span><span class="co">#&gt; [1] 0.770357</span></span></code></pre></div>
-<p>The forest finds <code>x_nl</code>, which the linear methods cannot.
-To turn the ranking into a selection, pass a hook. It runs on the
-training rows only, so the held-out <code>details$metrics</code> stay
-honest. The out-of-bag <code>details$oob</code> does not: the forest is
-grown on the same training rows the hook just used, so with a hook that
-looks at the outcome the OOB error is optimistic.</p>
+<p>The forest ranks <code>x_nl</code> second, almost tied with
+<code>x2</code>, where the linear methods gave it a small coefficient.
+<code>x1</code> and <code>x1_copy</code> split their shared credit (18.1
+and 17.6), and the noise columns trail far behind, led by
+<code>x7</code> at 1.9. These scores are the mean increase in MSE
+divided by its standard error over trees; set
+<code>control$scale_importance = FALSE</code> for the unscaled version.
+Importance can also favor predictors with many distinct values, so treat
+close scores as ties.</p>
+<p>A forest ranks predictors without selecting any. Unless you supply a
+selection rule, <code>selected</code> is every predictor, ordered by
+importance. To turn the ranking into a selection, pass a function as
+<code>control$feature_select</code>. It receives the training rows as a
+data.table and returns the columns to keep, including the outcome. The
+hook below keeps a fixed list for illustration; a real rule would
+compute something from <code>dt</code>.</p>
 <div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">top5</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">dt</span><span class="op">)</span> <span class="op">{</span></span>
 <span>  <span class="va">keep</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x1"</span>, <span class="st">"x2"</span>, <span class="st">"x3"</span>, <span class="st">"x_nl"</span>, <span class="st">"x1_copy"</span><span class="op">)</span>  <span class="co"># any rule you like</span></span>
@@ -233,23 +314,37 @@ looks at the outcome the OOB error is optimistic.</p>
 <span>                          seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">rf_sel</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] "x_nl"    "x2"      "x1"      "x1_copy" "x3"</span></span></code></pre></div>
-<p><code>task</code> defaults to <code>"classification"</code>, because
-a numeric column can be a class label, so pass
-<code>task = "regression"</code> for a numeric outcome. featR warns when
-a numeric target meets the default. Permutation importance splits credit
-between correlated predictors (see <code>x1</code> and
-<code>x1_copy</code>) and can still favor predictors with many distinct
-values, so treat close scores as ties.</p>
+<p>The hook runs after the split and sees only the training rows, so the
+held-out <code>details$metrics</code> stay honest even when the rule
+looks at the outcome. The out-of-bag error in <code>details$oob</code>
+does not: the forest is grown on the same rows the hook just selected
+on, so after a hook that consults the outcome the OOB error is
+optimistic. <code>control$preprocess</code>, by contrast, runs on the
+full data before the split, so keep it to row-wise transformations.</p>
+<p>Missing predictor values are imputed by default with the median
+(numeric) or most common value (other types), learned on the training
+rows only. Rows with a missing outcome are dropped with a warning. With
+<code>n_cores</code> above 1 the forest is grown in pieces and combined,
+which discards the OOB results, so <code>details$oob</code> is
+<code>NULL</code>.</p>
 </div>
 <div class="section level2">
 <h2 id="fs_mars">
 <code>fs_mars()</code><a class="anchor" aria-label="anchor" href="#fs_mars"></a>
 </h2>
-<p><code><a href="../reference/fs_mars.html">fs_mars()</a></code> fits multivariate adaptive regression splines
-(earth) through caret with repeated cross-validation. It reports the
-predictors that the pruned model retains, and it evaluates on a held-out
-split. MARS finds non-linear effects and interactions on its own, using
-piecewise-linear hinge functions.</p>
+<p>MARS (multivariate adaptive regression splines) builds a model from
+piecewise-linear hinge functions, adding terms greedily and then pruning
+them back. It finds curved effects and, with <code>degree</code> above
+1, interactions on its own. <a href="../reference/fs_mars.html"><code>fs_mars()</code></a> fits it with
+the earth package through caret, tunes <code>degree</code> and
+<code>nprune</code> (the number of terms kept) by repeated
+cross-validation, evaluates on a held-out split
+(<code>train_ratio = 0.8</code>), and selects the predictors that appear
+in the pruned model. The task follows the outcome: numeric means
+regression, factor or character means classification.</p>
+<p>The defaults tune <code>degree = 1:3</code> with 5-fold
+cross-validation repeated 3 times. The example uses a smaller grid to
+keep it fast.</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">ma</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_mars.html">fs_mars</a></span><span class="op">(</span><span class="va">d</span>, <span class="st">"y"</span>, degree <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">2</span>, nprune <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">5</span>, <span class="fl">10</span>, <span class="fl">15</span><span class="op">)</span>,</span>
 <span>              number <span class="op">=</span> <span class="fl">3</span>, repeats <span class="op">=</span> <span class="fl">1</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
@@ -270,22 +365,39 @@ piecewise-linear hinge functions.</p>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; $corr</span></span>
 <span><span class="co">#&gt; [1] "x1"</span></span></code></pre></div>
-<p>Before fitting, <code><a href="../reference/fs_mars.html">fs_mars()</a></code> drops near-zero-variance
+<p>MARS found <code>x_nl</code> along with <code>x2</code>,
+<code>x3</code> and <code>x1_copy</code>, and kept none of the noise
+columns. <code>x1</code> is missing because of a filter that runs before
+the model is fit. <code><a href="../reference/fs_mars.html">fs_mars()</a></code> drops near-zero-variance
 predictors and one member of each pair correlated above
-<code>corr_cut</code> (default 0.95). It fits those filters on the
-training rows only, and <code>details$removed_predictors</code> records
-what went. Here one of <code>x1</code> and <code>x1_copy</code> is
-removed before the model ever sees it. The filter does not look at the
-outcome, so which one goes is arbitrary. For classification,
-<code><a href="../reference/fs_mars.html">fs_mars()</a></code> always up-samples the smaller classes, inside
-each resample. Test-set ROC and PR AUC are reported for binary outcomes
-when pROC and PRROC are installed.</p>
-<p>The reported regression <code>R2</code> is caret’s squared
-correlation between predictions and observations, not
-<code>1 - SSE/SST</code>. A biased model can still score well on it, so
-read it together with RMSE. <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> reports
-<code>1 - SSE/SST</code>, so the two <code>R2</code> values above are
-not on the same footing; compare the RMSEs.</p>
+<code>corr_cut</code> (default 0.95), and
+<code>details$removed_predictors</code> records what went. Both filters
+are fit on the training rows only, and neither looks at the outcome, so
+which of <code>x1</code> and <code>x1_copy</code> survives says nothing
+about which matters more. Set <code>corr_cut = 0</code> to turn the
+correlation filter off.</p>
+<p>The reported <code>R2</code> is caret’s squared correlation between
+predictions and observations, not <code>1 - SSE/SST</code>, and a biased
+model can still score well on it, so read it together with RMSE.
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> reports <code>1 - SSE/SST</code>, so the
+two <code>R2</code> values on this page are not comparable. RMSE is on
+the same scale for both (0.99 for MARS against 1.65 for the forest), but
+each comes from one split of a different size, so on small data treat
+the gap as rough.</p>
+<p>Rows with any missing value are dropped before anything else, so
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> needs fairly complete data. Data with more than
+<code>sample_size</code> rows (default 10000) are then randomly
+down-sampled to that size before the split.</p>
+<p>For classification <code><a href="../reference/fs_mars.html">fs_mars()</a></code> needs the e1071 package,
+and it up-samples the smaller classes inside each resample rather than
+before cross-validation. It treats the first factor level as the
+positive class for PR AUC, sensitivity and specificity, with no
+override, so use <code><a href="https://rdrr.io/r/stats/relevel.html" class="external-link">stats::relevel()</a></code> to change it.
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> uses the second level unless you set
+<code>control$positive_class</code>, so those class-specific numbers do
+not compare across the two functions (ROC AUC does). Test-set ROC and PR
+AUC are reported for binary outcomes when pROC and PRROC are
+installed.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

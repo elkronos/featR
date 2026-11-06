@@ -5,12 +5,12 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<title>Dimensionality reduction: fs_pca() and fs_svd() • featR</title>
+<title>Dimensionality reduction • featR</title>
 <script src="../deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
 <script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
-<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Dimensionality reduction: fs_pca() and fs_svd()">
+<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Dimensionality reduction">
 </head>
 <body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -32,23 +32,22 @@
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -71,7 +70,7 @@
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
 
-      <h1>Dimensionality reduction: fs_pca() and fs_svd()</h1>
+      <h1>Dimensionality reduction</h1>
             
       
       <small class="dont-index">Source: <a href="https://github.com/elkronos/featR/blob/main/vignettes/articles/dimensionality-reduction.Rmd" class="external-link"><code>vignettes/articles/dimensionality-reduction.Rmd</code></a></small>
@@ -80,22 +79,34 @@
 
     
     
-<p><code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> do
-<strong>not</strong> select features. They replace the original columns
-with a few new ones, each a linear combination of <em>all</em> the
-inputs. You still have to measure every variable, and the components are
-chosen without reference to any outcome. The highest-variance directions
-need not be the ones that predict anything.</p>
-<p>Both functions return a plain list rather than an
-<code>fs_result</code>.</p>
+<p><code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> reduce dimension
+without selecting features. They replace the original columns with a few
+new ones, each a weighted sum of all the inputs. You still have to
+measure every variable, and the new columns are chosen without reference
+to any outcome: they point in the directions of largest variance, which
+need not be the directions that predict anything. If you need to name
+the features you keep, use one of the <a href="filters.html">filters</a>, <a href="regularization.html">regularization methods</a>, or <a href="wrappers.html">wrappers</a> instead.</p>
+<p>Use <code><a href="../reference/fs_pca.html">fs_pca()</a></code> on a data frame when you want tidy, labeled
+output: variance explained, loadings, scores next to your label columns,
+and a plot. Use <code><a href="../reference/fs_svd.html">fs_svd()</a></code> on a numeric matrix when you want
+the raw singular values and vectors, for compression or as input to your
+own code.</p>
+<p>Both functions return a plain list, not an <code>fs_result</code>, so
+<code><a href="../reference/selected.html">selected()</a></code> and the other <code>fs_result</code> helpers do
+not apply.</p>
 <div class="section level2">
 <h2 id="fs_pca">
 <code>fs_pca()</code><a class="anchor" aria-label="anchor" href="#fs_pca"></a>
 </h2>
-<p><code><a href="../reference/fs_pca.html">fs_pca()</a></code> runs a PCA on the numeric columns of a data
-frame. Character and factor columns are kept aside as labels. Incomplete
-rows and zero-variance columns are dropped before the decomposition, and
-<code>meta</code> records what was used.</p>
+<p>Principal component analysis (PCA) finds the orthogonal directions
+along which the data vary most. The first component is the direction of
+largest variance, the second is the largest among directions
+perpendicular to the first, and so on.</p>
+<p><a href="../reference/fs_pca.html"><code>fs_pca()</code></a> runs a
+PCA on the numeric columns of a data frame. Character, factor, logical,
+and date columns are kept aside as labels, as is the column named in
+<code>label_col</code>. By default it keeps two components; set
+<code>num_pc</code> for more.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">pca</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_pca.html">fs_pca</a></span><span class="op">(</span><span class="va">iris</span>, num_pc <span class="op">=</span> <span class="fl">2</span>, label_col <span class="op">=</span> <span class="st">"Species"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">pca</span><span class="op">)</span></span>
@@ -117,60 +128,108 @@ rows and zero-variance columns are dropped before the decomposition, and
 <span><span class="co">#&gt; 3: -2.356335  0.3407664  setosa</span></span>
 <span><span class="co">#&gt; 4: -2.291707  0.5953999  setosa</span></span>
 <span><span class="co">#&gt; 5: -2.381863 -0.6446757  setosa</span></span>
-<span><span class="co">#&gt; 6: -2.068701 -1.4842053  setosa</span></span>
-<span><span class="va">pca</span><span class="op">$</span><span class="va">meta</span><span class="op">$</span><span class="va">n_rows_used</span></span>
-<span><span class="co">#&gt; [1] 150</span></span></code></pre></div>
-<div class="section level3">
-<h3 id="reading-the-output">Reading the output<a class="anchor" aria-label="anchor" href="#reading-the-output"></a>
-</h3>
+<span><span class="co">#&gt; 6: -2.068701 -1.4842053  setosa</span></span></code></pre></div>
+<p>How to read the output:</p>
 <ul>
 <li>
-<code>var_explained</code> is the share of the
-<strong>total</strong> variance each retained component carries. With
-two components out of four it sums to less than 1.</li>
+<code>var_explained</code> is the share of the total variance each
+retained component carries. On <code>iris</code> the first two
+components carry 73.0% and 22.9%, so together they keep about 96% of the
+variance in the four measurements. The vector sums to 1 only when you
+keep every component.</li>
 <li>
-<code>pc_loadings</code> holds the eigenvectors
-(<code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">prcomp()</a></code>’s <code>rotation</code>), one row per input
-column. Signs are arbitrary. A component and its negation are the same
-component.</li>
+<code>pc_loadings</code> holds the weights (<code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">prcomp()</a></code>’s
+<code>rotation</code>), one row per input column. PC1 weights the petal
+measurements and sepal length about equally (0.52 to 0.58), while PC2 is
+mostly sepal width (-0.92). The sign of a component is arbitrary: a
+component and its negation describe the same direction, so compare
+loadings within a column, not their signs across runs.</li>
 <li>
-<code>pc_scores</code> and <code>pca_df</code> hold the coordinates
-of each observation.</li>
+<code>pc_scores</code> holds each observation’s coordinates on the
+components, and <code>pca_df</code> is the same scores with the label
+columns bound alongside.</li>
 </ul>
-<p>By default columns are centered <strong>and scaled</strong>
-(<code>scale_data = TRUE</code>), so the PCA is on the correlation
-matrix. Leave that on unless the columns share meaningful units.
-Otherwise the column with the largest variance dominates.</p>
+<p>By default columns are centered and scaled
+(<code>scale_data = TRUE</code>), so the PCA runs on the correlation
+matrix. Leave scaling on unless every column is in the same meaningful
+units; otherwise the column with the largest variance dominates the
+first component. Scaling without centering
+(<code>scale_data = TRUE, center_data = FALSE</code>) is an error.</p>
+<div class="section level3">
+<h3 id="missing-values-and-constant-columns">Missing values and constant columns<a class="anchor" aria-label="anchor" href="#missing-values-and-constant-columns"></a>
+</h3>
+<p>Before the decomposition, <code><a href="../reference/fs_pca.html">fs_pca()</a></code> drops every row with
+a missing value in the numeric columns, and it drops every column with
+zero variance with a warning. Infinite values are an error.
+<code>meta</code> records what was used:</p>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">pca</span><span class="op">$</span><span class="va">meta</span><span class="op">$</span><span class="va">n_rows_used</span></span>
+<span><span class="co">#&gt; [1] 150</span></span>
+<span><span class="va">pca</span><span class="op">$</span><span class="va">meta</span><span class="op">$</span><span class="va">numeric_cols</span></span>
+<span><span class="co">#&gt; [1] "Sepal.Length" "Sepal.Width"  "Petal.Length" "Petal.Width"</span></span></code></pre></div>
+<p><code>iris</code> has no missing values, so all 150 rows are used. On
+real data, check <code>meta$n_rows_used</code> and
+<code>meta$rows_kept</code>: a few gappy columns can remove most of the
+rows without an error. <code>num_pc</code> cannot exceed the number of
+usable columns, or the number of usable rows minus one.</p>
 </div>
 <div class="section level3">
 <h3 id="plotting">Plotting<a class="anchor" aria-label="anchor" href="#plotting"></a>
 </h3>
-<p>A ggplot of PC1 against PC2 is built whenever a
-<code>label_col</code> is supplied, two or more components are kept, and
-ggplot2 is installed. <code>plot = TRUE</code> also prints it:</p>
-<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<p><code><a href="../reference/fs_pca.html">fs_pca()</a></code> builds a ggplot of PC1 against PC2, colored by
+<code>label_col</code>, whenever a <code>label_col</code> is supplied,
+at least two components are kept, and ggplot2 is installed. The plot is
+returned in <code>$plot</code>; <code>plot = TRUE</code> also prints
+it.</p>
+<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">pca</span><span class="op">$</span><span class="va">plot</span></span></code></pre></div>
-<p><img src="dimensionality-reduction_files/figure-html/unnamed-chunk-2-1.png" class="r-plt" alt="" width="576"></p>
+<p><img src="dimensionality-reduction_files/figure-html/unnamed-chunk-3-1.png" class="r-plt" alt="" width="576"></p>
+<p>When no plot can be built, the list has no <code>plot</code> element
+at all, so test with <code>"plot" %in% names(pca)</code>.</p>
 </div>
 <div class="section level3">
 <h3 id="large-data">Large data<a class="anchor" aria-label="anchor" href="#large-data"></a>
 </h3>
-<p>Below 10 million cells, <code><a href="../reference/fs_pca.html">fs_pca()</a></code> uses
-<code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">stats::prcomp()</a></code>. At or above that size it uses
-<code><a href="https://privefl.github.io/bigstatsr/reference/big_SVD.html" class="external-link">bigstatsr::big_SVD()</a></code> on a temporary file-backed matrix, if
-bigstatsr is installed, and computes only the requested components. In
-that case the total-variance denominator is computed from column
-statistics, so <code>var_explained</code> still means share of the
-whole.</p>
+<p>Below 10 million cells (rows times numeric columns),
+<code><a href="../reference/fs_pca.html">fs_pca()</a></code> uses <code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">stats::prcomp()</a></code>. At or above
+that size it uses <code><a href="https://privefl.github.io/bigstatsr/reference/big_SVD.html" class="external-link">bigstatsr::big_SVD()</a></code> on a temporary
+file-backed matrix, if bigstatsr is installed, and computes only the
+requested components; without bigstatsr it falls back to
+<code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">prcomp()</a></code>. This engine can return at most one fewer
+component than there are columns, so <code>num_pc</code> equal to the
+number of columns is an error on large data. The large-data engine
+recovers the total variance from column statistics, so
+<code>var_explained</code> is still the share of the whole and not of
+the components that were computed.</p>
+</div>
+<div class="section level3">
+<h3 id="leakage">Leakage<a class="anchor" aria-label="anchor" href="#leakage"></a>
+</h3>
+<p>PCA never looks at the outcome, but it does learn from the rows it
+sees: the centering, scaling, and loadings all come from the data. If
+you fit it on all rows and then cross-validate a model on the scores,
+the test rows have shaped the features. <code><a href="../reference/fs_pca.html">fs_pca()</a></code> does not
+return the centering and scaling values or a way to project new rows. To
+apply a PCA learned on training rows to test rows, fit
+<code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">stats::prcomp()</a></code> on the training rows and call
+<code><a href="https://rdrr.io/r/stats/predict.html" class="external-link">predict()</a></code> on it. See <a href="validation-and-leakage.html">Validation and leakage</a> for the
+general rule.</p>
 </div>
 </div>
 <div class="section level2">
 <h2 id="fs_svd">
 <code>fs_svd()</code><a class="anchor" aria-label="anchor" href="#fs_svd"></a>
 </h2>
-<p><code><a href="../reference/fs_svd.html">fs_svd()</a></code> is the lower-level tool. It takes a numeric
-matrix <code>x</code> and returns singular values and vectors:</p>
-<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<p>The singular value decomposition (SVD) factors a matrix
+<code>X</code> into <code>U D V'</code>: <code>D</code> holds the
+singular values in decreasing order, and the columns of <code>U</code>
+and <code>V</code> are the left and right singular vectors. Keeping the
+first <code>k</code> triplets gives the best rank-<code>k</code>
+approximation of <code>X</code>.</p>
+<p><a href="../reference/fs_svd.html"><code>fs_svd()</code></a> is the
+lower-level tool. It takes a numeric matrix <code>x</code> (or an
+all-numeric data frame) and returns the singular values and vectors:</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">m</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">as.matrix</a></span><span class="op">(</span><span class="va">mtcars</span><span class="op">)</span></span>
 <span><span class="va">s</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_svd.html">fs_svd</a></span><span class="op">(</span><span class="va">m</span>, n_singular_values <span class="op">=</span> <span class="fl">3</span>, scale_input <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">s</span><span class="op">$</span><span class="va">singular_values</span>, <span class="fl">3</span><span class="op">)</span></span>
@@ -179,11 +238,27 @@ matrix <code>x</code> and returns singular values and vectors:</p>
 <span><span class="co">#&gt; [1] 32  3</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="va">s</span><span class="op">$</span><span class="va">right_singular_vectors</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] 11  3</span></span></code></pre></div>
+<p>The left singular vectors have one row per observation (32 cars) and
+the right singular vectors one row per column (11 variables), each with
+one column per kept triplet. By default,
+<code>n_singular_values = NULL</code> keeps all of them,
+<code>min(dim(x))</code>.</p>
+<p><code>x</code> must not contain <code>NA</code>, <code>NaN</code>, or
+<code>Inf</code>. Unlike <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, <code><a href="../reference/fs_svd.html">fs_svd()</a></code>
+drops nothing for you, so remove or impute missing values first.</p>
 <p><code>scale_input = TRUE</code> (the default) centers and scales the
-columns first, so the triplets factorize <code>scale(x)</code>, not
-<code>x</code>. The squared singular values divided by
-<code>n - 1</code> are the PCA eigenvalues of the scaled data:</p>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+columns first, so the triplets factor <code>scale(x)</code>, not
+<code>x</code>. The column means and standard deviations are not
+returned; keep them yourself if you need to map results back to the
+original units. The other options are <code>FALSE</code> (use
+<code>x</code> as is), <code>"center"</code>, and <code>"scale"</code>,
+which follows <code><a href="https://rdrr.io/r/base/scale.html" class="external-link">base::scale()</a></code> and, without centering, divides
+by the root mean square rather than the standard deviation. The dividing
+forms stop with an error if a column has zero variance.</p>
+<p>On centered and scaled data, the squared singular values divided by
+<code>n - 1</code> are the PCA eigenvalues, so <code><a href="../reference/fs_svd.html">fs_svd()</a></code> and
+<code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">prcomp()</a></code> agree:</p>
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">all_sv</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_svd.html">fs_svd</a></span><span class="op">(</span><span class="va">m</span><span class="op">)</span><span class="op">$</span><span class="va">singular_values</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">all_sv</span><span class="op">^</span><span class="fl">2</span> <span class="op">/</span> <span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/nrow.html" class="external-link">nrow</a></span><span class="op">(</span><span class="va">m</span><span class="op">)</span> <span class="op">-</span> <span class="fl">1</span><span class="op">)</span>, <span class="fl">4</span><span class="op">)</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span></span>
 <span><span class="co">#&gt; [1] 6.6084 2.6505 0.6272</span></span>
@@ -193,22 +268,29 @@ columns first, so the triplets factorize <code>scale(x)</code>, not
 <h3 id="exact-or-approximate">Exact or approximate<a class="anchor" aria-label="anchor" href="#exact-or-approximate"></a>
 </h3>
 <p><code>svd_method = "auto"</code> uses <code><a href="https://rdrr.io/r/base/svd.html" class="external-link">base::svd()</a></code> unless
-you ask for fewer singular values than <code>min(dim(x))</code>
-<strong>and</strong> the matrix is larger than
-<code>svd_threshold</code> (100) in its smaller dimension. In that case
-it uses <code><a href="https://rdrr.io/pkg/RSpectra/man/svds.html" class="external-link">RSpectra::svds()</a></code>, which computes only the leading
-triplets. <code>svd_method = "approx"</code> forces the approximate
-solver when it is applicable.</p>
-<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+both of these hold: you ask for fewer singular values than
+<code>min(dim(x))</code>, and the smaller dimension of the matrix is
+larger than <code>svd_threshold</code> (default 100). Then it uses
+<code><a href="https://rdrr.io/pkg/RSpectra/man/svds.html" class="external-link">RSpectra::svds()</a></code>, which computes only the leading triplets
+and needs the RSpectra package. <code>svd_method = "approx"</code>
+forces the approximate solver; if you ask for all
+<code>min(dim(x))</code> values it falls back to the exact solver with a
+message, because <code><a href="https://rdrr.io/pkg/RSpectra/man/svds.html" class="external-link">RSpectra::svds()</a></code> cannot return the full
+set. If RSpectra converges on fewer values than requested, featR warns
+and recomputes them exactly.</p>
+<p>On a 400 by 150 matrix, the five leading singular values from both
+solvers agree to within <code>1e-6</code>:</p>
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">1</span><span class="op">)</span></span>
 <span><span class="va">big</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="fl">400</span> <span class="op">*</span> <span class="fl">150</span><span class="op">)</span>, <span class="fl">400</span>, <span class="fl">150</span><span class="op">)</span></span>
 <span><span class="va">approx</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_svd.html">fs_svd</a></span><span class="op">(</span><span class="va">big</span>, n_singular_values <span class="op">=</span> <span class="fl">5</span>, svd_method <span class="op">=</span> <span class="st">"approx"</span><span class="op">)</span></span>
 <span><span class="va">exact</span>  <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_svd.html">fs_svd</a></span><span class="op">(</span><span class="va">big</span>, n_singular_values <span class="op">=</span> <span class="fl">5</span>, svd_method <span class="op">=</span> <span class="st">"exact"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/all.equal.html" class="external-link">all.equal</a></span><span class="op">(</span><span class="va">approx</span><span class="op">$</span><span class="va">singular_values</span>, <span class="va">exact</span><span class="op">$</span><span class="va">singular_values</span>, tolerance <span class="op">=</span> <span class="fl">1e-6</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] TRUE</span></span></code></pre></div>
-<p>Singular vectors are unique only up to sign, so compare them with
-<code><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs()</a></code> or through reconstructions, not element by
-element.</p>
+<p>Singular vectors are unique only up to sign, so the two solvers, or
+two platforms, can return columns with opposite signs. Compare vectors
+with <code><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs()</a></code> or through the reconstructed matrix, not element
+by element.</p>
 </div>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

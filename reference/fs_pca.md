@@ -1,17 +1,10 @@
 # Principal component analysis with tidy results and optional plotting
 
-Answers "how much of the spread in these numeric columns lives in a
-handful of directions, and which columns drive them?" Runs a PCA on the
-numeric columns of `data`. Non-numeric columns (character, factor,
-logical, Date, ...) are excluded from the feature set and kept as label
-candidates; an explicitly supplied `label_col` (numeric or not) is
-likewise excluded from the features and only used for labeling. Rows
-with missing values in the numeric columns and zero-variance columns are
-dropped before the decomposition; a column counts as zero-variance when
-its standard deviation is at most `1000 * .Machine$double.eps` (about
-2e-13) times its largest absolute value, so a column that is constant up
-to floating-point round-off is dropped too, while small-unit or
-large-offset columns (timestamps, say) are kept.
+Runs a principal component analysis (PCA) on the numeric columns of
+`data` and returns loadings, scores, and the share of variance each
+retained component explains. PCA finds the directions of greatest spread
+in the data; use it to see how much of that spread a few components
+carry and which columns drive them.
 
 ## Usage
 
@@ -32,32 +25,30 @@ fs_pca(
 - data:
 
   A data.frame or data.table with at least two rows and at least one
-  numeric column. Column names must be unique and non-empty. Non-numeric
-  (label) columns must not be named like a retained score column (`PC1`,
-  `PC2`, ...), which would shadow them in `pca_df`; that is an error.
-  Zero-variance detection is relative to each column's magnitude and
-  immune to [`sd()`](https://rdrr.io/r/stats/sd.html) over/underflow, so
-  columns in extreme units (beyond about `1e154` or below `1e-154`) are
-  kept; with `scale_data = FALSE` their variance cannot be represented
-  and they are an error.
+  numeric column. Column names must be unique and non-empty. A
+  non-numeric (label) column named like a retained score column (`PC1`,
+  `PC2`, ...) would be hidden by the scores in `pca_df`, so that is an
+  error. Columns in extreme units (beyond about `1e154` or below
+  `1e-154`) are kept, because the zero-variance check is relative to
+  each column's magnitude; with `scale_data = FALSE` their variance
+  cannot be represented and they are an error.
 
 - num_pc:
 
   Number of principal components to retain: a whole number `>= 1`, or
-  `NULL` (the default) to retain `min(2, max_possible)`. `max_possible`
-  is `min(nrow - 1, ncol)` of the *usable* numeric data, that is after
-  incomplete rows and zero-variance columns have been dropped. Explicit
-  values larger than `max_possible` raise an error.
+  `NULL` (the default) for `min(2, max_possible)`. `max_possible` is
+  `min(nrow - 1, ncol)` of the usable numeric data, after incomplete
+  rows and zero-variance columns are dropped. A larger explicit value is
+  an error.
 
 - scale_data:
 
-  Logical; scale numeric columns to unit variance. Cannot be `TRUE`
-  while `center_data` is `FALSE`:
+  Logical; scale numeric columns to unit variance. Default `TRUE`.
+  `scale_data = TRUE` with `center_data = FALSE` is an error, because
   [`stats::prcomp()`](https://rdrr.io/r/stats/prcomp.html) and
   [`bigstatsr::big_scale()`](https://privefl.github.io/bigstatsr/reference/big_scale.html)
-  treat uncentered scaling differently (the latter ignores it), so
-  allowing it would make the decomposition depend on which engine the
-  data size selected. That combination is an error. Default `TRUE`.
+  handle uncentered scaling differently (the latter ignores it), and the
+  result would depend on which engine the data size selected.
 
 - center_data:
 
@@ -66,96 +57,110 @@ fs_pca(
 - label_col:
 
   Optional single string naming a column of `data` used to label and
-  color points. The column is excluded from the PCA features but carried
-  into `pca_df`. Default `NULL`, which means no labels and therefore no
-  plot.
+  color points. It is left out of the PCA features and carried into
+  `pca_df`. Default `NULL`: no labels, and therefore no plot.
 
 - plot:
 
-  Logical; if `TRUE`, the PC1 vs PC2 scatterplot is printed. Default
-  `FALSE`, unconditionally: it does not depend on whether `label_col`
-  was supplied. The plot object is returned in `$plot` either way
-  whenever one can be built (see Details).
+  Logical; if `TRUE`, print the PC1 vs PC2 scatterplot. Default `FALSE`,
+  whether or not `label_col` is supplied. The plot object is returned in
+  `$plot` either way whenever one can be built (see Details).
 
 - verbose:
 
-  Logical; emit progress messages (the non-numeric columns held back as
-  labels, which engine was chosen, and any fallback from 'bigstatsr').
+  Logical; print progress messages naming the non-numeric columns held
+  back as labels, the engine chosen, and any fallback from 'bigstatsr'.
   Default `FALSE`.
 
 ## Value
 
-A plain list. `fs_pca()` is dimensionality reduction rather than feature
-selection, so it returns its own PCA structure and not the `fs_result`
-object produced by the package's selection functions. The components
-are:
+A plain list, not an `fs_result`: `fs_pca()` reduces dimensions rather
+than selecting features, so it has no `selected` set to report. The
+components are:
 
 - `pc_loadings`: numeric matrix of variable loadings, one row per
-  surviving numeric feature and one column per retained PC, with the
-  feature names as row names and `PC1`, `PC2`, ... as column names.
+  retained numeric feature (named) and one column per retained component
+  (`PC1`, `PC2`, ...).
 
 - `pc_scores`: numeric matrix of observation scores, one row per kept
-  observation and one column per retained PC.
+  observation and one column per retained component.
 
 - `var_explained`: numeric vector of length `num_pc`, the proportion of
-  total variance carried by each retained PC (see Details, especially
-  for the large-data engine).
+  total variance carried by each retained component (see Details).
 
 - `pca_df`: data.table of the scores with the label columns (every
   non-numeric column, plus `label_col`) bound alongside, restricted to
-  the rows that were kept.
+  the kept rows.
 
 - `meta`: list with `numeric_cols` (the features actually decomposed),
   `rows_kept` (logical vector over the rows of `data`), `n_rows_used`,
   and `n_cols_used`.
 
-- `plot`: the ggplot object. Present only when a plot could be built,
-  that is when `label_col` was supplied, at least two PCs were retained,
-  and 'ggplot2' is available. Absent otherwise, so test for it with
-  `"plot" %in% names(res)` rather than assuming it is there.
+- `plot`: the ggplot object, present only when a plot could be built (a
+  `label_col` was supplied, at least two components were retained, and
+  'ggplot2' is installed). Test for it with `"plot" %in% names(res)`.
 
 ## Details
 
-The caveat is what PCA is. This is unsupervised dimensionality
-reduction, not feature selection: every component is a linear
-combination of *all* the retained numeric columns, chosen without
-reference to any outcome. A PCA therefore does not shorten the list of
-variables you have to measure, and the leading components are the
-highest-variance directions, which need not be the ones related to a
-response.
+PCA is unsupervised dimensionality reduction, not feature selection.
+Every component is a linear combination of all the retained numeric
+columns, chosen without reference to any outcome. A PCA therefore does
+not shorten the list of variables you have to measure, and the leading
+components are the highest-variance directions, which need not be the
+ones related to a response.
+
+Before the decomposition:
+
+- Non-numeric columns (character, factor, logical, Date, ...) are left
+  out of the features and carried along as labels. An explicit
+  `label_col`, numeric or not, is also left out of the features.
+
+- Rows with a missing value in any numeric feature column are dropped.
+  An infinite value in a feature column is an error.
+
+- Zero-variance columns are dropped with a warning. A column counts as
+  zero-variance when its standard deviation is at most
+  `1000 * .Machine$double.eps` (about 2e-13) times its largest absolute
+  value. A column that is constant up to floating-point round-off is
+  therefore dropped, while small-unit or large-offset columns
+  (timestamps, say) are kept.
 
 Data with fewer than 1e7 cells is decomposed with
 [`stats::prcomp()`](https://rdrr.io/r/stats/prcomp.html). From 1e7 cells
-up,
+up, if the suggested package 'bigstatsr' is installed,
 [`bigstatsr::big_SVD()`](https://privefl.github.io/bigstatsr/reference/big_SVD.html)
 runs on a temporary file-backed matrix (the backing file is deleted when
-the call returns) if the suggested package 'bigstatsr' is installed;
-otherwise the call falls back to
-[`prcomp()`](https://rdrr.io/r/stats/prcomp.html), which is reported
-only when `verbose = TRUE`.
+the call returns) and can compute at most one fewer component than there
+are usable columns. Without 'bigstatsr' the call falls back to
+[`prcomp()`](https://rdrr.io/r/stats/prcomp.html), and says so only when
+`verbose = TRUE`.
 
-`var_explained` reports the proportion of *total* variance explained by
-each retained component under both engines, so it sums to 1 only when
-every available component is retained; with the default two components
-it sums to the fraction those two capture. The engines obtain that
-denominator differently.
+`var_explained` is the proportion of total variance explained by each
+retained component under both engines. It sums to 1 only when every
+available component is retained; with the default two components it sums
+to the fraction those two capture.
 [`prcomp()`](https://rdrr.io/r/stats/prcomp.html) computes every
-component, so the total is the sum of all the eigenvalues. `big_SVD()`
-computes only the top `num_pc` singular values, which are *not* the
-whole spectrum, so the total variance is recovered separately from the
-column statistics of the (implicitly centered and scaled) matrix. Under
-the 'bigstatsr' engine in particular, read the entries as shares of the
-whole and never as shares of the components that happened to be
-computed.
+component, so the total is the sum of all eigenvalues. `big_SVD()`
+computes only the top `num_pc` singular values, so the total is
+recovered separately from the column statistics of the (implicitly
+centered and scaled) matrix. Under either engine, read the entries as
+shares of the whole, never as shares of the components that happened to
+be computed.
 
 `plot` controls printing only, never construction. Whenever a plot can
-be built at all (a `label_col` was supplied, at least two components
-were retained, and the suggested package 'ggplot2' is installed) the
-ggplot object is returned in `$plot`, whether or not `plot` is `TRUE`.
-Setting `plot = TRUE` additionally prints it, and in that case 'ggplot2'
-is required: its absence becomes an error rather than a silently missing
-`$plot`. `plot = TRUE` without a `label_col`, or with fewer than two
-retained components, warns and skips the plot.
+be built (a `label_col` was supplied, at least two components were
+retained, and the suggested package 'ggplot2' is installed), the ggplot
+object is returned in `$plot`, whatever the value of `plot`.
+`plot = TRUE` also prints it and makes 'ggplot2' required: its absence
+is then an error rather than a missing `$plot`. `plot = TRUE` without a
+`label_col`, or with fewer than two retained components, warns and skips
+the plot.
+
+## See also
+
+The [Dimensionality
+reduction](https://elkronos.github.io/featR/articles/dimensionality-reduction.html)
+guide, which runs this function on a worked example.
 
 ## Examples
 

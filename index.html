@@ -36,23 +36,22 @@
 <li class="nav-item"><a class="nav-link" href="articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="reference/index.html">Reference</a></li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="news/index.html">Changelog</a></li>
@@ -72,191 +71,144 @@
   <main id="main" class="col-md-9"><div class="section level1">
 <div class="page-header"><h1 id="featr">featR<a class="anchor" aria-label="anchor" href="#featr"></a>
 </h1></div>
-<p>A unified R package of feature-selection methods: statistical filters, regularization, model-based wrappers, and dimensionality reduction — all behind <strong>one calling convention</strong> and <strong>one return type</strong>.</p>
-<p>Heavy modeling engines (brms, caret, glmnet, randomForest, …) are optional <strong>Suggests</strong>; each function checks for what it needs and tells you what to install.</p>
-<p><strong>Documentation:</strong> <a href="https://elkronos.github.io/featR/" class="uri">https://elkronos.github.io/featR/</a>. It has the function reference, a getting-started guide, method guides for every family, and articles on validation and reproducibility.</p>
+<p><a href="https://CRAN.R-project.org/package=featR" class="external-link"><img src="https://www.r-pkg.org/badges/version/featR" alt="CRAN status"></a></p>
+<p>featR puts 14 feature-selection methods for R behind one calling convention and one return type: statistical filters, regularized and tree-based models, and wrappers, plus two dimensionality-reduction helpers. Every supervised selection function takes <code>(data, target, ...)</code> and returns an <code>fs_result</code>, so comparing the lasso with Boruta or recursive feature elimination is a one-word change. The modeling engines (glmnet, caret, Boruta, randomForest, brms, and others) are optional; each function checks for the one it needs and tells you what to install.</p>
+<p>Documentation: <a href="https://elkronos.github.io/featR/" class="uri">https://elkronos.github.io/featR/</a></p>
 <div class="section level2">
 <h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
 </h2>
+<p>Install the released version from CRAN:</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># install.packages("devtools")</span></span>
-<span><span class="fu">devtools</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"elkronos/featR"</span><span class="op">)</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="st">"featR"</span><span class="op">)</span></span></code></pre></div>
+<p>Or the development version from GitHub:</p>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># install.packages("remotes")</span></span>
+<span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"elkronos/featR"</span><span class="op">)</span></span></code></pre></div>
 </div>
 <div class="section level2">
-<h2 id="the-convention">The convention<a class="anchor" aria-label="anchor" href="#the-convention"></a>
+<h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
 </h2>
-<p>Every selection function takes the data first and the <strong>name</strong> of the target column second, and returns the same object:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>fs_<span class="sc">&lt;</span>method<span class="sc">&gt;</span>(data, target, <span class="sc">&lt;</span>method options<span class="sc">&gt;</span>, ...)</span></code></pre></div>
-<p>Housekeeping arguments come last. Every function takes <code>verbose</code>. Functions that use randomness take <code>seed = NULL</code>, and functions that can run in parallel take <code>n_cores</code> and/or <code>parallel</code>. The <a href="https://elkronos.github.io/featR/articles/choosing-a-method.html">method guide</a> has a table showing exactly which function accepts which. Functions with no outcome, <code><a href="reference/fs_unsupervised.html">fs_unsupervised()</a></code>, <code><a href="reference/fs_correlation.html">fs_correlation()</a></code>, <code><a href="reference/fs_pca.html">fs_pca()</a></code>, and <code><a href="reference/fs_svd.html">fs_svd()</a></code>, take no <code>target</code>.</p>
+<p>Keep the <code>mtcars</code> columns correlated with <code>mpg</code> above 0.5, then drop the redundant ones:</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/elkronos/featR" class="external-link">featR</a></span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">res</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, nfolds <span class="op">=</span> <span class="fl">5</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
+<span><span class="va">relevant</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/fs_supervised.html">fs_supervised</a></span><span class="op">(</span><span class="va">mtcars</span>, target <span class="op">=</span> <span class="st">"mpg"</span>, threshold <span class="op">=</span> <span class="fl">0.5</span><span class="op">)</span></span>
+<span><span class="va">pruned</span>   <span class="op">&lt;-</span> <span class="fu"><a href="reference/fs_correlation.html">fs_correlation</a></span><span class="op">(</span><span class="va">mtcars</span><span class="op">[</span>, <span class="fu"><a href="reference/selected.html">selected</a></span><span class="op">(</span><span class="va">relevant</span><span class="op">)</span><span class="op">]</span>, threshold <span class="op">=</span> <span class="fl">0.8</span><span class="op">)</span></span>
+<span><span class="fu"><a href="reference/selected.html">selected</a></span><span class="op">(</span><span class="va">pruned</span><span class="op">)</span></span>
+<span><span class="co">#&gt; [1] "hp"   "drat" "wt"   "vs"   "am"   "carb"</span></span>
 <span></span>
-<span><span class="va">res</span>               <span class="co"># &lt;fs_result&gt; lasso (regression), with the selected features</span></span>
-<span><span class="fu"><a href="reference/selected.html">selected</a></span><span class="op">(</span><span class="va">res</span><span class="op">)</span>     <span class="co"># character vector of chosen features</span></span>
-<span><span class="va">res</span><span class="op">$</span><span class="va">scores</span>        <span class="co"># per-feature scores, comparable within a method</span></span>
-<span><span class="va">res</span><span class="op">$</span><span class="va">model</span>         <span class="co"># the fitted model (fs_lasso keeps it only with return_model = TRUE)</span></span>
-<span><span class="va">res</span><span class="op">$</span><span class="va">details</span>       <span class="co"># everything method-specific</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">res</span><span class="op">)</span>      <span class="co"># ranked score table, selected features marked</span></span></code></pre></div>
-<p>Because the shape is shared, methods are interchangeable:</p>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">runs</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span></span>
-<span>  lasso    <span class="op">=</span> <span class="fu"><a href="reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, nfolds <span class="op">=</span> <span class="fl">5</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span>,</span>
-<span>  stepwise <span class="op">=</span> <span class="fu"><a href="reference/fs_stepwise.html">fs_stepwise</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span><span class="op">)</span>,</span>
-<span>  rfe      <span class="op">=</span> <span class="fu"><a href="reference/fs_recursivefeature.html">fs_recursivefeature</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, sizes <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">2</span>, <span class="fl">4</span><span class="op">)</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
-<span><span class="op">)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">lapply</a></span><span class="op">(</span><span class="va">runs</span>, <span class="va">selected</span><span class="op">)</span></span></code></pre></div>
-<p>Functions are <strong>sequential by default</strong> (parallelism is opt-in and capped at the detected core count), <strong>never seed the RNG</strong> unless you pass <code>seed</code> (and then restore your RNG state on exit), and signal progress with suppressible <code><a href="https://rdrr.io/r/base/message.html" class="external-link">message()</a></code>s.</p>
+<span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">pruned</span><span class="op">)</span>   <span class="co"># ranked scores, kept features marked</span></span>
+<span></span>
+<span><span class="co"># Same question, different method (needs glmnet)</span></span>
+<span><span class="fu"><a href="reference/selected.html">selected</a></span><span class="op">(</span><span class="fu"><a href="reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">mtcars</span>, target <span class="op">=</span> <span class="st">"mpg"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="co">#&gt; [1] "wt"   "cyl"  "hp"   "am"   "carb" "drat"</span></span></code></pre></div>
+<p>The <a href="https://elkronos.github.io/featR/articles/featR.html">Getting started guide</a> walks through this example and the calling convention.</p>
 </div>
 <div class="section level2">
 <h2 id="functions">Functions<a class="anchor" aria-label="anchor" href="#functions"></a>
 </h2>
-<div class="section level3">
-<h3 id="filters">Filters<a class="anchor" aria-label="anchor" href="#filters"></a>
-</h3>
 <table class="table">
 <colgroup>
-<col width="50%">
-<col width="50%">
+<col width="33%">
+<col width="33%">
+<col width="33%">
 </colgroup>
 <thead><tr>
+<th>Family</th>
 <th>Function</th>
 <th>What it does</th>
 </tr></thead>
 <tbody>
 <tr>
-<td><code><a href="reference/fs_chi.html">fs_chi()</a></code></td>
-<td>Chi-square tests of association between categorical features and a categorical target, with p-value adjustment and Monte-Carlo fallback for sparse tables.</td>
+<td><a href="https://elkronos.github.io/featR/articles/filters.html">Filters</a></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_unsupervised.html"><code>fs_unsupervised()</code></a></td>
+<td>Target-free threshold filter: variance, MAD, IQR, range, missing proportion, distinct-value count</td>
 </tr>
 <tr>
-<td><code><a href="reference/fs_correlation.html">fs_correlation()</a></code></td>
-<td>Flags variable pairs above a correlation threshold. <code>prune = TRUE</code> (default) returns the reduced non-redundant set; <code>prune = FALSE</code> returns every flagged pair member.</td>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_supervised.html"><code>fs_supervised()</code></a></td>
+<td>Absolute correlation (numeric target) or ANOVA F (factor target) against a threshold</td>
 </tr>
 <tr>
-<td><code><a href="reference/fs_infogain.html">fs_infogain()</a></code></td>
-<td>Information gain w.r.t. a target, for numeric (binned), categorical, and date features. <code>normalize = "gain_ratio"</code> corrects the bias toward many-leveled predictors.</td>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_correlation.html"><code>fs_correlation()</code></a></td>
+<td>Drops features until no pair is correlated above a threshold</td>
 </tr>
 <tr>
-<td><code><a href="reference/fs_supervised.html">fs_supervised()</a></code></td>
-<td>Threshold filter: absolute correlation (numeric target) or ANOVA F (factor target).</td>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_chi.html"><code>fs_chi()</code></a></td>
+<td>Chi-squared tests between categorical features and a categorical target</td>
 </tr>
 <tr>
-<td><code><a href="reference/fs_unsupervised.html">fs_unsupervised()</a></code></td>
-<td>Target-free threshold filter: variance, MAD, IQR, range, missing proportion, distinct-value count.</td>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_infogain.html"><code>fs_infogain()</code></a></td>
+<td>Information gain, optionally as gain ratio</td>
+</tr>
+<tr>
+<td><a href="https://elkronos.github.io/featR/articles/regularization.html">Regularization and embedded</a></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_lasso.html"><code>fs_lasso()</code></a></td>
+<td>Cross-validated lasso (glmnet)</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_elastic.html"><code>fs_elastic()</code></a></td>
+<td>Elastic net tuned over an alpha grid (caret, glmnet)</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_randomforest.html"><code>fs_randomforest()</code></a></td>
+<td>Random-forest permutation importance with held-out evaluation</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_mars.html"><code>fs_mars()</code></a></td>
+<td>Multivariate adaptive regression splines (caret, earth)</td>
+</tr>
+<tr>
+<td><a href="https://elkronos.github.io/featR/articles/wrappers.html">Wrappers</a></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_recursivefeature.html"><code>fs_recursivefeature()</code></a></td>
+<td>Recursive feature elimination (caret), evaluated on held-out rows</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_svm.html"><code>fs_svm()</code></a></td>
+<td>SVM with SVM-RFE or random-forest RFE (caret, kernlab)</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_boruta.html"><code>fs_boruta()</code></a></td>
+<td>Boruta all-relevant selection</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_stepwise.html"><code>fs_stepwise()</code></a></td>
+<td>Stepwise linear regression by AIC (MASS)</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_bayes.html"><code>fs_bayes()</code></a></td>
+<td>Bayesian comparison of predictor subsets by LOO (brms, loo)</td>
+</tr>
+<tr>
+<td><a href="https://elkronos.github.io/featR/articles/dimensionality-reduction.html">Dimensionality reduction</a></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_pca.html"><code>fs_pca()</code></a></td>
+<td>Principal components; returns its own list, not an <code>fs_result</code>
+</td>
+</tr>
+<tr>
+<td></td>
+<td><a href="https://elkronos.github.io/featR/reference/fs_svd.html"><code>fs_svd()</code></a></td>
+<td>Exact SVD, or an approximate truncated one (RSpectra); returns its own list, not an <code>fs_result</code>
+</td>
 </tr>
 </tbody>
 </table>
-</div>
-<div class="section level3">
-<h3 id="regularization">Regularization<a class="anchor" aria-label="anchor" href="#regularization"></a>
-</h3>
-<table class="table">
-<colgroup>
-<col width="50%">
-<col width="50%">
-</colgroup>
-<thead><tr>
-<th>Function</th>
-<th>What it does</th>
-</tr></thead>
-<tbody>
-<tr>
-<td><code><a href="reference/fs_lasso.html">fs_lasso()</a></code></td>
-<td>Cross-validated LASSO (glmnet). Scores are standardized coefficients; raw-scale ones are in <code>details</code>.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_elastic.html">fs_elastic()</a></code></td>
-<td>Elastic net over an alpha grid via caret + glmnet, with optional PCA fit <strong>inside</strong> each resample.</td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="section level3">
-<h3 id="wrappers-and-model-based">Wrappers and model-based<a class="anchor" aria-label="anchor" href="#wrappers-and-model-based"></a>
-</h3>
-<table class="table">
-<colgroup>
-<col width="50%">
-<col width="50%">
-</colgroup>
-<thead><tr>
-<th>Function</th>
-<th>What it does</th>
-</tr></thead>
-<tbody>
-<tr>
-<td><code><a href="reference/fs_bayes.html">fs_bayes()</a></code></td>
-<td>Bayesian model comparison over predictor subsets (brms), ranked by LOO with a 1-SE parsimony rule.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_boruta.html">fs_boruta()</a></code></td>
-<td>Boruta all-relevant selection, with importance-aware correlation pruning.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_randomforest.html">fs_randomforest()</a></code></td>
-<td>Random-forest permutation importance with held-out evaluation.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_recursivefeature.html">fs_recursivefeature()</a></code></td>
-<td>caret RFE on a training split, honestly evaluated on held-out rows.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_stepwise.html">fs_stepwise()</a></code></td>
-<td>Stepwise linear regression via <code><a href="https://rdrr.io/pkg/MASS/man/stepAIC.html" class="external-link">MASS::stepAIC</a></code>.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_svm.html">fs_svm()</a></code></td>
-<td>SVM pipeline with true <strong>SVM-RFE</strong> (linear-kernel weight ranking, refit per elimination step); random-forest screening available via <code>select_method = "rf_rfe"</code>.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_mars.html">fs_mars()</a></code></td>
-<td>MARS (earth) with tuning and optional ROC/PR AUC.</td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="section level3">
-<h3 id="dimensionality-reduction">Dimensionality reduction<a class="anchor" aria-label="anchor" href="#dimensionality-reduction"></a>
-</h3>
-<p>These reduce dimensions rather than select features, so they return their own decomposition structure rather than an <code>fs_result</code>.</p>
-<table class="table">
-<colgroup>
-<col width="50%">
-<col width="50%">
-</colgroup>
-<thead><tr>
-<th>Function</th>
-<th>What it does</th>
-</tr></thead>
-<tbody>
-<tr>
-<td><code><a href="reference/fs_pca.html">fs_pca()</a></code></td>
-<td>PCA (prcomp, or bigstatsr for large data) with loadings, scores, variance explained, optional plot.</td>
-</tr>
-<tr>
-<td><code><a href="reference/fs_svd.html">fs_svd()</a></code></td>
-<td>Exact or approximate (RSpectra) truncated SVD. The approximate solver is used when <code>n_singular_values &lt; min(dim(x))</code> and <code>min(dim(x))</code> exceeds <code>svd_threshold</code> (default 100).</td>
-</tr>
-</tbody>
-</table>
-</div>
+<p>Not sure which to use? See <a href="https://elkronos.github.io/featR/articles/choosing-a-method.html">Choosing a method</a>.</p>
 </div>
 <div class="section level2">
-<h2 id="notes-on-honesty">Notes on honesty<a class="anchor" aria-label="anchor" href="#notes-on-honesty"></a>
+<h2 id="validation">Validation<a class="anchor" aria-label="anchor" href="#validation"></a>
 </h2>
-<p>Several methods can silently flatter themselves. featR tries not to:</p>
-<ul>
-<li>Class upsampling happens <strong>inside</strong> resampling folds (<code><a href="reference/fs_mars.html">fs_mars()</a></code>, <code><a href="reference/fs_svm.html">fs_svm()</a></code>), never before.</li>
-<li>
-<code><a href="reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> evaluates on rows the selection never saw, and its final model trains on training rows only.</li>
-<li>
-<code><a href="reference/fs_elastic.html">fs_elastic()</a></code> fits PCA per fold; <code><a href="reference/fs_lasso.html">fs_lasso()</a></code> refuses to mean-impute by default (<code>impute = "none"</code>) because full-data imputation leaks across folds.</li>
-<li>
-<code><a href="reference/fs_randomforest.html">fs_randomforest()</a></code>’s <code>feature_select</code> hook runs on the training split only, so the held-out <code>details$metrics</code> stay honest; the out-of-bag <code>details$oob</code> is grown on those same rows and is optimistic when the hook looks at the outcome.</li>
-<li>Numbers computed on rows that also chose the features or tuning values are optimistic and documented as such: <code>model$results</code> of caret-based fits, <code><a href="reference/fs_svm.html">fs_svm()</a></code>’s chosen-size <code>size_scores</code>, <code><a href="reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>’s <code>resampling_results</code>, <code><a href="reference/fs_elastic.html">fs_elastic()</a></code>’s <code>metric_value</code>, <code><a href="reference/fs_bayes.html">fs_bayes()</a></code>’s <code>best_elpd</code>.</li>
-<li>Post-selection statistics (<code><a href="reference/fs_stepwise.html">fs_stepwise()</a></code> p-values) are labeled as invalid for inference rather than presented as if they were not.</li>
-</ul>
+<p>Any selection that looks at the outcome is part of model fitting, so error estimates from the rows that chose the features are optimistic. <a href="https://elkronos.github.io/featR/articles/validation-and-leakage.html">Validation and leakage</a> lists which numbers featR reports are held-out estimates and which are not, and shows a pipeline that keeps them honest.</p>
 </div>
 <div class="section level2">
 <h2 id="license">License<a class="anchor" aria-label="anchor" href="#license"></a>

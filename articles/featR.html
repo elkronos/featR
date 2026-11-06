@@ -32,23 +32,22 @@
 <li class="active nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -81,266 +80,218 @@
     
     
 <div class="section level2">
-<h2 id="why-featr">Why featR<a class="anchor" aria-label="anchor" href="#why-featr"></a>
+<h2 id="what-featr-is-for">What featR is for<a class="anchor" aria-label="anchor" href="#what-featr-is-for"></a>
 </h2>
 <p>Feature selection in R is spread across a dozen packages, each with
 its own calling convention and its own idea of what a result looks like.
 Comparing two methods means learning two APIs and writing glue code to
 line up the answers.</p>
-<p>featR wraps the common methods behind one convention and one return
-type, so that swapping <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> for
-<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> is a one-word change. It also tries hard not to
-flatter itself: where a method can leak information from a held-out set,
-featR either prevents it or says so in the documentation.</p>
+<p>featR wraps 14 selection methods behind one calling convention and
+one return type, so swapping <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> for
+<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> is a one-word change. The methods cover
+statistical filters, regularized and tree-based models, and wrappers
+that refit a model per candidate subset. Two dimensionality-reduction
+helpers, <code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code>, share the
+calling convention but not the return type.</p>
 </div>
 <div class="section level2">
-<h2 id="one-convention">One convention<a class="anchor" aria-label="anchor" href="#one-convention"></a>
+<h2 id="installing">Installing<a class="anchor" aria-label="anchor" href="#installing"></a>
+</h2>
+<p>The released version is on CRAN:</p>
+<div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="st">"featR"</span><span class="op">)</span></span></code></pre></div>
+<p>The development version is on GitHub:</p>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># install.packages("remotes")</span></span>
+<span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"elkronos/featR"</span><span class="op">)</span></span></code></pre></div>
+<p>featR itself depends only on data.table, withr, and base R. The
+modeling engines (glmnet, caret, Boruta, randomForest, brms, and others)
+are in <code>Suggests</code>. A function that needs one checks when you
+call it and stops with the <code><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages()</a></code> line you
+need. <a href="https://elkronos.github.io/featR/articles/reproducibility.html#optional-dependencies">Optional
+dependencies</a> has one command that installs all of them.</p>
+</div>
+<div class="section level2">
+<h2 id="the-calling-convention">The calling convention<a class="anchor" aria-label="anchor" href="#the-calling-convention"></a>
 </h2>
 <p>Every selection function takes the data first and the name of the
 outcome column second:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a>fs_<span class="sc">&lt;</span>method<span class="sc">&gt;</span>(data, target, <span class="sc">&lt;</span>method options<span class="sc">&gt;</span>, ...)</span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>fs_<span class="sc">&lt;</span>method<span class="sc">&gt;</span>(data, target, <span class="sc">&lt;</span>method options<span class="sc">&gt;</span>, ...)</span></code></pre></div>
 <p>Housekeeping arguments come last. Every function takes
 <code>verbose</code>. Functions that use randomness take
 <code>seed = NULL</code>, and functions that can run in parallel take
-<code>n_cores</code>, <code>parallel</code>, or both. The methods that
-have no single outcome, <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>,
+<code>n_cores</code>, <code>parallel</code>, or both. The four methods
+with no outcome, <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>,
 <code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>, <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, and
 <code><a href="../reference/fs_svd.html">fs_svd()</a></code>, drop <code>target</code>. <code><a href="../reference/fs_svd.html">fs_svd()</a></code>
 calls its input <code>x</code>, because it takes a matrix rather than a
 table of observations.</p>
-<p>Three conventions hold everywhere:</p>
-<ul>
-<li>
-<strong>Sequential by default.</strong> Parallelism is opt-in
-through <code>n_cores</code> or <code>parallel</code>, and requests are
-capped at the cores you actually have.</li>
-<li>
-<strong>The RNG is never touched</strong> unless you pass
-<code>seed</code>, and the previous random state is restored when the
-call returns.</li>
-<li>
-<strong>Modeling engines are optional.</strong> They live in
-<code>Suggests</code>; a function that needs one checks at the point of
-use and tells you what to install.</li>
-</ul>
+<p>featR runs sequentially unless you ask for parallel workers, and caps
+any request at the cores the machine has. It never touches your random
+number generator unless you pass <code>seed</code>, and then restores
+the previous state when the call returns. <a href="https://elkronos.github.io/featR/articles/reproducibility.html">Reproducibility
+and parallelism</a> has the details.</p>
+<p>Every selection function returns an <code>fs_result</code>, and
+<code><a href="../reference/selected.html">selected()</a></code> pulls the kept feature names out of any of them.
+<code><a href="../reference/fs_pca.html">fs_pca()</a></code> and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> reduce dimensions rather
+than choose variables, so they return their own decomposition lists
+instead.</p>
 </div>
 <div class="section level2">
-<h2 id="one-return-type">One return type<a class="anchor" aria-label="anchor" href="#one-return-type"></a>
+<h2 id="a-worked-example">A worked example<a class="anchor" aria-label="anchor" href="#a-worked-example"></a>
 </h2>
-<p>Selection functions return an <code>fs_result</code>:</p>
-<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">d</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  spread <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span>, <span class="fl">3</span>, <span class="fl">4</span>, <span class="fl">100</span>, <span class="fl">6</span>, <span class="fl">7</span>, <span class="fl">8</span><span class="op">)</span>,</span>
-<span>  flat   <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">2</span>, <span class="fl">8</span><span class="op">)</span>,</span>
-<span>  gappy  <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="cn">NA</span>, <span class="fl">3</span>, <span class="cn">NA</span>, <span class="fl">5</span>, <span class="fl">6</span>, <span class="cn">NA</span>, <span class="fl">8</span><span class="op">)</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">res</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_unsupervised.html">fs_unsupervised</a></span><span class="op">(</span><span class="va">d</span>, method <span class="op">=</span> <span class="st">"variance"</span>, threshold <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
-<span><span class="va">res</span></span>
-<span><span class="co">#&gt; &lt;fs_result&gt; unsupervised_variance</span></span>
-<span><span class="co">#&gt; Selected 2 of 3 features</span></span>
-<span><span class="co">#&gt;   spread, gappy</span></span>
-<span><span class="co">#&gt; Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)</span></span></code></pre></div>
-<p>Seven components, the same for every method:</p>
-<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">res</span><span class="op">)</span>       <span class="co"># the features that were kept</span></span>
-<span><span class="co">#&gt; [1] "spread" "gappy"</span></span>
-<span><span class="va">res</span><span class="op">$</span><span class="va">scores</span>          <span class="co"># per-feature scores, comparable within a method</span></span>
-<span><span class="co">#&gt;   spread     flat    gappy </span></span>
-<span><span class="co">#&gt; 1147.696    0.000    7.300</span></span>
-<span><span class="va">res</span><span class="op">$</span><span class="va">method</span>          <span class="co"># which method produced this</span></span>
-<span><span class="co">#&gt; [1] "unsupervised_variance"</span></span>
-<span><span class="va">res</span><span class="op">$</span><span class="va">task</span>            <span class="co"># "classification", "regression", or NA</span></span>
-<span><span class="co">#&gt; [1] NA</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">res</span><span class="op">$</span><span class="va">details</span><span class="op">)</span>  <span class="co"># everything method-specific</span></span>
-<span><span class="co">#&gt; [1] "mask"       "indices"    "filtered"   "threshold"  "direction" </span></span>
-<span><span class="co">#&gt; [6] "action"     "n_features"</span></span></code></pre></div>
-<p><code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> adds the call and a ranked score table, with
-an asterisk marking what was selected:</p>
+<p>This example predicts <code>mpg</code> in <code>mtcars</code> from
+the other ten columns. It uses two filters, both of which run with no
+suggested packages installed.</p>
+<p><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> scores each feature against the target
+on its own: absolute Pearson correlation when the target is numeric, a
+one-way ANOVA F statistic when it is categorical. The two scales differ
+(|r| runs from 0 to 1, F has no upper bound), so a threshold that suits
+one is meaningless for the other. Keep the features with |r| above
+0.5:</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">res</span><span class="op">)</span></span>
-<span><span class="co">#&gt; &lt;fs_result&gt; unsupervised_variance</span></span>
-<span><span class="co">#&gt; Selected 2 of 3 features</span></span>
-<span><span class="co">#&gt;   spread, gappy</span></span>
-<span><span class="co">#&gt; Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)</span></span>
+<code class="sourceCode R"><span><span class="va">relevant</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_supervised.html">fs_supervised</a></span><span class="op">(</span><span class="va">mtcars</span>, target <span class="op">=</span> <span class="st">"mpg"</span>, threshold <span class="op">=</span> <span class="fl">0.5</span><span class="op">)</span></span>
+<span><span class="va">relevant</span></span>
+<span><span class="co">#&gt; &lt;fs_result&gt; supervised_correlation (regression)</span></span>
+<span><span class="co">#&gt; Selected 8 of 10 features</span></span>
+<span><span class="co">#&gt;   cyl, disp, hp, drat, wt, vs, am, carb</span></span>
+<span><span class="co">#&gt; Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)</span></span></code></pre></div>
+<p>Eight of the ten columns pass. <code>gear</code> (|r| = 0.48) and
+<code>qsec</code> (0.42) fall below the cut. The scores sit in
+<code>relevant$scores</code>:</p>
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/sort.html" class="external-link">sort</a></span><span class="op">(</span><span class="va">relevant</span><span class="op">$</span><span class="va">scores</span>, decreasing <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span>, <span class="fl">2</span><span class="op">)</span></span>
+<span><span class="co">#&gt;   wt  cyl disp   hp drat   vs   am carb gear qsec </span></span>
+<span><span class="co">#&gt; 0.87 0.85 0.85 0.78 0.68 0.66 0.60 0.55 0.48 0.42</span></span></code></pre></div>
+<p>A filter that looks at one feature at a time cannot see that two
+survivors carry the same information. <code>cyl</code> and
+<code>disp</code> both score 0.85 here, and they are correlated 0.90
+with each other. <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> ignores the outcome and
+looks only at how the features relate to one another. With
+<code>prune = TRUE</code>, the default, it drops features one at a time
+until no remaining pair is correlated above the threshold:</p>
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">pruned</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_correlation.html">fs_correlation</a></span><span class="op">(</span><span class="va">mtcars</span><span class="op">[</span>, <span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">relevant</span><span class="op">)</span><span class="op">]</span>, threshold <span class="op">=</span> <span class="fl">0.8</span><span class="op">)</span></span>
+<span><span class="va">pruned</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">dropped</span></span>
+<span><span class="co">#&gt; [1] "cyl"  "disp"</span></span></code></pre></div>
+<p>It dropped <code>cyl</code> and <code>disp</code>.
+<code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> shows the call and a ranked score table, with an
+asterisk on each feature that was kept. For
+<code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>, a feature’s score is its largest absolute
+correlation with any other input feature, dropped ones included. So
+<code>wt</code> (0.89 with <code>disp</code>) and <code>hp</code> (0.83
+with <code>cyl</code>) score above 0.8 and survive anyway, because their
+partners were dropped.</p>
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">pruned</span><span class="op">)</span></span>
+<span><span class="co">#&gt; &lt;fs_result&gt; correlation_pearson</span></span>
+<span><span class="co">#&gt; Selected 6 of 8 features</span></span>
+<span><span class="co">#&gt;   hp, drat, wt, vs, am, carb</span></span>
+<span><span class="co">#&gt; Details: corr_matrix, pairs, dropped, redundant, n_features (in $details)</span></span>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; Call:</span></span>
-<span><span class="co">#&gt;   fs_unsupervised(data = d, method = "variance", threshold = 1)</span></span>
+<span><span class="co">#&gt;   fs_correlation(data = mtcars[, selected(relevant)], threshold = 0.8)</span></span>
 <span><span class="co">#&gt; </span></span>
-<span><span class="co">#&gt; Scores (3 features, ranked):</span></span>
+<span><span class="co">#&gt; Scores (8 features, ranked):</span></span>
 <span><span class="co">#&gt;  feature  score selected</span></span>
-<span><span class="co">#&gt;   spread 1148.0        *</span></span>
-<span><span class="co">#&gt;    gappy    7.3        *</span></span>
-<span><span class="co">#&gt;     flat    0.0         </span></span>
+<span><span class="co">#&gt;     drat 0.7127        *</span></span>
+<span><span class="co">#&gt;       am 0.7127        *</span></span>
+<span><span class="co">#&gt;     carb 0.7498        *</span></span>
+<span><span class="co">#&gt;       vs 0.8108        *</span></span>
+<span><span class="co">#&gt;       hp 0.8324        *</span></span>
+<span><span class="co">#&gt;       wt 0.8880        *</span></span>
+<span><span class="co">#&gt;      cyl 0.9020         </span></span>
+<span><span class="co">#&gt;     disp 0.9020         </span></span>
 <span><span class="co">#&gt; (* = selected)</span></span></code></pre></div>
-<p>Because the shape is shared, methods become interchangeable.
-<code><a href="../reference/selected.html">selected()</a></code> works on the result of any of them.</p>
-</div>
-<div class="section level2">
-<h2 id="a-supervised-filter">A supervised filter<a class="anchor" aria-label="anchor" href="#a-supervised-filter"></a>
-</h2>
-<p><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> scores each feature against the target –
-absolute Pearson correlation for a numeric target, ANOVA F for a factor
-– and keeps those past a threshold:</p>
-<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">train</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  strong <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span>, <span class="fl">3</span>, <span class="fl">4</span>, <span class="fl">5</span>, <span class="fl">6</span><span class="op">)</span>,</span>
-<span>  mirror <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">6</span>, <span class="fl">5</span>, <span class="fl">4</span>, <span class="fl">3</span>, <span class="fl">2</span>, <span class="fl">1</span><span class="op">)</span>,</span>
-<span>  noise  <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">0</span>, <span class="fl">1</span>, <span class="fl">0</span>, <span class="fl">1</span>, <span class="fl">0</span><span class="op">)</span>,</span>
-<span>  y      <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span>, <span class="fl">3</span>, <span class="fl">4</span>, <span class="fl">5</span>, <span class="fl">6</span><span class="op">)</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="fu"><a href="../reference/fs_supervised.html">fs_supervised</a></span><span class="op">(</span><span class="va">train</span>, target <span class="op">=</span> <span class="st">"y"</span>, threshold <span class="op">=</span> <span class="fl">0.9</span><span class="op">)</span></span>
-<span><span class="co">#&gt; &lt;fs_result&gt; supervised_correlation (regression)</span></span>
-<span><span class="co">#&gt; Selected 2 of 3 features</span></span>
-<span><span class="co">#&gt;   strong, mirror</span></span>
-<span><span class="co">#&gt; Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)</span></span></code></pre></div>
-<p>Both <code>strong</code> and <code>mirror</code> have |r| = 1: a
-filter like this ranks features one at a time, so it cannot tell you
-that the second is redundant given the first. That is what
-<code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> is for.</p>
-</div>
-<div class="section level2">
-<h2 id="removing-redundancy">Removing redundancy<a class="anchor" aria-label="anchor" href="#removing-redundancy"></a>
-</h2>
-<p><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> looks only at how the features relate
-to each other. With <code>prune = TRUE</code> (the default) it returns a
-reduced set with no two members correlated above the threshold:</p>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="../reference/fs_correlation.html">fs_correlation</a></span><span class="op">(</span><span class="va">train</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"strong"</span>, <span class="st">"mirror"</span>, <span class="st">"noise"</span><span class="op">)</span><span class="op">]</span>, threshold <span class="op">=</span> <span class="fl">0.9</span><span class="op">)</span></span>
-<span><span class="co">#&gt; &lt;fs_result&gt; correlation_pearson</span></span>
-<span><span class="co">#&gt; Selected 2 of 3 features</span></span>
-<span><span class="co">#&gt;   strong, noise</span></span>
-<span><span class="co">#&gt; Details: corr_matrix, pairs, dropped, redundant, n_features (in $details)</span></span></code></pre></div>
-<p>Set <code>prune = FALSE</code> if you would rather see every feature
-involved in a high-correlation pair, which is the set most correlation
-filters report.</p>
-</div>
-<div class="section level2">
-<h2 id="information-gain">Information gain<a class="anchor" aria-label="anchor" href="#information-gain"></a>
-</h2>
-<p><code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> measures how many bits of uncertainty
-about the target each feature removes. Numeric features are binned;
-dates expand into year, month and day:</p>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">ig</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  perfect <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>, <span class="st">"c"</span><span class="op">)</span>, <span class="fl">5</span><span class="op">)</span>,</span>
-<span>  half    <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"n1"</span>, <span class="st">"n2"</span><span class="op">)</span>, <span class="fl">10</span><span class="op">)</span>,</span>
-<span>  target  <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>, <span class="st">"c"</span><span class="op">)</span>, <span class="fl">5</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="fu"><a href="../reference/fs_infogain.html">fs_infogain</a></span><span class="op">(</span><span class="va">ig</span>, target <span class="op">=</span> <span class="st">"target"</span><span class="op">)</span><span class="op">$</span><span class="va">scores</span></span>
-<span><span class="co">#&gt; perfect    half </span></span>
-<span><span class="co">#&gt;     1.5     0.5</span></span></code></pre></div>
-<p>Raw information gain rewards high-cardinality features – an ID column
-can score near the target’s entropy while predicting nothing
-generalizable. Pass <code>normalize = "gain_ratio"</code> to divide by
-each feature’s own entropy, which corrects that bias.</p>
-</div>
-<div class="section level2">
-<h2 id="methods-that-need-a-modeling-engine">Methods that need a modeling engine<a class="anchor" aria-label="anchor" href="#methods-that-need-a-modeling-engine"></a>
-</h2>
-<p>The remaining methods depend on suggested packages, so they are shown
-here without being run:</p>
+<p><code><a href="../reference/selected.html">selected()</a></code> returns the final set, ready to pass to a
+model:</p>
 <div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Regularization</span></span>
-<span><span class="fu"><a href="../reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, nfolds <span class="op">=</span> <span class="fl">5</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span>        <span class="co"># glmnet</span></span>
-<span><span class="fu"><a href="../reference/fs_elastic.html">fs_elastic</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span>                  <span class="co"># caret + glmnet</span></span>
-<span></span>
-<span><span class="co"># Wrappers and model-based</span></span>
-<span><span class="fu"><a href="../reference/fs_boruta.html">fs_boruta</a></span><span class="op">(</span><span class="va">iris</span>, <span class="st">"Species"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span>                 <span class="co"># Boruta</span></span>
-<span><span class="fu"><a href="../reference/fs_randomforest.html">fs_randomforest</a></span><span class="op">(</span><span class="va">iris</span>, <span class="st">"Species"</span>, task <span class="op">=</span> <span class="st">"classification"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
-<span><span class="fu"><a href="../reference/fs_recursivefeature.html">fs_recursivefeature</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, sizes <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">2</span>, <span class="fl">4</span><span class="op">)</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span>  <span class="co"># caret</span></span>
-<span><span class="fu"><a href="../reference/fs_stepwise.html">fs_stepwise</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, direction <span class="op">=</span> <span class="st">"both"</span><span class="op">)</span>       <span class="co"># MASS</span></span>
-<span><span class="fu"><a href="../reference/fs_mars.html">fs_mars</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span>                     <span class="co"># caret + earth</span></span>
-<span><span class="fu"><a href="../reference/fs_svm.html">fs_svm</a></span><span class="op">(</span><span class="va">iris</span>, <span class="st">"Species"</span>, task <span class="op">=</span> <span class="st">"classification"</span>,     <span class="co"># caret + kernlab</span></span>
-<span>       feature_select <span class="op">=</span> <span class="cn">TRUE</span>, select_method <span class="op">=</span> <span class="st">"svm_rfe"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
-<span><span class="fu"><a href="../reference/fs_bayes.html">fs_bayes</a></span><span class="op">(</span><span class="va">mtcars</span>, <span class="st">"mpg"</span>, predictors <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"wt"</span>, <span class="st">"hp"</span><span class="op">)</span><span class="op">)</span>  <span class="co"># brms + loo</span></span></code></pre></div>
-<p>Each errors with the exact <code><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages()</a></code> call it
-needs, so nothing fails mysteriously.</p>
+<code class="sourceCode R"><span><span class="va">keep</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">pruned</span><span class="op">)</span></span>
+<span><span class="va">keep</span></span>
+<span><span class="co">#&gt; [1] "hp"   "drat" "wt"   "vs"   "am"   "carb"</span></span>
+<span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/lm.html" class="external-link">lm</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/stats/delete.response.html" class="external-link">reformulate</a></span><span class="op">(</span><span class="va">keep</span>, response <span class="op">=</span> <span class="st">"mpg"</span><span class="op">)</span>, data <span class="op">=</span> <span class="va">mtcars</span><span class="op">)</span></span></code></pre></div>
+<p><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> looked at <code>mpg</code> to choose
+these six columns, so any error estimate for <code>fit</code> computed
+on the same 32 rows is optimistic. Run the selection on training rows
+only and score the model on rows it never saw. <a href="https://elkronos.github.io/featR/articles/validation-and-leakage.html">Validation
+and leakage</a> shows how, and lists which numbers featR reports are
+honest held-out estimates.</p>
+<p>To try another method, change the function and its options. With
+glmnet installed, the lasso version of the same question is:</p>
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">lasso</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_lasso.html">fs_lasso</a></span><span class="op">(</span><span class="va">mtcars</span>, target <span class="op">=</span> <span class="st">"mpg"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
+<span><span class="fu"><a href="../reference/selected.html">selected</a></span><span class="op">(</span><span class="va">lasso</span><span class="op">)</span></span>
+<span><span class="co">#&gt; [1] "wt"   "cyl"  "hp"   "am"   "carb" "drat"</span></span></code></pre></div>
+<p><a href="https://elkronos.github.io/featR/articles/fs-result.html">The
+fs_result object</a> covers the seven components, how to read
+<code><a href="https://rdrr.io/r/base/print.html" class="external-link">print()</a></code> and <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code>, what
+<code>scores</code> means for each method, how to compare results side
+by side, and what to do when nothing is selected.</p>
 </div>
 <div class="section level2">
-<h2 id="choosing-a-method">Choosing a method<a class="anchor" aria-label="anchor" href="#choosing-a-method"></a>
+<h2 id="the-four-families">The four families<a class="anchor" aria-label="anchor" href="#the-four-families"></a>
 </h2>
 <table class="table">
 <colgroup>
-<col width="50%">
-<col width="50%">
+<col width="33%">
+<col width="33%">
+<col width="33%">
 </colgroup>
 <thead><tr class="header">
-<th>If you want</th>
-<th>Use</th>
+<th>Family</th>
+<th>Functions</th>
+<th>Guide</th>
 </tr></thead>
 <tbody>
 <tr class="odd">
-<td>A fast first cut on many features</td>
+<td>Filters</td>
 <td>
-<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>, <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>
+<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>, <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>,
+<code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>, <code><a href="../reference/fs_chi.html">fs_chi()</a></code>,
+<code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>
 </td>
+<td><a href="https://elkronos.github.io/featR/articles/filters.html">Filter
+methods</a></td>
 </tr>
 <tr class="even">
-<td>To drop near-duplicate features</td>
-<td><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code></td>
+<td>Regularization and embedded importance</td>
+<td>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>,
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, <code><a href="../reference/fs_mars.html">fs_mars()</a></code>
+</td>
+<td><a href="https://elkronos.github.io/featR/articles/regularization.html">Regularization
+and embedded importance</a></td>
 </tr>
 <tr class="odd">
-<td>To rank categorical predictors of a categorical outcome</td>
+<td>Wrappers</td>
 <td>
-<code><a href="../reference/fs_chi.html">fs_chi()</a></code>, <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>,
+<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code>, <code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>,
+<code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>
 </td>
+<td><a href="https://elkronos.github.io/featR/articles/wrappers.html">Wrapper
+methods</a></td>
 </tr>
 <tr class="even">
-<td>A sparse, interpretable linear model</td>
-<td>
-<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>, <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>
-</td>
-</tr>
-<tr class="odd">
-<td>Every feature with any relevance, not a minimal set</td>
-<td><code><a href="../reference/fs_boruta.html">fs_boruta()</a></code></td>
-</tr>
-<tr class="even">
-<td>Selection tied to the model you will actually deploy</td>
-<td>
-<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>
-</td>
-</tr>
-<tr class="odd">
-<td>Non-linear relationships found automatically</td>
-<td><code><a href="../reference/fs_mars.html">fs_mars()</a></code></td>
-</tr>
-<tr class="even">
-<td>Fewer dimensions rather than fewer variables</td>
+<td>Dimensionality reduction</td>
 <td>
 <code><a href="../reference/fs_pca.html">fs_pca()</a></code>, <code><a href="../reference/fs_svd.html">fs_svd()</a></code>
 </td>
+<td><a href="https://elkronos.github.io/featR/articles/dimensionality-reduction.html">Dimensionality
+reduction</a></td>
 </tr>
 </tbody>
 </table>
-<p>Filters are cheap and model-agnostic but judge features one at a
-time. Wrappers respect interactions but cost a model fit per subset and
-tie the answer to that model. Neither is a substitute for validating the
-selected set on data that played no part in choosing it.</p>
 </div>
 <div class="section level2">
-<h2 id="what-featr-will-not-do-quietly">What featR will not do quietly<a class="anchor" aria-label="anchor" href="#what-featr-will-not-do-quietly"></a>
+<h2 id="where-to-go-next">Where to go next<a class="anchor" aria-label="anchor" href="#where-to-go-next"></a>
 </h2>
-<p>A few behaviors worth knowing, all documented per function:</p>
-<ul>
-<li>Class upsampling in <code><a href="../reference/fs_mars.html">fs_mars()</a></code> and <code><a href="../reference/fs_svm.html">fs_svm()</a></code>
-happens <em>inside</em> resampling folds, so resampled metrics are not
-inflated by duplicated rows.</li>
-<li>
-<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> evaluates on rows the selection
-never saw and trains its final model on training rows only.</li>
-<li>
-<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> refuses to mean-impute by default, because
-imputing on the full data leaks across folds; pass
-<code>impute = "mean"</code> to opt in and get a warning.</li>
-<li>
-<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code> labels its p-values as invalid for
-inference, because post-selection they are.</li>
-<li>In-sample metrics are called in-sample.</li>
-</ul>
+<p>If you are not sure which function fits your data, start with <a href="https://elkronos.github.io/featR/articles/choosing-a-method.html">Choosing
+a method</a>. It pairs common questions with functions and has a table
+of what each function accepts: task type, data types, missing values,
+and which suggested package it needs.</p>
+<p>Before you report any number from a selection, read <a href="https://elkronos.github.io/featR/articles/validation-and-leakage.html">Validation
+and leakage</a>. The full list of functions and arguments is in the <a href="https://elkronos.github.io/featR/reference/index.html">reference</a>.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

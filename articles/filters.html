@@ -32,23 +32,22 @@
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -80,11 +79,30 @@
 
     
     
-<p>Filters score each feature without fitting a predictive model. They
-are the cheapest methods in featR and the right first step on wide data.
-They are also <strong>univariate</strong>: each feature is judged on its
-own, so a filter cannot see redundancy or interactions.</p>
-<p>The examples below use one simulated data set, so the answers are
+<p>A filter scores each feature with a statistic and keeps the features
+whose score passes a cut. No predictive model is fitted, so filters are
+the cheapest methods in featR and the usual first step on wide data.
+Each one is <strong>univariate</strong>: it judges every feature on its
+own, so it cannot see redundancy between features or effects that only
+appear in combination.</p>
+<p>featR has five filters, and they split by whether they look at the
+outcome:</p>
+<ul>
+<li>
+<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code> and <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>
+never touch the outcome. You can run them before a train/test
+split.</li>
+<li>
+<code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>, <code><a href="../reference/fs_chi.html">fs_chi()</a></code>, and
+<code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> score features against the outcome. Selecting
+with them is part of fitting the model, so run them on training rows
+only, or inside every fold of a cross-validation.</li>
+</ul>
+<p>None of the filters reports a held-out performance number. Their
+scores are statistics on whatever rows you pass in. <a href="validation-and-leakage.html">Validation and leakage</a> shows how
+much a filter run on all the data inflates a later cross-validation
+estimate, and lists which numbers in featR are honest.</p>
+<p>The examples use one simulated data set, so the right answers are
 known in advance:</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">1</span><span class="op">)</span></span>
@@ -100,15 +118,22 @@ known in advance:</p>
 <span><span class="va">sim</span><span class="op">$</span><span class="va">y</span>      <span class="op">&lt;-</span> <span class="fl">2</span> <span class="op">*</span> <span class="va">sim</span><span class="op">$</span><span class="va">x_strong</span> <span class="op">+</span> <span class="fl">0.5</span> <span class="op">*</span> <span class="va">sim</span><span class="op">$</span><span class="va">x_weak</span> <span class="op">+</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="va">n</span><span class="op">)</span></span>
 <span><span class="va">sim</span><span class="op">$</span><span class="va">class</span>  <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/ifelse.html" class="external-link">ifelse</a></span><span class="op">(</span><span class="va">sim</span><span class="op">$</span><span class="va">y</span> <span class="op">&gt;</span> <span class="fl">0</span>, <span class="st">"pos"</span>, <span class="st">"neg"</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
 <div class="section level2">
-<h2 id="fs_unsupervised-clean-up-without-an-outcome">
-<code>fs_unsupervised()</code>: clean-up without an outcome<a class="anchor" aria-label="anchor" href="#fs_unsupervised-clean-up-without-an-outcome"></a>
+<h2 id="filters-that-ignore-the-outcome">Filters that ignore the outcome<a class="anchor" aria-label="anchor" href="#filters-that-ignore-the-outcome"></a>
 </h2>
-<p><code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code> scores each column by a target-free
-statistic: <code>"variance"</code>, <code>"mad"</code>,
+<div class="section level3">
+<h3 id="fs_unsupervised">
+<code>fs_unsupervised()</code><a class="anchor" aria-label="anchor" href="#fs_unsupervised"></a>
+</h3>
+<p><a href="../reference/fs_unsupervised.html"><code>fs_unsupervised()</code></a>
+scores each column by a statistic that needs no outcome:
+<code>"variance"</code> (the default), <code>"mad"</code>,
 <code>"iqr"</code>, <code>"range"</code>, <code>"missing_prop"</code>,
-or <code>"n_unique"</code>. Because it never looks at the outcome, it is
-safe to run before a train/test split.</p>
-<p>Drop constant columns:</p>
+or <code>"n_unique"</code>. Use it to drop constant columns, columns
+that are mostly missing, or columns with too few distinct values. Every
+column of <code>data</code> must be numeric.</p>
+<p>With the defaults (<code>method = "variance"</code>,
+<code>threshold = 0</code>), it keeps every column whose variance is
+above zero, which drops the constant ones.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">num</span> <span class="op">&lt;-</span> <span class="va">sim</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"x_weak"</span>, <span class="st">"x_noise"</span>, <span class="st">"x_const"</span>, <span class="st">"x_copy"</span><span class="op">)</span><span class="op">]</span></span>
 <span><span class="fu"><a href="../reference/fs_unsupervised.html">fs_unsupervised</a></span><span class="op">(</span><span class="va">num</span>, method <span class="op">=</span> <span class="st">"variance"</span>, threshold <span class="op">=</span> <span class="fl">0</span><span class="op">)</span></span>
@@ -116,32 +141,107 @@ safe to run before a train/test split.</p>
 <span><span class="co">#&gt; Selected 4 of 5 features</span></span>
 <span><span class="co">#&gt;   x_strong, x_weak, x_noise, x_copy</span></span>
 <span><span class="co">#&gt; Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)</span></span></code></pre></div>
-<p>Drop columns that are more than half missing. Note
-<code>action = "remove"</code>. The default <code>action = "keep"</code>
-would keep the <em>most</em> missing columns, and featR warns if you
-leave all three of <code>threshold</code>, <code>direction</code>, and
-<code>action</code> at their defaults for
-<code>"missing_prop"</code>.</p>
+<p>To drop columns that are more than half missing, you have to say
+<code>action = "remove"</code>:</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/fs_unsupervised.html">fs_unsupervised</a></span><span class="op">(</span><span class="va">sim</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"x_gappy"</span><span class="op">)</span><span class="op">]</span>, method <span class="op">=</span> <span class="st">"missing_prop"</span>,</span>
 <span>                threshold <span class="op">=</span> <span class="fl">0.5</span>, action <span class="op">=</span> <span class="st">"remove"</span><span class="op">)</span><span class="op">$</span><span class="va">selected</span></span>
 <span><span class="co">#&gt; [1] "x_strong"</span></span></code></pre></div>
-<p>Thresholds are on the scale of the statistic: a variance is in
-squared units, <code>"missing_prop"</code> is in [0, 1], and
-<code>"n_unique"</code> is a count. A threshold chosen for one method
-means nothing for another. <code>"mad"</code> uses R’s default
-normal-consistency constant (1.4826), so it estimates a standard
-deviation.</p>
+<p>With the default <code>action = "keep"</code>, the same call would
+keep the most missing columns. featR warns when you use
+<code>"missing_prop"</code> with all three of <code>threshold</code>,
+<code>direction</code>, and <code>action</code> at their defaults,
+because that combination keeps every column with any missing value.</p>
+<p>Thresholds are on the scale of the statistic. A variance is in
+squared units, <code>"missing_prop"</code> is a proportion in [0, 1],
+and <code>"n_unique"</code> is a count, so a threshold chosen for one
+method means nothing for another. <code>"mad"</code> uses R’s default
+consistency constant (1.4826), so for normally distributed data it
+estimates the standard deviation rather than giving the raw median
+absolute deviation.</p>
+<p>On missing values: <code>na_rm = TRUE</code> (the default) drops them
+before computing <code>"variance"</code>, <code>"mad"</code>,
+<code>"iqr"</code>, and <code>"range"</code>.
+<code>"missing_prop"</code> and <code>"n_unique"</code> always count the
+whole column. A column whose score comes out <code>NA</code> is never
+selected, and a warning says how many were excluded.</p>
+<p>A high variance says nothing about usefulness. A noisy column can
+have the largest variance in the data and a strong predictor the
+smallest, so use this function for clean-up, not for ranking.</p>
+</div>
+<div class="section level3">
+<h3 id="fs_correlation">
+<code>fs_correlation()</code><a class="anchor" aria-label="anchor" href="#fs_correlation"></a>
+</h3>
+<p><a href="../reference/fs_correlation.html"><code>fs_correlation()</code></a>
+looks only at how the features relate to each other. It flags every pair
+whose absolute correlation is above <code>threshold</code> (which has no
+default), and with <code>prune = TRUE</code> (the default) it drops
+features one at a time until no two survivors are above it. In
+<code>sim</code>, <code>x_copy</code> is <code>x_strong</code> plus a
+little noise:</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">red</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_correlation.html">fs_correlation</a></span><span class="op">(</span><span class="va">num</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"x_weak"</span>, <span class="st">"x_noise"</span>, <span class="st">"x_copy"</span><span class="op">)</span><span class="op">]</span>,</span>
+<span>                      threshold <span class="op">=</span> <span class="fl">0.9</span><span class="op">)</span></span>
+<span><span class="va">red</span><span class="op">$</span><span class="va">selected</span></span>
+<span><span class="co">#&gt; [1] "x_strong" "x_weak"   "x_noise"</span></span>
+<span><span class="va">red</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">dropped</span></span>
+<span><span class="co">#&gt; [1] "x_copy"</span></span>
+<span><span class="va">red</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">pairs</span></span>
+<span><span class="co">#&gt;       Var1   Var2 Correlation</span></span>
+<span><span class="co">#&gt; 1 x_strong x_copy   0.9984364</span></span></code></pre></div>
+<p>The pair correlates at 0.998, and one member goes. Each step takes
+the strongest remaining pair and drops the member with the larger mean
+absolute correlation to the other retained features. That is the
+tie-break <code><a href="https://rdrr.io/pkg/caret/man/findCorrelation.html" class="external-link">caret::findCorrelation()</a></code> uses, but caret scans in
+a different order, so the two can drop different features. Neither is
+guaranteed to drop the fewest.</p>
+<p>The choice never consults the outcome, so it can drop the member that
+predicts better. Here it dropped <code>x_copy</code> and kept
+<code>x_strong</code>, but it could as easily have gone the other way.
+If the choice inside a correlated group should follow importance for a
+target, use <a href="../reference/fs_boruta.html"><code>fs_boruta()</code></a>
+instead.</p>
+<p>Reading the result:</p>
+<ul>
+<li>
+<code>scores</code> holds each feature’s largest absolute
+correlation with any other feature.</li>
+<li>With <code>prune = FALSE</code>, <code>selected</code> is the
+redundant set (both members of every flagged pair) and nothing is
+dropped. <code>details$redundant</code> holds that set in either
+mode.</li>
+</ul>
+<p>The correlation types are <code>"pearson"</code> (the default),
+<code>"spearman"</code>, <code>"kendall"</code>,
+<code>"polychoric"</code> (all columns ordered factors; needs the
+polycor package), and <code>"pointbiserial"</code> (a continuous column
+against a column with exactly two values).</p>
+<p>Missing values are not removed by default
+(<code>na.rm = FALSE</code>). An <code>NA</code> in a column makes its
+correlations <code>NA</code>, and pairs with an <code>NA</code>
+correlation are never flagged or pruned, so redundancy you cannot see is
+treated as none. featR warns when this happens. Set
+<code>na.rm = TRUE</code> for pairwise deletion, or casewise deletion
+under <code>"polychoric"</code>, which stops with an error on missing
+values otherwise.</p>
+</div>
 </div>
 <div class="section level2">
-<h2 id="fs_supervised-one-feature-at-a-time-against-the-outcome">
-<code>fs_supervised()</code>: one feature at a time against the
-outcome<a class="anchor" aria-label="anchor" href="#fs_supervised-one-feature-at-a-time-against-the-outcome"></a>
+<h2 id="filters-that-score-against-the-outcome">Filters that score against the outcome<a class="anchor" aria-label="anchor" href="#filters-that-score-against-the-outcome"></a>
 </h2>
-<p>For a numeric target the score is the absolute Pearson correlation.
-For a factor target it is the one-way ANOVA <em>F</em> statistic.
-<code>method = "auto"</code> picks the right one.</p>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<div class="section level3">
+<h3 id="fs_supervised">
+<code>fs_supervised()</code><a class="anchor" aria-label="anchor" href="#fs_supervised"></a>
+</h3>
+<p><a href="../reference/fs_supervised.html"><code>fs_supervised()</code></a>
+scores every feature against <code>target</code>, and every feature
+column must be numeric. For a numeric target the score is the absolute
+Pearson correlation, in [0, 1]. For a factor, character, or logical
+target it is the one-way ANOVA <em>F</em> statistic, which has no upper
+bound. The default <code>method = "auto"</code> picks between them from
+the target’s type.</p>
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">reg</span> <span class="op">&lt;-</span> <span class="va">sim</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"x_weak"</span>, <span class="st">"x_noise"</span>, <span class="st">"x_copy"</span>, <span class="st">"y"</span><span class="op">)</span><span class="op">]</span></span>
 <span><span class="va">res</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_supervised.html">fs_supervised</a></span><span class="op">(</span><span class="va">reg</span>, target <span class="op">=</span> <span class="st">"y"</span>, threshold <span class="op">=</span> <span class="fl">0.2</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">res</span><span class="op">)</span></span>
@@ -160,100 +260,140 @@ For a factor target it is the one-way ANOVA <em>F</em> statistic.
 <span><span class="co">#&gt;    x_weak 0.17000         </span></span>
 <span><span class="co">#&gt;   x_noise 0.05669         </span></span>
 <span><span class="co">#&gt; (* = selected)</span></span></code></pre></div>
-<p><code>x_copy</code> is kept alongside <code>x_strong</code> even
-though it adds nothing. This is the univariate blind spot. The
-<em>F</em> scale for a factor target is unbounded, so pick a threshold
-on that scale:</p>
-<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+<p><code>x_copy</code> scores 0.856, almost the same as
+<code>x_strong</code>, and is kept even though it adds nothing once
+<code>x_strong</code> is in. Every univariate filter behaves this way.
+Run <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> afterwards to prune the duplicate.</p>
+<p><code>x_weak</code> has a real effect (coefficient 0.5) but scores
+0.17 and falls below the cut. The default <code>threshold = 0</code>
+would have kept all four features: any non-constant feature has a sample
+correlation above zero, even pure noise. Choose a threshold to make an
+actual selection.</p>
+<p>For a factor target, choose the threshold on the <em>F</em>
+scale:</p>
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">cls</span> <span class="op">&lt;-</span> <span class="va">sim</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"x_weak"</span>, <span class="st">"x_noise"</span>, <span class="st">"class"</span><span class="op">)</span><span class="op">]</span></span>
 <span><span class="fu"><a href="../reference/fs_supervised.html">fs_supervised</a></span><span class="op">(</span><span class="va">cls</span>, target <span class="op">=</span> <span class="st">"class"</span>, threshold <span class="op">=</span> <span class="fl">10</span><span class="op">)</span><span class="op">$</span><span class="va">scores</span></span>
 <span><span class="co">#&gt;    x_strong      x_weak     x_noise </span></span>
 <span><span class="co">#&gt; 141.5738542   5.4736576   0.2682509</span></span></code></pre></div>
-<p>Pearson correlation measures <strong>linear</strong> association
-only. A feature with a strong U-shaped effect can score near zero. Use
-<code><a href="../reference/fs_infogain.html">fs_infogain()</a></code> or a model-based method if you suspect
-non-linear effects.</p>
+<p><code>x_strong</code> scores 141.6, and <code>x_weak</code> (5.5) and
+<code>x_noise</code> (0.27) fall below 10. A feature that separates the
+classes perfectly scores <code>Inf</code>.</p>
+<p>Caveats:</p>
+<ul>
+<li>The task in the result is <code>"regression"</code> for a numeric
+target and <code>"classification"</code> for a factor. A character or
+logical target is scored with ANOVA, but the task is recorded as
+<code>NA</code>.</li>
+<li>Pearson correlation and the <em>F</em> test measure a linear
+relationship or a difference in class means. A feature with a strong
+U-shaped effect can score near zero; the <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>
+section below shows one.</li>
+<li>With <code>na_rm = TRUE</code> (the default), each feature is scored
+on the rows where both it and the target are observed. A constant
+feature has no defined score; it scores <code>NA</code> and is never
+selected.</li>
+</ul>
 </div>
-<div class="section level2">
-<h2 id="fs_correlation-remove-redundancy">
-<code>fs_correlation()</code>: remove redundancy<a class="anchor" aria-label="anchor" href="#fs_correlation-remove-redundancy"></a>
-</h2>
-<p><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> ignores the outcome and looks at how
-the features relate to each other. With <code>prune = TRUE</code> (the
-default) it drops features one at a time until no two survivors
-correlate above <code>threshold</code>:</p>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">red</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_correlation.html">fs_correlation</a></span><span class="op">(</span><span class="va">num</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"x_weak"</span>, <span class="st">"x_noise"</span>, <span class="st">"x_copy"</span><span class="op">)</span><span class="op">]</span>,</span>
-<span>                      threshold <span class="op">=</span> <span class="fl">0.9</span><span class="op">)</span></span>
-<span><span class="va">red</span><span class="op">$</span><span class="va">selected</span></span>
-<span><span class="co">#&gt; [1] "x_strong" "x_weak"   "x_noise"</span></span>
-<span><span class="va">red</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">dropped</span></span>
-<span><span class="co">#&gt; [1] "x_copy"</span></span>
-<span><span class="va">red</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">pairs</span></span>
-<span><span class="co">#&gt;       Var1   Var2 Correlation</span></span>
-<span><span class="co">#&gt; 1 x_strong x_copy   0.9984364</span></span></code></pre></div>
-<p>Pruning is a variant of the <code><a href="https://rdrr.io/pkg/caret/man/findCorrelation.html" class="external-link">caret::findCorrelation()</a></code>
-heuristic. It takes the strongest remaining pair first and drops the
-member with the larger mean absolute correlation to everything else.
-That choice does not consult the outcome, so it may drop the member that
-predicts better. <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> prunes by importance
-instead.</p>
-<p>Supported correlation types are <code>"pearson"</code>,
-<code>"spearman"</code>, <code>"kendall"</code>,
-<code>"polychoric"</code> (ordered factors, needs polycor), and
-<code>"pointbiserial"</code> (continuous against dichotomous).</p>
-</div>
-<div class="section level2">
-<h2 id="fs_chi-categorical-features-against-a-categorical-outcome">
-<code>fs_chi()</code>: categorical features against a categorical
-outcome<a class="anchor" aria-label="anchor" href="#fs_chi-categorical-features-against-a-categorical-outcome"></a>
-</h2>
-<p><code><a href="../reference/fs_chi.html">fs_chi()</a></code> runs a chi-squared test of independence for
-every factor or character feature. It applies a multiple-testing
-correction (Bonferroni by default) and selects features whose adjusted
-p-value is below <code>sig_level</code>. When any expected cell count is
-below 5 it switches to a Monte-Carlo p-value, so pass <code>seed</code>
-for reproducibility.</p>
+<div class="section level3">
+<h3 id="fs_chi">
+<code>fs_chi()</code><a class="anchor" aria-label="anchor" href="#fs_chi"></a>
+</h3>
+<p><a href="../reference/fs_chi.html"><code>fs_chi()</code></a> runs a
+chi-squared test of independence between each categorical feature and
+the target. Character columns become factors. Numeric, logical, and date
+columns are ignored, so discretize them first if you want them tested.
+The target is coerced to a factor too, and the task is always
+<code>"classification"</code>.</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">cat_data</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  colour <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/ifelse.html" class="external-link">ifelse</a></span><span class="op">(</span><span class="va">sim</span><span class="op">$</span><span class="va">x_strong</span> <span class="op">&gt;</span> <span class="fl">0</span>, <span class="st">"red"</span>, <span class="st">"blue"</span><span class="op">)</span><span class="op">)</span>,</span>
-<span>  size   <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/sample.html" class="external-link">sample</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"S"</span>, <span class="st">"M"</span>, <span class="st">"L"</span><span class="op">)</span>, <span class="va">n</span>, replace <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span>,</span>
-<span>  class  <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">class</span></span>
+<span>  color <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/ifelse.html" class="external-link">ifelse</a></span><span class="op">(</span><span class="va">sim</span><span class="op">$</span><span class="va">x_strong</span> <span class="op">&gt;</span> <span class="fl">0</span>, <span class="st">"red"</span>, <span class="st">"blue"</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>  size  <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/sample.html" class="external-link">sample</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"S"</span>, <span class="st">"M"</span>, <span class="st">"L"</span><span class="op">)</span>, <span class="va">n</span>, replace <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>  class <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">class</span></span>
 <span><span class="op">)</span></span>
 <span><span class="va">chi</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_chi.html">fs_chi</a></span><span class="op">(</span><span class="va">cat_data</span>, target <span class="op">=</span> <span class="st">"class"</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span>
+<span><span class="va">chi</span><span class="op">$</span><span class="va">selected</span></span>
+<span><span class="co">#&gt; [1] "color"</span></span>
 <span><span class="va">chi</span><span class="op">$</span><span class="va">details</span><span class="op">$</span><span class="va">results</span></span>
 <span><span class="co">#&gt;   feature   n df      p_value  adj_p_value significant     method</span></span>
-<span><span class="co">#&gt; 1  colour 200  1 3.090128e-16 6.180256e-16        TRUE asymptotic</span></span>
+<span><span class="co">#&gt; 1   color 200  1 3.090128e-16 6.180256e-16        TRUE asymptotic</span></span>
 <span><span class="co">#&gt; 2    size 200  2 6.356383e-01 1.000000e+00       FALSE asymptotic</span></span>
 <span><span class="co">#&gt;   correction_applied min_expected</span></span>
 <span><span class="co">#&gt; 1               TRUE        43.24</span></span>
 <span><span class="co">#&gt; 2              FALSE        25.76</span></span></code></pre></div>
-<p>Scores are adjusted p-values, so <strong>smaller is
-stronger</strong>. <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> sorts them ascending. A
-p-value measures evidence against independence, not effect size: with
-enough rows, a negligible association is still significant. Numeric
-columns are ignored, so discretize them first if you want them
-tested.</p>
+<p><code>color</code> is a coarsened copy of <code>x_strong</code>, and
+its adjusted p-value is about 6e-16. <code>size</code> is random and
+gets an adjusted p-value of 1.</p>
+<p>The score for each feature is its adjusted p-value, so smaller means
+stronger evidence of association, and <code><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary()</a></code> sorts the
+scores ascending. A feature is selected when its adjusted p-value is
+below <code>sig_level</code> (default 0.05). The adjustment is
+Bonferroni by default (<code>p_adjust_method</code>), counting only the
+features that were actually tested.</p>
+<p>When every expected cell count is at least 5, the test is the usual
+asymptotic one, with Yates’ continuity correction on 2x2 tables (the
+<code>correction_applied</code> column). When any expected count is
+below 5, the p-value comes from a Monte Carlo simulation with
+<code>simulation_B = 2000</code> replicates and <code>df</code> is
+<code>NA</code>. Pass <code>seed</code> to make those p-values
+reproducible. A simulated p-value can never fall below 1 /
+(<code>simulation_B</code> + 1), so with many features and a Bonferroni
+correction it may be unable to reach <code>sig_level</code> at all;
+featR warns and says how large <code>simulation_B</code> would need to
+be.</p>
+<p>Each feature is tested on its own complete cases, so <code>n</code>
+can differ between rows of the results table. A feature or target left
+with fewer than two levels after dropping missing values is skipped,
+with an <code>NA</code> p-value.</p>
+<p>A p-value measures evidence against independence. It is not an effect
+size: with enough rows, a negligible association is still
+significant.</p>
 </div>
-<div class="section level2">
-<h2 id="fs_infogain-bits-of-uncertainty-removed">
-<code>fs_infogain()</code>: bits of uncertainty removed<a class="anchor" aria-label="anchor" href="#fs_infogain-bits-of-uncertainty-removed"></a>
-</h2>
-<p>Information gain is <code>H(Y) - H(Y | X)</code> in bits. Numeric
-predictors are discretized into equal-width bins. A numeric target is
-discretized once, up front, so that every predictor is scored against
-the same classes.</p>
+<div class="section level3">
+<h3 id="fs_infogain">
+<code>fs_infogain()</code><a class="anchor" aria-label="anchor" href="#fs_infogain"></a>
+</h3>
+<p><a href="../reference/fs_infogain.html"><code>fs_infogain()</code></a>
+scores each feature by its information gain,
+<code>H(Y) - H(Y | X)</code>: how many bits of uncertainty about the
+target you lose by knowing the feature. It accepts numeric, factor,
+character, logical, and date features in the same data frame, and it
+does not assume a linear relationship.</p>
 <div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">ig</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fs_infogain.html">fs_infogain</a></span><span class="op">(</span><span class="va">sim</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"x_weak"</span>, <span class="st">"x_noise"</span>, <span class="st">"class"</span><span class="op">)</span><span class="op">]</span>,</span>
 <span>                  target <span class="op">=</span> <span class="st">"class"</span><span class="op">)</span></span>
 <span><span class="va">ig</span><span class="op">$</span><span class="va">scores</span></span>
 <span><span class="co">#&gt;   x_strong     x_weak    x_noise </span></span>
 <span><span class="co">#&gt; 0.41907995 0.11210176 0.05730707</span></span></code></pre></div>
-<p>Raw information gain favors features with many levels. An ID column
-can achieve the maximum possible gain while predicting nothing. Use
-<code>normalize = "gain_ratio"</code>, which divides by the feature’s
-own entropy, when features differ in cardinality:</p>
+<p>The target is always treated as categorical, and the task is always
+<code>"classification"</code>. Numeric features are cut into equal-width
+bins, using the larger of the Freedman-Diaconis and Sturges bin counts
+unless you set <code>numeric_bins</code>. A numeric target is binned the
+same way, once and up front, so every feature is scored against the same
+classes. Date columns are expanded into year, month, and day columns.
+Missing values are dropped pair by pair, never across the whole data
+set.</p>
+<p>Because it bins rather than fitting a line, information gain catches
+the U-shaped effect that <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code> misses:</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">2</span><span class="op">)</span></span>
+<span><span class="va">u</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>x_u <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="va">n</span><span class="op">)</span>, x_lin <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="va">n</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="va">u</span><span class="op">$</span><span class="va">y</span> <span class="op">&lt;-</span> <span class="va">u</span><span class="op">$</span><span class="va">x_u</span><span class="op">^</span><span class="fl">2</span> <span class="op">+</span> <span class="fl">0.3</span> <span class="op">*</span> <span class="va">u</span><span class="op">$</span><span class="va">x_lin</span> <span class="op">+</span> <span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="va">n</span>, sd <span class="op">=</span> <span class="fl">0.3</span><span class="op">)</span></span>
+<span><span class="fu"><a href="../reference/fs_supervised.html">fs_supervised</a></span><span class="op">(</span><span class="va">u</span>, target <span class="op">=</span> <span class="st">"y"</span><span class="op">)</span><span class="op">$</span><span class="va">scores</span></span>
+<span><span class="co">#&gt;        x_u      x_lin </span></span>
+<span><span class="co">#&gt; 0.04566085 0.36929494</span></span>
+<span><span class="fu"><a href="../reference/fs_infogain.html">fs_infogain</a></span><span class="op">(</span><span class="va">u</span>, target <span class="op">=</span> <span class="st">"y"</span><span class="op">)</span><span class="op">$</span><span class="va">scores</span></span>
+<span><span class="co">#&gt;       x_u     x_lin </span></span>
+<span><span class="co">#&gt; 1.2513951 0.6727366</span></span></code></pre></div>
+<p><code>x_u</code> drives most of <code>y</code>, yet its absolute
+correlation is 0.05 against 0.37 for <code>x_lin</code>. Information
+gain ranks it first, 1.25 bits against 0.67.</p>
+<p>Raw information gain favors features with many levels. An identifier
+column splits the data into single rows and reaches the largest gain
+possible, while predicting nothing about new data.
+<code>normalize = "gain_ratio"</code> divides each gain by the feature’s
+own entropy, which grows with the number of levels:</p>
+<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">with_id</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">cbind</a></span><span class="op">(</span>id <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="va">n</span><span class="op">)</span><span class="op">)</span>, <span class="va">sim</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"x_strong"</span>, <span class="st">"class"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/fs_infogain.html">fs_infogain</a></span><span class="op">(</span><span class="va">with_id</span>, <span class="st">"class"</span><span class="op">)</span><span class="op">$</span><span class="va">scores</span></span>
 <span><span class="co">#&gt;        id  x_strong </span></span>
@@ -261,14 +401,23 @@ own entropy, when features differ in cardinality:</p>
 <span><span class="fu"><a href="../reference/fs_infogain.html">fs_infogain</a></span><span class="op">(</span><span class="va">with_id</span>, <span class="st">"class"</span>, normalize <span class="op">=</span> <span class="st">"gain_ratio"</span><span class="op">)</span><span class="op">$</span><span class="va">scores</span></span>
 <span><span class="co">#&gt;        id  x_strong </span></span>
 <span><span class="co">#&gt; 0.1302194 0.1285049</span></span></code></pre></div>
-<p>The gain ratio cuts the ID column’s score by roughly a factor of
-eight, but on this data the ID column still ranks first. The gain ratio
-reduces the cardinality bias. It does not remove it. Drop identifier and
-other near-unique columns before you score anything.</p>
+<p>The gain ratio cuts the ID column’s score from 1.00 to 0.13, roughly
+a factor of eight, but on this data the ID column still ranks first
+(0.130 against 0.129 for <code>x_strong</code>). The gain ratio reduces
+the bias toward many levels without removing it, so drop identifier and
+other near-unique columns before you score anything. Gain ratios are not
+on the bits scale, so a threshold chosen for raw gains does not carry
+over.</p>
 <p>By default <code>selected</code> holds every feature with a score
-above zero. With finite data almost every feature has <em>some</em>
-positive sample gain, so use <code>top_n</code> for a meaningful
-cut.</p>
+above zero. With finite data, almost every feature has some positive
+sample gain, including pure noise, so the default selects nearly
+everything. Use <code>top_n</code> to keep a fixed number of the
+highest-scoring features.</p>
+<p><code>data</code> can also be a list of data frames that share the
+target column. The scores are then the union across the list, and a
+feature name that appears in more than one data frame keeps its highest
+score; <code>details$collisions</code> records which.</p>
+</div>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

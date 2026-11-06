@@ -32,23 +32,22 @@
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -80,16 +79,31 @@
 
     
     
-<p>Feature selection is part of model fitting. Any performance estimate
-that reuses rows the selection has seen is optimistic, sometimes wildly
-so. This article shows the problem on data where the right answer is
-known, then shows the patterns featR uses to avoid it.</p>
+<p>Feature selection is easy to get wrong in a way that makes results
+look better than they are. The usual cause is that the rows used to
+choose the features are also used to judge them. This article shows the
+problem on data where the right answer is known, lists which numbers
+featR reports are honest and which are optimistic, and walks through a
+pipeline that keeps them apart.</p>
+<div class="section level2">
+<h2 id="the-rule">The rule<a class="anchor" aria-label="anchor" href="#the-rule"></a>
+</h2>
+<p>Anything that looks at the outcome is part of model fitting. That
+covers choosing features, tuning, and any imputation or scaling learned
+from the data. If rows that will later measure performance took part in
+any of those steps, the measurement is optimistic. The classic case is
+selecting features on the full data and then cross-validating a model on
+those features. On pure noise it reports a fit where there is none.</p>
+</div>
 <div class="section level2">
 <h2 id="selection-bias-demonstrated">Selection bias, demonstrated<a class="anchor" aria-label="anchor" href="#selection-bias-demonstrated"></a>
 </h2>
-<p>Here the outcome is <strong>pure noise</strong>. No feature predicts
-it, so any honest estimate of out-of-sample R² should be at or below
-zero.</p>
+<p>Here the outcome is pure noise. No feature predicts it, so an honest
+estimate of out-of-sample R² should be at or below zero. The code picks
+the 10 predictors most correlated with <code>y</code> using
+<code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>, fits <code><a href="https://rdrr.io/r/stats/lm.html" class="external-link">lm()</a></code> on them, and scores
+it by 5-fold cross-validation, once with the selection outside the folds
+and once inside.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">42</span><span class="op">)</span></span>
 <span><span class="va">n</span> <span class="op">&lt;-</span> <span class="fl">60</span>; <span class="va">p</span> <span class="op">&lt;-</span> <span class="fl">500</span></span>
@@ -122,93 +136,207 @@ zero.</p>
 <span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>selection_outside_cv <span class="op">=</span> <span class="fu">cv_r2</span><span class="op">(</span><span class="cn">FALSE</span><span class="op">)</span>, selection_inside_cv <span class="op">=</span> <span class="fu">cv_r2</span><span class="op">(</span><span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="co">#&gt; selection_outside_cv  selection_inside_cv </span></span>
 <span><span class="co">#&gt;            0.4496028           -0.8262182</span></span></code></pre></div>
-<p>Selecting outside the cross-validation loop reports that noise
-predicts noise. Selecting inside the loop gives the correct answer:
-nothing does. This is the selection bias described by Ambroise and
-McLachlan (2002). It applies to every method in featR, including the
-cheap filters.</p>
+<p>With the selection outside the loop, cross-validation reports an R²
+of 0.45 for a model of noise. With the selection inside the loop, R² is
+-0.83. Nothing predicts <code>y</code>, and a model of 10 noise
+predictors fitted on 48 rows predicts worse than the mean, so a negative
+R² is what an honest estimate should show. Ambroise and McLachlan (2002)
+describe this selection bias. It applies to every method in featR,
+including the cheap filters.</p>
 </div>
 <div class="section level2">
-<h2 id="rules-featr-follows">Rules featR follows<a class="anchor" aria-label="anchor" href="#rules-featr-follows"></a>
+<h2 id="what-featr-does-for-you">What featR does for you<a class="anchor" aria-label="anchor" href="#what-featr-does-for-you"></a>
 </h2>
 <p>Where a featR function reports a performance number, it tries to make
-that number honest:</p>
+that number honest, and where it cannot, the documentation says so.</p>
 <ul>
 <li>
-<strong>Held-out splits.</strong> <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>,
-<code><a href="../reference/fs_mars.html">fs_mars()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, and
-<code><a href="../reference/fs_svm.html">fs_svm()</a></code> split the data first. Selection, tuning, and
-preprocessing that learns from data (near-zero-variance filters,
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, <code><a href="../reference/fs_mars.html">fs_mars()</a></code>,
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>, and <code><a href="../reference/fs_svm.html">fs_svm()</a></code> split the
+data into training and test rows first. Selection, tuning, and any
+preprocessing that learns from the data (near-zero-variance filters,
 correlation filters, one-hot encoders, imputation values) are fitted on
-the training rows only. The held-out metrics –
-<code>details$metrics</code> (<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>,
-<code><a href="../reference/fs_mars.html">fs_mars()</a></code>), <code>details$test_metrics</code>
-(<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>), <code>details$performance</code>
-(<code><a href="../reference/fs_svm.html">fs_svm()</a></code>) – come from rows the selection never saw. Other
-entries of <code>details</code> are computed on training rows and are
-optimistic; see the next points.</li>
+the training rows only, so their test-set metrics come from rows the
+selection never saw. The exception is <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>’s
+<code>control$preprocess</code> hook, which runs on the full data before
+the split.</li>
 <li>
-<strong>Resampling-aware preprocessing.</strong>
-<code>fs_elastic(use_pca = TRUE)</code> refits centering, scaling, and
-PCA inside each resample. Class upsampling in <code><a href="../reference/fs_mars.html">fs_mars()</a></code> and
-<code><a href="../reference/fs_svm.html">fs_svm()</a></code> also happens inside each resample, so duplicated
-rows never appear on both sides of a fold.</li>
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code> repeats SVM-RFE inside every cross-validation
+fold when it chooses how many features to keep.
+<code>fs_elastic(use_pca = TRUE)</code> refits the centering, scaling,
+and PCA inside every resample. Class upsampling in
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> and <code><a href="../reference/fs_svm.html">fs_svm()</a></code> also happens inside
+each resample, so a duplicated row never appears on both sides of a
+fold.</li>
 <li>
-<strong>No silent imputation.</strong> <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>
-refuses missing predictors by default. <code>impute = "mean"</code> uses
-full-data means and warns you that it leaks.</li>
-<li>
-<strong>Labeled in-sample numbers.</strong>
-<code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>’s <code>details$mae</code>,
-<code>details$rmse</code> and <code>details$best_elpd</code>, and
-<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>’s <em>t</em> statistics and p-values, are
-computed on the rows used for selection. The documentation says so.</li>
-<li>
-<strong>Selection-reused numbers.</strong> Some resampled numbers
-are computed on the training rows after (or while) those rows chose the
-features or the tuning values, so they are optimistic even though they
-look like cross-validation: <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>’s out-of-bag
-<code>details$oob</code> when a <code>control$feature_select</code> hook
-looked at the target, <code><a href="../reference/fs_svm.html">fs_svm()</a></code>’s <code>model$results</code>
-with <code>feature_select = TRUE</code> and the chosen size’s entry in
-<code>details$selection$size_scores</code>,
-<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>’s
-<code>details$resampling_results</code>, and <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>’s
-<code>details$metric_value</code> (the best value over the whole tuning
-grid; <code><a href="../reference/fs_elastic.html">fs_elastic()</a></code> holds out no test rows). Use the
-held-out metrics above, or an outer resampling loop.</li>
+<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> refuses missing predictors by default
+instead of imputing them from the full data. If you opt in with
+<code>impute = "mean"</code>, it uses full-data means and warns that
+this leaks.</li>
+<li>Numbers computed on the rows used for selection are documented as
+optimistic. The table below lists them.</li>
+<li>Known false-positive behavior is documented too.
+<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> can confirm pure-noise features, especially
+with <code>resolve_tentative = TRUE</code>, which settles undecided
+features with <code><a href="https://rdrr.io/pkg/Boruta/man/TentativeRoughFix.html" class="external-link">Boruta::TentativeRoughFix()</a></code>; the <a href="wrappers.html">wrapper methods</a> guide shows a real case.</li>
 </ul>
 </div>
 <div class="section level2">
-<h2 id="what-featr-cannot-do-for-you">What featR cannot do for you<a class="anchor" aria-label="anchor" href="#what-featr-cannot-do-for-you"></a>
+<h2 id="which-reported-numbers-are-honest">Which reported numbers are honest<a class="anchor" aria-label="anchor" href="#which-reported-numbers-are-honest"></a>
 </h2>
-<p>A held-out split inside one function call protects that call’s
-metrics. It does not protect your <strong>workflow</strong>. If you try
-five methods, look at their test metrics, and keep the best one, the
-test set has become part of selection. The usual remedy:</p>
-<ol style="list-style-type: decimal">
-<li>Split off a final test set <strong>once</strong>, at the start.</li>
-<li>Do all exploration, method comparison, and tuning on the remaining
-rows, using cross-validation that repeats the selection inside every
-fold, as above.</li>
-<li>Touch the test set once, at the end, to report the chosen pipeline’s
-performance.</li>
-</ol>
-<div class="section level3">
-<h3 id="post-selection-inference">Post-selection inference<a class="anchor" aria-label="anchor" href="#post-selection-inference"></a>
-</h3>
-<p>p-values, confidence intervals, and posterior intervals computed on a
-model whose predictors were chosen from the same data are not valid in
-the usual sense. They are too small, too narrow, or too confident. That
-applies to <code>summary(fs_stepwise(...)$model)</code> and to the
-posterior of the model <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> returns. For valid
-inference, select on one part of the data and estimate on another
-(sample splitting), or use a dedicated selective-inference method.</p>
+<p>A number is honest here if it was computed on rows that took no part
+in choosing the features or the tuning values. Anything else is
+optimistic and will, on average, flatter the model.</p>
+<table class="table">
+<colgroup>
+<col width="33%">
+<col width="33%">
+<col width="33%">
+</colgroup>
+<thead><tr class="header">
+<th>Function</th>
+<th>Honest (held-out)</th>
+<th>Optimistic or in-sample</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td>
+<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>, <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>,
+<code><a href="../reference/fs_pca.html">fs_pca()</a></code>, <code><a href="../reference/fs_svd.html">fs_svd()</a></code>
+</td>
+<td>No performance number. They never look at an outcome.</td>
+<td>None from the function.</td>
+</tr>
+<tr class="even">
+<td>
+<code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>, <code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>
+</td>
+<td>No performance number.</td>
+<td>
+<code>scores</code> describe the rows you passed. Any model then
+scored on those rows is optimistic.</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_chi.html">fs_chi()</a></code></td>
+<td>No performance number.</td>
+<td>
+<code>scores</code> are adjusted p-values of one test per feature.
+They are marginal tests, not a model’s performance, and a model built on
+the significant features and scored on the same rows is optimistic.</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code></td>
+<td>None. No rows are held out.</td>
+<td>The cross-validated error curve in <code>model$cvm</code> (with
+<code>return_model = TRUE</code>). Its value at <code>lambda.min</code>
+is the minimum over the whole lambda path.</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_elastic.html">fs_elastic()</a></code></td>
+<td>None. No rows are held out.</td>
+<td>
+<code>details$metric_value</code> (the best value over the whole
+alpha/lambda grid) and <code>model$results</code>.</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code></td>
+<td><code>details$metrics</code></td>
+<td>
+<code>details$oob</code> when a <code>control$feature_select</code>
+hook looked at the target. Anything learned in
+<code>control$preprocess</code>, which runs before the split, also
+flatters <code>details$metrics</code>.</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_mars.html">fs_mars()</a></code></td>
+<td><code>details$metrics</code></td>
+<td>
+<code>model$results</code> and <code>model$resample</code>: tuning
+cross-validation on the training rows, and the best row over the
+grid.</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code></td>
+<td><code>details$test_metrics</code></td>
+<td>
+<code>details$resampling_results</code>, and
+<code>model$results</code> when
+<code>return_final_model = TRUE</code>.</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_svm.html">fs_svm()</a></code></td>
+<td><code>details$performance</code></td>
+<td>The chosen size’s entry in
+<code>details$selection$size_scores</code> (the best of up to six
+estimates), and <code>model$results</code> and
+<code>model$resample</code> when
+<code>feature_select = TRUE</code>.</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_boruta.html">fs_boruta()</a></code></td>
+<td>No performance number.</td>
+<td>
+<code>details$decisions</code> can confirm noise features. In the
+simulation described in <code><a href="../reference/fs_boruta.html">?fs_boruta</a></code> (one real and three
+noise predictors, 150 rows), Boruta confirmed 5 percent of the noise
+predictors, and 8.3 percent with
+<code>resolve_tentative = TRUE</code>.</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code></td>
+<td>None.</td>
+<td>
+<code>scores</code> (absolute <em>t</em> statistics), the p-values
+in <code>details$coefficients</code>, and anything from
+<code>summary(model)</code>.</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code></td>
+<td>None.</td>
+<td>
+<code>details$mae</code> and <code>details$rmse</code> (in-sample),
+<code>details$best_elpd</code> and <code>details$loo_comparison</code>
+(the winner of the search), and the posterior of the returned
+model.</td>
+</tr>
+</tbody>
+</table>
+<p>The held-out metrics also follow different conventions across
+functions. <code><a href="../reference/fs_mars.html">fs_mars()</a></code>, <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>,
+and <code><a href="../reference/fs_svm.html">fs_svm()</a></code> report caret’s R², which is the squared
+correlation between predictions and observations. It is never negative
+and ignores bias, so predictions of <code>2 * y</code> score 1.
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> reports <code>1 - SSE/SST</code> on the
+test rows, which can be negative. For binary classification,
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> treats the second factor level as the
+positive class by default and <code><a href="../reference/fs_mars.html">fs_mars()</a></code> the first. ROC AUC
+does not depend on that choice, but sensitivity and PR AUC do.</p>
+<p>Every held-out number above comes from one train/test split, so on
+small data it is noisy. A held-out split protects the metrics of that
+one call, not your workflow.</p>
 </div>
+<div class="section level2">
+<h2 id="what-you-still-have-to-do">What you still have to do<a class="anchor" aria-label="anchor" href="#what-you-still-have-to-do"></a>
+</h2>
+<p>If you try five methods, look at their test metrics, and keep the
+best one, the test set has become part of selection. The remedy:</p>
+<ol style="list-style-type: decimal">
+<li>Split off a final test set once, before anything looks at the
+outcome.</li>
+<li>Do all exploration, method comparison, and tuning on the remaining
+rows. Where you cross-validate, repeat the selection inside every fold,
+as in the demonstration above.</li>
+<li>Use the test set once, at the end, to report the pipeline you
+chose.</li>
+</ol>
 </div>
 <div class="section level2">
 <h2 id="a-worked-pipeline">A worked pipeline<a class="anchor" aria-label="anchor" href="#a-worked-pipeline"></a>
 </h2>
+<p>The data have 20 independent standard-normal predictors plus
+<code>X21</code>, a near-copy of <code>X1</code>. The outcome depends on
+<code>X1</code>, <code>X2</code>, and <code>X3</code> with noise
+standard deviation 1.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">7</span><span class="op">)</span></span>
 <span><span class="va">n</span> <span class="op">&lt;-</span> <span class="fl">300</span></span>
@@ -239,13 +367,27 @@ inference, select on one part of the data and estimate on another
 <span><span class="co">#&gt; test_RMSE </span></span>
 <span><span class="co">#&gt;  1.159347</span></span></code></pre></div>
 <p><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> does not look at the outcome, so it may
-keep either member of the <code>X1</code>/<code>X21</code> pair. Either
-one carries the same information. The true model uses <code>X1</code>,
-<code>X2</code>, and <code>X3</code>, with noise standard deviation 1. A
-test RMSE close to 1 is the best any model can do here. Lasso at
-<code>lambda.min</code> often keeps a few noise variables as well. That
-is expected: <code>lambda.min</code> optimizes prediction, not recovery
-of the true support.</p>
+keep either member of the <code>X1</code>/<code>X21</code> pair. Here it
+dropped <code>X1</code> and kept <code>X21</code>, which carries the
+same information. Lasso then kept <code>X21</code>, <code>X2</code>, and
+<code>X3</code> plus four noise predictors, because
+<code>lambda.min</code> optimizes prediction rather than recovery of the
+true predictors; <code>lambda = "1se"</code> gives a sparser choice. The
+noise standard deviation is 1, so no model can do much better than a
+test RMSE of 1. This pipeline’s 1.16 is an honest estimate from 75 rows
+that took no part in any step.</p>
+</div>
+<div class="section level2">
+<h2 id="post-selection-inference">Post-selection inference<a class="anchor" aria-label="anchor" href="#post-selection-inference"></a>
+</h2>
+<p>The p-values, confidence intervals, and posterior intervals of a
+model whose predictors were chosen on the same data are not valid in the
+usual sense. They are too small, too narrow, or too confident. That
+applies to <code>summary(fs_stepwise(...)$model)</code> and to the
+posterior of the model <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> returns. Treat them as
+descriptive. For valid inference, select on one part of the data and
+estimate on another (sample splitting), or use a dedicated
+selective-inference method.</p>
 </div>
 <div class="section level2">
 <h2 id="reference">Reference<a class="anchor" aria-label="anchor" href="#reference"></a>

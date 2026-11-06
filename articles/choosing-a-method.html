@@ -32,23 +32,22 @@
 <li class="nav-item"><a class="nav-link" href="../articles/featR.html">Get started</a></li>
 <li class="nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="active nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-guides" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Guides</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-guides">
-<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
-    <li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-methods" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Methods</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-methods">
+<li><a class="dropdown-item" href="../articles/choosing-a-method.html">Choosing a method</a></li>
     <li><a class="dropdown-item" href="../articles/filters.html">Filter methods</a></li>
     <li><a class="dropdown-item" href="../articles/regularization.html">Regularization and embedded importance</a></li>
     <li><a class="dropdown-item" href="../articles/wrappers.html">Wrapper methods</a></li>
     <li><a class="dropdown-item" href="../articles/dimensionality-reduction.html">Dimensionality reduction</a></li>
-    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item dropdown">
-  <button class="nav-link dropdown-toggle" type="button" id="dropdown-doing-it-honestly" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Doing it honestly</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-doing-it-honestly">
-<li><a class="dropdown-item" href="../articles/doing-it-honestly.html">Overview</a></li>
+  <button class="nav-link dropdown-toggle" type="button" id="dropdown-using-results" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Using results</button>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-using-results">
+<li><a class="dropdown-item" href="../articles/fs-result.html">The fs_result object</a></li>
     <li><a class="dropdown-item" href="../articles/validation-and-leakage.html">Validation and leakage</a></li>
-    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility, randomness, and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/reproducibility.html">Reproducibility and parallelism</a></li>
+    <li><a class="dropdown-item" href="../articles/index.html">All articles</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -81,14 +80,12 @@
     
     
 <p>featR has fourteen selection functions and two
-dimensionality-reduction functions. This page helps you pick one. It
-gives a decision guide, the trade-offs between the method families, and
-a reference table of what each function needs and accepts.</p>
+dimensionality-reduction functions. Pick one by the question you are
+asking, then check the reference tables at the end for what it accepts,
+how it treats missing values, and which optional packages it needs.</p>
 <div class="section level2">
 <h2 id="start-with-the-question">Start with the question<a class="anchor" aria-label="anchor" href="#start-with-the-question"></a>
 </h2>
-<p>Different methods answer different questions. Pick the question
-first:</p>
 <table class="table">
 <colgroup>
 <col width="50%">
@@ -131,9 +128,11 @@ whatever its type?</td>
 </td>
 </tr>
 <tr class="odd">
-<td>Which predictors carry <em>any</em> information, including redundant
-ones?</td>
-<td><code><a href="../reference/fs_boruta.html">fs_boruta()</a></code></td>
+<td>Which predictors carry <em>any</em> information about the
+outcome?</td>
+<td>
+<code><a href="../reference/fs_boruta.html">fs_boruta()</a></code>; set <code>cutoff_cor = NULL</code> to keep
+redundant ones too</td>
 </tr>
 <tr class="even">
 <td>How does each predictor rank in a random forest, and how good is
@@ -168,235 +167,369 @@ under a Bayesian model?</td>
 </tr>
 </tbody>
 </table>
+<p>The method guides cover each function in depth: <a href="filters.html">Filter methods</a>, <a href="regularization.html">Regularization and embedded importance</a>,
+<a href="wrappers.html">Wrapper methods</a>, and <a href="dimensionality-reduction.html">Dimensionality reduction</a>.</p>
 </div>
 <div class="section level2">
 <h2 id="filters-embedded-methods-and-wrappers">Filters, embedded methods, and wrappers<a class="anchor" aria-label="anchor" href="#filters-embedded-methods-and-wrappers"></a>
 </h2>
-<p><strong>Filters</strong> (<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>,
+<p>A <strong>filter</strong> scores each feature without fitting a
+predictive model. The filters are <code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>,
 <code><a href="../reference/fs_supervised.html">fs_supervised()</a></code>, <code><a href="../reference/fs_chi.html">fs_chi()</a></code>,
-<code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>, <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>) score each
-feature without fitting a predictive model. They are fast and scale to
-thousands of columns. The cost is that they are
-<strong>univariate</strong>:</p>
-<ul>
-<li>Two copies of the same signal both score highly.</li>
-<li>A feature that matters only in combination with another scores
-low.</li>
-</ul>
-<p>Use filters for a first cut, then refine with something else.</p>
-<p><strong>Embedded methods</strong> (<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>,
-<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>,
-<code><a href="../reference/fs_mars.html">fs_mars()</a></code>) fit one model and read the selection off its
-structure: non-zero coefficients, importance, or retained terms. They
-account for the other predictors, but the answer belongs to that model
-family.</p>
-<p><strong>Wrappers</strong> (<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>,
+<code><a href="../reference/fs_infogain.html">fs_infogain()</a></code>, and <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>. They are
+fast and scale to thousands of columns. The cost is that they look at
+one feature at a time (or, for <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>, one pair
+at a time), so two copies of the same signal both score highly, and a
+feature that matters only in combination with another scores low. Use
+filters for a first cut, then refine with something else.</p>
+<p>An <strong>embedded method</strong> fits one model and reads the
+selection off its structure: non-zero coefficients, importance, or
+retained terms. The embedded methods are <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code>,
+<code><a href="../reference/fs_elastic.html">fs_elastic()</a></code>, <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>, and
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code>. They account for the other predictors, but the
+answer belongs to that model family. <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code>
+ranks rather than selects: unless you pass a selection function in
+<code>control$feature_select</code>, <code>selected</code> holds every
+predictor the forest used, in importance order, and the cutoff is
+yours.</p>
+<p>A <strong>wrapper</strong> refits a model over many candidate
+subsets. The wrappers are <code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code>,
 <code><a href="../reference/fs_svm.html">fs_svm()</a></code>, <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code>,
-<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>, <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>) refit a model over
-many candidate subsets. They are the most expensive and the most
-tailored to one model. They are also the most prone to overfitting the
-selection itself, so validate their output on held-out data.</p>
+<code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code>, and <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code>. They are the
+most expensive and the most tailored to one model. They are also the
+most prone to overfitting the selection itself, so validate their output
+on held-out data.</p>
 </div>
 <div class="section level2">
 <h2 id="a-sensible-default-pipeline">A sensible default pipeline<a class="anchor" aria-label="anchor" href="#a-sensible-default-pipeline"></a>
 </h2>
 <p>For a new tabular problem:</p>
 <ol style="list-style-type: decimal">
-<li>
-<strong>Clean.</strong> Drop constant or mostly missing columns with
-<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>. This uses no outcome, so it is safe to
-run before any split.</li>
-<li>
-<strong>Split.</strong> Hold out a test set now, before anything
-looks at the outcome.</li>
-<li>
-<strong>Deduplicate.</strong> Prune near-duplicate columns with
+<li>Drop constant or mostly missing numeric columns with
+<code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code>. It uses no outcome, so it is safe to run
+before any split.</li>
+<li>Hold out a test set now, before anything looks at the outcome.</li>
+<li>Prune near-duplicate numeric columns with
 <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code> on the training rows.</li>
-<li>
-<strong>Select.</strong> Run the method that matches your final
-model on the training rows: <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> for a linear model,
-<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> or <code><a href="../reference/fs_boruta.html">fs_boruta()</a></code> for trees,
-<code><a href="../reference/fs_svm.html">fs_svm()</a></code> for an SVM.</li>
-<li>
-<strong>Validate.</strong> Evaluate the final model on the test
-rows.</li>
+<li>On the training rows, run the selector that matches your final
+model: <code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> for a linear model,
+<code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code> (random forests by default) for a
+forest, <code>fs_svm(feature_select = TRUE)</code> for an SVM. Use
+<code>fs_boruta(cutoff_cor = NULL)</code> instead when you want every
+informative feature rather than a compact set.</li>
+<li>Evaluate the final model on the test rows.</li>
 </ol>
 <p>The <a href="validation-and-leakage.html">validation and leakage</a>
-article shows this pipeline end to end.</p>
+article runs this pipeline end to end and lists which numbers each
+function reports on held-out data.</p>
 </div>
 <div class="section level2">
 <h2 id="reference-what-each-function-accepts">Reference: what each function accepts<a class="anchor" aria-label="anchor" href="#reference-what-each-function-accepts"></a>
 </h2>
-<p>Every selection function takes <code>data</code> first. The functions
-with an outcome take <code>target</code>, the <strong>name</strong> of
-the outcome column, second. The housekeeping arguments differ between
-functions, so check the table before you write a loop over several
-methods:</p>
-<table style="width:100%;" class="table">
+<p>The <a href="featR.html#the-calling-convention">calling
+convention</a> is <code>data</code> first, then <code>target</code> as a
+string for the functions that use an outcome. Four functions break the
+pattern:</p>
+<ul>
+<li>
+<code><a href="../reference/fs_svm.html">fs_svm()</a></code> requires <code>task = "classification"</code>
+or <code>"regression"</code> and will not guess it.</li>
+<li>
+<code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> takes <code>task</code> too,
+defaulting to <code>"classification"</code>; it warns when that default
+meets a numeric target.</li>
+<li>
+<code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> uses only the columns you list in
+<code>predictors</code>, and <code><a href="../reference/fs_svd.html">fs_svd()</a></code> takes a numeric
+matrix <code>x</code> instead of <code>data</code>.</li>
+</ul>
+<div class="section level3">
+<h3 id="outcome-and-predictor-types">Outcome and predictor types<a class="anchor" aria-label="anchor" href="#outcome-and-predictor-types"></a>
+</h3>
+<p>“Dummy-coded” means factor and character predictors are expanded into
+one column per level, so <code>selected</code> names those columns
+(<code>colorred</code>) rather than the original one
+(<code>color</code>). The <a href="fs-result.html">fs_result object</a>
+article lists which functions do this.</p>
+<table class="table">
 <colgroup>
-<col width="16%">
-<col width="16%">
-<col width="16%">
-<col width="16%">
-<col width="16%">
-<col width="16%">
+<col width="25%">
+<col width="25%">
+<col width="25%">
+<col width="25%">
 </colgroup>
 <thead><tr class="header">
 <th>Function</th>
-<th><code>target</code></th>
-<th>Outcome types</th>
-<th><code>seed</code></th>
-<th>Parallel</th>
-<th>Engine packages (Suggests)</th>
+<th>Outcome (<code>target</code>)</th>
+<th>
+<code>task</code> reported</th>
+<th>Predictor columns</th>
 </tr></thead>
 <tbody>
 <tr class="odd">
 <td><code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code></td>
-<td>—</td>
 <td>none</td>
-<td>—</td>
-<td>—</td>
+<td><code>NA</code></td>
+<td>numeric only; any other column is an error</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code></td>
+<td>none</td>
+<td><code>NA</code></td>
+<td>numeric for <code>"pearson"</code>, <code>"spearman"</code>,
+<code>"kendall"</code>; ordered factors for <code>"polychoric"</code>;
+numeric or two-valued columns for <code>"pointbiserial"</code>
+</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code></td>
+<td>numeric, factor, character, or logical</td>
+<td>
+<code>"regression"</code> for numeric, <code>"classification"</code>
+for factor, <code>NA</code> for character or logical</td>
+<td>numeric only; any other column is an error</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_chi.html">fs_chi()</a></code></td>
+<td>anything, coerced to a factor (a numeric outcome becomes one class
+per distinct value)</td>
+<td><code>"classification"</code></td>
+<td>factor and character only; numeric, logical, and date columns are
+skipped</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_infogain.html">fs_infogain()</a></code></td>
+<td>anything; a numeric outcome is binned</td>
+<td>always <code>"classification"</code>
+</td>
+<td>any mix: numeric columns are binned, dates split into year, month,
+and day</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code></td>
+<td>numeric only</td>
+<td><code>"regression"</code></td>
+<td>numeric, factor, character, logical; dummy-coded</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_elastic.html">fs_elastic()</a></code></td>
+<td>numeric, or factor, character, or logical for classification</td>
+<td>either</td>
+<td>numeric, factor, character, logical; dummy-coded</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code></td>
+<td>set by <code>task</code>
+</td>
+<td>either</td>
+<td>numeric, factor, character, logical, <code>Date</code>
+</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_mars.html">fs_mars()</a></code></td>
+<td>numeric, or factor or character for classification; logical is an
+error</td>
+<td>either</td>
+<td>numeric, factor, character, logical; importance is mapped back to
+the original column</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code></td>
+<td>numeric, or factor, character, or logical for classification</td>
+<td>either</td>
+<td>numeric, factor, character, logical; dummy-coded only with
+<code>handle_categorical = TRUE</code>
+</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_svm.html">fs_svm()</a></code></td>
+<td>set by <code>task</code>; a numeric outcome may be a class label
+only if it has at most 10 values</td>
+<td>either</td>
+<td>numeric, factor, character, logical; dummy-coded</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_boruta.html">fs_boruta()</a></code></td>
+<td>numeric, or factor for classification; character is an error</td>
+<td>either</td>
+<td>numeric, factor, character, logical, <code>Date</code>,
+<code>POSIXt</code>
+</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code></td>
+<td>numeric only</td>
+<td><code>"regression"</code></td>
+<td>numeric, factor, character, logical; <code>scores</code> are per
+term, not per dummy</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code></td>
+<td>whatever <code>brm_family</code> accepts (numeric for
+<code><a href="https://rdrr.io/r/stats/family.html" class="external-link">gaussian()</a></code>, 0/1 or logical for
+<code>bernoulli()</code>)</td>
+<td>
+<code>"classification"</code> for binary, categorical, and ordinal
+families, else <code>"regression"</code>
+</td>
+<td>the columns named in <code>predictors</code>; <code>date_col</code>
+adds an <code>iso_week_id</code> predictor</td>
+</tr>
+<tr class="odd">
+<td><code><a href="../reference/fs_pca.html">fs_pca()</a></code></td>
+<td>none</td>
+<td>no <code>fs_result</code>
+</td>
+<td>numeric columns; other columns are kept as labels</td>
+</tr>
+<tr class="even">
+<td><code><a href="../reference/fs_svd.html">fs_svd()</a></code></td>
+<td>none</td>
+<td>no <code>fs_result</code>
+</td>
+<td>a numeric matrix, or a data frame whose columns are all numeric</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="section level3">
+<h3 id="missing-values-and-optional-packages">Missing values and optional packages<a class="anchor" aria-label="anchor" href="#missing-values-and-optional-packages"></a>
+</h3>
+<p>The packages in the last column are in featR’s Suggests, so they are
+not installed with featR. Packages listed in parentheses are needed only
+for the feature named. When a required package is missing, the function
+stops before doing any work and prints the
+<code><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages()</a></code> call you need. A few are optional extras
+with a fallback instead of an error: without bigstatsr,
+<code><a href="../reference/fs_pca.html">fs_pca()</a></code> uses <code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">prcomp()</a></code> on large data; without
+pROC, <code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code> reports no AUC and
+<code><a href="../reference/fs_mars.html">fs_mars()</a></code> tunes on accuracy instead of ROC and skips the
+test ROC AUC; without PRROC, <code><a href="../reference/fs_mars.html">fs_mars()</a></code> skips the PR AUC;
+without pbapply, <code><a href="../reference/fs_bayes.html">fs_bayes()</a></code> shows no progress bar. <a href="reproducibility.html#optional-dependencies">Optional
+dependencies</a> has one command that installs every suggested
+package.</p>
+<table class="table">
+<colgroup>
+<col width="33%">
+<col width="33%">
+<col width="33%">
+</colgroup>
+<thead><tr class="header">
+<th>Function</th>
+<th>Missing values</th>
+<th>Suggests packages</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td><code><a href="../reference/fs_unsupervised.html">fs_unsupervised()</a></code></td>
+<td>
+<code>na_rm = TRUE</code> (default) ignores them for
+<code>"variance"</code>, <code>"mad"</code>, <code>"iqr"</code>,
+<code>"range"</code>; <code>"missing_prop"</code> and
+<code>"n_unique"</code> always see them</td>
 <td>none</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_correlation.html">fs_correlation()</a></code></td>
-<td>—</td>
-<td>none</td>
-<td>yes</td>
 <td>
-<code>parallel</code>, <code>n_cores</code> (point-biserial
-only)</td>
-<td>polycor (polychoric), foreach + doParallel</td>
+<code>na.rm = FALSE</code> (default) leaves those correlations
+<code>NA</code>, and an <code>NA</code> pair is never flagged;
+<code>na.rm = TRUE</code> drops them pairwise. <code>"polychoric"</code>
+errors unless <code>na.rm = TRUE</code>, then drops incomplete rows</td>
+<td>polycor (<code>"polychoric"</code>); foreach, doParallel (parallel
+point-biserial)</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_supervised.html">fs_supervised()</a></code></td>
-<td>yes</td>
-<td>numeric, factor</td>
-<td>—</td>
-<td>—</td>
+<td>
+<code>na_rm = TRUE</code> (default) drops incomplete rows separately
+for each feature</td>
 <td>none</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_chi.html">fs_chi()</a></code></td>
-<td>yes</td>
-<td>categorical</td>
-<td>yes</td>
-<td>
-<code>parallel</code>, <code>n_cores</code>
-</td>
-<td>furrr + future when parallel</td>
+<td>each feature is tested on its own complete cases</td>
+<td>furrr, future (<code>parallel = TRUE</code>)</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_infogain.html">fs_infogain()</a></code></td>
-<td>yes</td>
-<td>any (discretized)</td>
-<td>—</td>
-<td>—</td>
+<td>handled per predictor and outcome pair</td>
 <td>none</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_lasso.html">fs_lasso()</a></code></td>
-<td>yes</td>
-<td>numeric</td>
-<td>yes</td>
-<td>
-<code>parallel</code>, <code>n_cores</code>
-</td>
-<td>glmnet, Matrix</td>
+<td>an error, for the outcome and for predictors;
+<code>impute = "mean"</code> fills predictors with full-data means and
+warns that this leaks</td>
+<td>glmnet; foreach, doParallel (<code>parallel = TRUE</code>)</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_elastic.html">fs_elastic()</a></code></td>
-<td>yes</td>
-<td>numeric, factor</td>
-<td>yes</td>
-<td><code>n_cores</code></td>
-<td>caret, glmnet, Matrix</td>
+<td>rows with any missing value are dropped</td>
+<td>caret, glmnet, Matrix; e1071 (classification); foreach, doParallel
+(<code>n_cores &gt; 1</code>)</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_randomforest.html">fs_randomforest()</a></code></td>
-<td>yes</td>
-<td>set by <code>task</code>
-</td>
-<td>yes</td>
-<td><code>n_cores</code></td>
-<td>randomForest, caret, pROC (AUC)</td>
+<td>rows with a missing outcome are dropped with a warning; missing
+predictors are imputed with training-row medians and modes</td>
+<td>randomForest, caret; pROC (binary AUC); foreach, doParallel
+(<code>n_cores &gt; 1</code>)</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_mars.html">fs_mars()</a></code></td>
-<td>yes</td>
-<td>numeric, factor</td>
-<td>yes</td>
-<td><code>n_cores</code></td>
-<td>caret, earth, pROC/PRROC (AUC)</td>
+<td>rows with any missing value are dropped</td>
+<td>caret, earth; e1071 (classification); pROC, PRROC (binary ROC and PR
+AUC); MLmetrics with pROC (multiclass summary); foreach, doParallel
+(<code>n_cores &gt; 1</code>)</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_recursivefeature.html">fs_recursivefeature()</a></code></td>
-<td>yes</td>
-<td>numeric, factor</td>
-<td>yes</td>
-<td><code>parallel</code></td>
-<td>caret, randomForest (default functions), e1071</td>
+<td>an error in the outcome or the training predictors; missing test
+values are not imputed</td>
+<td>caret; randomForest (default function set, or
+<code>model_method = "rf"</code>); e1071 (classification); foreach,
+doParallel (<code>parallel = TRUE</code>)</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_svm.html">fs_svm()</a></code></td>
-<td>yes</td>
-<td>set by <code>task</code>
-</td>
-<td>yes</td>
-<td><code>n_cores</code></td>
-<td>caret, kernlab, e1071, randomForest (rf_rfe)</td>
+<td>an error</td>
+<td>caret, kernlab; e1071 (classification); randomForest
+(<code>select_method = "rf_rfe"</code>); foreach, doParallel
+(<code>n_cores &gt; 1</code>)</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_boruta.html">fs_boruta()</a></code></td>
-<td>yes</td>
-<td>numeric, factor</td>
-<td>yes</td>
-<td>—</td>
+<td>an error</td>
 <td>Boruta</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_stepwise.html">fs_stepwise()</a></code></td>
-<td>yes</td>
-<td>numeric</td>
-<td>— (deterministic)</td>
-<td>—</td>
+<td>rows with any missing value are dropped, with a warning</td>
 <td>MASS</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_bayes.html">fs_bayes()</a></code></td>
-<td>yes</td>
-<td>any brms family</td>
-<td>yes (subset sampling)</td>
-<td>
-<code>parallel_combinations</code>, <code>n_cores</code>
-</td>
-<td>brms, loo, a Stan toolchain</td>
+<td>rows missing the outcome, a predictor, or <code>date_col</code> are
+dropped</td>
+<td>brms, loo, and a working Stan toolchain; pbapply (progress bar)</td>
 </tr>
 <tr class="odd">
 <td><code><a href="../reference/fs_pca.html">fs_pca()</a></code></td>
-<td>—</td>
-<td>none</td>
-<td>—</td>
-<td>—</td>
-<td>ggplot2 (plot), bigstatsr (large data)</td>
+<td>rows with a missing numeric value are dropped</td>
+<td>ggplot2 (plot); bigstatsr (data of 1e7 cells or more, otherwise
+<code><a href="https://rdrr.io/r/stats/prcomp.html" class="external-link">prcomp()</a></code> is used)</td>
 </tr>
 <tr class="even">
 <td><code><a href="../reference/fs_svd.html">fs_svd()</a></code></td>
-<td>— (<code>x</code>)</td>
-<td>none</td>
-<td>—</td>
-<td>—</td>
-<td>RSpectra (approximate solver)</td>
+<td>an error</td>
+<td>RSpectra (approximate solver only)</td>
 </tr>
 </tbody>
 </table>
-<p>Every function takes <code>verbose</code>. All of them are sequential
-by default. <code><a href="../reference/fs_chi.html">fs_chi()</a></code>, <code><a href="../reference/fs_correlation.html">fs_correlation()</a></code>, and
-<code><a href="../reference/fs_lasso.html">fs_lasso()</a></code> default to <code>n_cores = 2</code>, but that
-value is used only when you also set <code>parallel = TRUE</code>.</p>
-<p>If an engine package is missing, the function stops and prints the
-exact <code><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages()</a></code> call you need. Nothing fails deep
-inside a model fit.</p>
+<p><code>seed</code>, parallelism, and which functions use random
+numbers at all are covered in <a href="reproducibility.html">Reproducibility and parallelism</a>.</p>
+</div>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

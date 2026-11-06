@@ -1,22 +1,51 @@
 # Getting started with featR
 
-## Why featR
+## What featR is for
 
 Feature selection in R is spread across a dozen packages, each with its
 own calling convention and its own idea of what a result looks like.
 Comparing two methods means learning two APIs and writing glue code to
 line up the answers.
 
-featR wraps the common methods behind one convention and one return
-type, so that swapping
+featR wraps 14 selection methods behind one calling convention and one
+return type, so swapping
 [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md)
 for
 [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
-is a one-word change. It also tries hard not to flatter itself: where a
-method can leak information from a held-out set, featR either prevents
-it or says so in the documentation.
+is a one-word change. The methods cover statistical filters, regularized
+and tree-based models, and wrappers that refit a model per candidate
+subset. Two dimensionality-reduction helpers,
+[`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md) and
+[`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md),
+share the calling convention but not the return type.
 
-## One convention
+## Installing
+
+The released version is on CRAN:
+
+``` r
+
+install.packages("featR")
+```
+
+The development version is on GitHub:
+
+``` r
+
+# install.packages("remotes")
+remotes::install_github("elkronos/featR")
+```
+
+featR itself depends only on data.table, withr, and base R. The modeling
+engines (glmnet, caret, Boruta, randomForest, brms, and others) are in
+`Suggests`. A function that needs one checks when you call it and stops
+with the
+[`install.packages()`](https://rdrr.io/r/utils/install.packages.html)
+line you need. [Optional
+dependencies](https://elkronos.github.io/featR/articles/reproducibility.html#optional-dependencies)
+has one command that installs all of them.
+
+## The calling convention
 
 Every selection function takes the data first and the name of the
 outcome column second:
@@ -27,8 +56,8 @@ fs_<method>(data, target, <method options>, ...)
 
 Housekeeping arguments come last. Every function takes `verbose`.
 Functions that use randomness take `seed = NULL`, and functions that can
-run in parallel take `n_cores`, `parallel`, or both. The methods that
-have no single outcome,
+run in parallel take `n_cores`, `parallel`, or both. The four methods
+with no outcome,
 [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md),
 [`fs_unsupervised()`](https://elkronos.github.io/featR/reference/fs_unsupervised.md),
 [`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md), and
@@ -38,214 +67,159 @@ have no single outcome,
 its input `x`, because it takes a matrix rather than a table of
 observations.
 
-Three conventions hold everywhere:
+featR runs sequentially unless you ask for parallel workers, and caps
+any request at the cores the machine has. It never touches your random
+number generator unless you pass `seed`, and then restores the previous
+state when the call returns. [Reproducibility and
+parallelism](https://elkronos.github.io/featR/articles/reproducibility.html)
+has the details.
 
-- **Sequential by default.** Parallelism is opt-in through `n_cores` or
-  `parallel`, and requests are capped at the cores you actually have.
-- **The RNG is never touched** unless you pass `seed`, and the previous
-  random state is restored when the call returns.
-- **Modeling engines are optional.** They live in `Suggests`; a function
-  that needs one checks at the point of use and tells you what to
-  install.
+Every selection function returns an `fs_result`, and
+[`selected()`](https://elkronos.github.io/featR/reference/selected.md)
+pulls the kept feature names out of any of them.
+[`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md) and
+[`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md)
+reduce dimensions rather than choose variables, so they return their own
+decomposition lists instead.
 
-## One return type
+## A worked example
 
-Selection functions return an `fs_result`:
+This example predicts `mpg` in `mtcars` from the other ten columns. It
+uses two filters, both of which run with no suggested packages
+installed.
+
+[`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
+scores each feature against the target on its own: absolute Pearson
+correlation when the target is numeric, a one-way ANOVA F statistic when
+it is categorical. The two scales differ (\|r\| runs from 0 to 1, F has
+no upper bound), so a threshold that suits one is meaningless for the
+other. Keep the features with \|r\| above 0.5:
 
 ``` r
 
-d <- data.frame(
-  spread = c(1, 2, 3, 4, 100, 6, 7, 8),
-  flat   = rep(2, 8),
-  gappy  = c(1, NA, 3, NA, 5, 6, NA, 8)
-)
-
-res <- fs_unsupervised(d, method = "variance", threshold = 1)
-res
-#> <fs_result> unsupervised_variance
-#> Selected 2 of 3 features
-#>   spread, gappy
+relevant <- fs_supervised(mtcars, target = "mpg", threshold = 0.5)
+relevant
+#> <fs_result> supervised_correlation (regression)
+#> Selected 8 of 10 features
+#>   cyl, disp, hp, drat, wt, vs, am, carb
 #> Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)
 ```
 
-Seven components, the same for every method:
+Eight of the ten columns pass. `gear` (\|r\| = 0.48) and `qsec` (0.42)
+fall below the cut. The scores sit in `relevant$scores`:
 
 ``` r
 
-selected(res)       # the features that were kept
-#> [1] "spread" "gappy"
-res$scores          # per-feature scores, comparable within a method
-#>   spread     flat    gappy 
-#> 1147.696    0.000    7.300
-res$method          # which method produced this
-#> [1] "unsupervised_variance"
-res$task            # "classification", "regression", or NA
-#> [1] NA
-names(res$details)  # everything method-specific
-#> [1] "mask"       "indices"    "filtered"   "threshold"  "direction" 
-#> [6] "action"     "n_features"
+round(sort(relevant$scores, decreasing = TRUE), 2)
+#>   wt  cyl disp   hp drat   vs   am carb gear qsec 
+#> 0.87 0.85 0.85 0.78 0.68 0.66 0.60 0.55 0.48 0.42
 ```
 
-[`summary()`](https://rdrr.io/r/base/summary.html) adds the call and a
-ranked score table, with an asterisk marking what was selected:
+A filter that looks at one feature at a time cannot see that two
+survivors carry the same information. `cyl` and `disp` both score 0.85
+here, and they are correlated 0.90 with each other.
+[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
+ignores the outcome and looks only at how the features relate to one
+another. With `prune = TRUE`, the default, it drops features one at a
+time until no remaining pair is correlated above the threshold:
 
 ``` r
 
-summary(res)
-#> <fs_result> unsupervised_variance
-#> Selected 2 of 3 features
-#>   spread, gappy
-#> Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)
+pruned <- fs_correlation(mtcars[, selected(relevant)], threshold = 0.8)
+pruned$details$dropped
+#> [1] "cyl"  "disp"
+```
+
+It dropped `cyl` and `disp`.
+[`summary()`](https://rdrr.io/r/base/summary.html) shows the call and a
+ranked score table, with an asterisk on each feature that was kept. For
+[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md),
+a feature’s score is its largest absolute correlation with any other
+input feature, dropped ones included. So `wt` (0.89 with `disp`) and
+`hp` (0.83 with `cyl`) score above 0.8 and survive anyway, because their
+partners were dropped.
+
+``` r
+
+summary(pruned)
+#> <fs_result> correlation_pearson
+#> Selected 6 of 8 features
+#>   hp, drat, wt, vs, am, carb
+#> Details: corr_matrix, pairs, dropped, redundant, n_features (in $details)
 #> 
 #> Call:
-#>   fs_unsupervised(data = d, method = "variance", threshold = 1)
+#>   fs_correlation(data = mtcars[, selected(relevant)], threshold = 0.8)
 #> 
-#> Scores (3 features, ranked):
+#> Scores (8 features, ranked):
 #>  feature  score selected
-#>   spread 1148.0        *
-#>    gappy    7.3        *
-#>     flat    0.0         
+#>     drat 0.7127        *
+#>       am 0.7127        *
+#>     carb 0.7498        *
+#>       vs 0.8108        *
+#>       hp 0.8324        *
+#>       wt 0.8880        *
+#>      cyl 0.9020         
+#>     disp 0.9020         
 #> (* = selected)
 ```
 
-Because the shape is shared, methods become interchangeable.
 [`selected()`](https://elkronos.github.io/featR/reference/selected.md)
-works on the result of any of them.
+returns the final set, ready to pass to a model:
 
-## A supervised filter
+``` r
+
+keep <- selected(pruned)
+keep
+#> [1] "hp"   "drat" "wt"   "vs"   "am"   "carb"
+fit <- lm(reformulate(keep, response = "mpg"), data = mtcars)
+```
 
 [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
-scores each feature against the target – absolute Pearson correlation
-for a numeric target, ANOVA F for a factor – and keeps those past a
-threshold:
+looked at `mpg` to choose these six columns, so any error estimate for
+`fit` computed on the same 32 rows is optimistic. Run the selection on
+training rows only and score the model on rows it never saw. [Validation
+and
+leakage](https://elkronos.github.io/featR/articles/validation-and-leakage.html)
+shows how, and lists which numbers featR reports are honest held-out
+estimates.
+
+To try another method, change the function and its options. With glmnet
+installed, the lasso version of the same question is:
 
 ``` r
 
-train <- data.frame(
-  strong = c(1, 2, 3, 4, 5, 6),
-  mirror = c(6, 5, 4, 3, 2, 1),
-  noise  = c(1, 0, 1, 0, 1, 0),
-  y      = c(1, 2, 3, 4, 5, 6)
-)
-
-fs_supervised(train, target = "y", threshold = 0.9)
-#> <fs_result> supervised_correlation (regression)
-#> Selected 2 of 3 features
-#>   strong, mirror
-#> Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)
+lasso <- fs_lasso(mtcars, target = "mpg", seed = 1)
+selected(lasso)
+#> [1] "wt"   "cyl"  "hp"   "am"   "carb" "drat"
 ```
 
-Both `strong` and `mirror` have \|r\| = 1: a filter like this ranks
-features one at a time, so it cannot tell you that the second is
-redundant given the first. That is what
-[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
-is for.
+[The fs_result
+object](https://elkronos.github.io/featR/articles/fs-result.html) covers
+the seven components, how to read
+[`print()`](https://rdrr.io/r/base/print.html) and
+[`summary()`](https://rdrr.io/r/base/summary.html), what `scores` means
+for each method, how to compare results side by side, and what to do
+when nothing is selected.
 
-## Removing redundancy
+## The four families
 
-[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
-looks only at how the features relate to each other. With `prune = TRUE`
-(the default) it returns a reduced set with no two members correlated
-above the threshold:
+| Family | Functions | Guide |
+|----|----|----|
+| Filters | [`fs_unsupervised()`](https://elkronos.github.io/featR/reference/fs_unsupervised.md), [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md), [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md), [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md), [`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md) | [Filter methods](https://elkronos.github.io/featR/articles/filters.html) |
+| Regularization and embedded importance | [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md), [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md), [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md), [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md) | [Regularization and embedded importance](https://elkronos.github.io/featR/articles/regularization.html) |
+| Wrappers | [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md), [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md), [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md), [`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md), [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md) | [Wrapper methods](https://elkronos.github.io/featR/articles/wrappers.html) |
+| Dimensionality reduction | [`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md), [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md) | [Dimensionality reduction](https://elkronos.github.io/featR/articles/dimensionality-reduction.html) |
 
-``` r
+## Where to go next
 
-fs_correlation(train[, c("strong", "mirror", "noise")], threshold = 0.9)
-#> <fs_result> correlation_pearson
-#> Selected 2 of 3 features
-#>   strong, noise
-#> Details: corr_matrix, pairs, dropped, redundant, n_features (in $details)
-```
+If you are not sure which function fits your data, start with [Choosing
+a
+method](https://elkronos.github.io/featR/articles/choosing-a-method.html).
+It pairs common questions with functions and has a table of what each
+function accepts: task type, data types, missing values, and which
+suggested package it needs.
 
-Set `prune = FALSE` if you would rather see every feature involved in a
-high-correlation pair, which is the set most correlation filters report.
-
-## Information gain
-
-[`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
-measures how many bits of uncertainty about the target each feature
-removes. Numeric features are binned; dates expand into year, month and
-day:
-
-``` r
-
-ig <- data.frame(
-  perfect = rep(c("a", "b", "c", "c"), 5),
-  half    = rep(c("n1", "n2"), 10),
-  target  = factor(rep(c("a", "b", "c", "c"), 5))
-)
-
-fs_infogain(ig, target = "target")$scores
-#> perfect    half 
-#>     1.5     0.5
-```
-
-Raw information gain rewards high-cardinality features – an ID column
-can score near the target’s entropy while predicting nothing
-generalizable. Pass `normalize = "gain_ratio"` to divide by each
-feature’s own entropy, which corrects that bias.
-
-## Methods that need a modeling engine
-
-The remaining methods depend on suggested packages, so they are shown
-here without being run:
-
-``` r
-
-# Regularization
-fs_lasso(mtcars, "mpg", nfolds = 5, seed = 1)        # glmnet
-fs_elastic(mtcars, "mpg", seed = 1)                  # caret + glmnet
-
-# Wrappers and model-based
-fs_boruta(iris, "Species", seed = 1)                 # Boruta
-fs_randomforest(iris, "Species", task = "classification", seed = 1)
-fs_recursivefeature(mtcars, "mpg", sizes = c(2, 4), seed = 1)  # caret
-fs_stepwise(mtcars, "mpg", direction = "both")       # MASS
-fs_mars(mtcars, "mpg", seed = 1)                     # caret + earth
-fs_svm(iris, "Species", task = "classification",     # caret + kernlab
-       feature_select = TRUE, select_method = "svm_rfe", seed = 1)
-fs_bayes(mtcars, "mpg", predictors = c("wt", "hp"))  # brms + loo
-```
-
-Each errors with the exact
-[`install.packages()`](https://rdrr.io/r/utils/install.packages.html)
-call it needs, so nothing fails mysteriously.
-
-## Choosing a method
-
-| If you want | Use |
-|----|----|
-| A fast first cut on many features | [`fs_unsupervised()`](https://elkronos.github.io/featR/reference/fs_unsupervised.md), [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md) |
-| To drop near-duplicate features | [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md) |
-| To rank categorical predictors of a categorical outcome | [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md), [`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md) |
-| A sparse, interpretable linear model | [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md), [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md) |
-| Every feature with any relevance, not a minimal set | [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md) |
-| Selection tied to the model you will actually deploy | [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md), [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md) |
-| Non-linear relationships found automatically | [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md) |
-| Fewer dimensions rather than fewer variables | [`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md), [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md) |
-
-Filters are cheap and model-agnostic but judge features one at a time.
-Wrappers respect interactions but cost a model fit per subset and tie
-the answer to that model. Neither is a substitute for validating the
-selected set on data that played no part in choosing it.
-
-## What featR will not do quietly
-
-A few behaviors worth knowing, all documented per function:
-
-- Class upsampling in
-  [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
-  and [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
-  happens *inside* resampling folds, so resampled metrics are not
-  inflated by duplicated rows.
-- [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
-  evaluates on rows the selection never saw and trains its final model
-  on training rows only.
-- [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md)
-  refuses to mean-impute by default, because imputing on the full data
-  leaks across folds; pass `impute = "mean"` to opt in and get a
-  warning.
-- [`fs_stepwise()`](https://elkronos.github.io/featR/reference/fs_stepwise.md)
-  labels its p-values as invalid for inference, because post-selection
-  they are.
-- In-sample metrics are called in-sample.
+Before you report any number from a selection, read [Validation and
+leakage](https://elkronos.github.io/featR/articles/validation-and-leakage.html).
+The full list of functions and arguments is in the
+[reference](https://elkronos.github.io/featR/reference/index.html).

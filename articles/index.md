@@ -4,12 +4,10 @@
 
 - [Getting started with
   featR](https://elkronos.github.io/featR/articles/featR.md):
-- [The fs_result
-  object](https://elkronos.github.io/featR/articles/fs-result.md):
 - [Choosing a
   method](https://elkronos.github.io/featR/articles/choosing-a-method.md):
 
-### Method guides
+### Methods
 
 - [Filter
   methods](https://elkronos.github.io/featR/articles/filters.md):
@@ -17,14 +15,14 @@
   importance](https://elkronos.github.io/featR/articles/regularization.md):
 - [Wrapper
   methods](https://elkronos.github.io/featR/articles/wrappers.md):
-- [Dimensionality reduction: fs_pca() and
-  fs_svd()](https://elkronos.github.io/featR/articles/dimensionality-reduction.md):
+- [Dimensionality
+  reduction](https://elkronos.github.io/featR/articles/dimensionality-reduction.md):
 
-### Doing it honestly
+### Using results
 
-- [Doing it
-  honestly](https://elkronos.github.io/featR/articles/doing-it-honestly.md):
+- [The fs_result
+  object](https://elkronos.github.io/featR/articles/fs-result.md):
 - [Validation and
   leakage](https://elkronos.github.io/featR/articles/validation-and-leakage.md):
-- [Reproducibility, randomness, and
+- [Reproducibility and
   parallelism](https://elkronos.github.io/featR/articles/reproducibility.md):

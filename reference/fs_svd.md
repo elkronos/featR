@@ -1,8 +1,10 @@
-# Singular Value Decomposition with Optional Scaling and Truncation
+# Singular value decomposition with optional scaling and truncation
 
-Computes the SVD of a matrix with options for centering/scaling,
-truncation to the leading singular triplets, and an approximate solver
-for large matrices.
+Computes the singular value decomposition (SVD) of a numeric matrix,
+optionally centering and scaling it first and keeping only the leading
+singular values and vectors. The SVD factors a matrix into
+`u %*% diag(d) %*% t(v)`; the leading terms give the best low-rank
+approximation of the matrix in the least-squares sense.
 
 ## Usage
 
@@ -23,29 +25,29 @@ fs_svd(
 - x:
 
   Numeric matrix, or a data.frame whose columns are all numeric (it is
-  coerced to a matrix). Must contain no NA/NaN/Inf values. The argument
-  is called `x` rather than `data` because it is a matrix of values, not
-  a table of observations and features.
+  coerced to a matrix). It must contain no `NA`, `NaN`, or `Inf` values.
+  The argument is called `x` rather than `data` because it is a matrix
+  of values, not a table of observations and features.
 
 - n_singular_values:
 
-  Positive whole number of singular values and vectors to keep, or NULL
-  (default) for `min(dim(x))`. Values exceeding `min(dim(x))` are an
+  Positive whole number of singular values and vectors to keep, or
+  `NULL` (default) for `min(dim(x))`. A value above `min(dim(x))` is an
   error.
 
 - scale_input:
 
-  TRUE (center and scale, the default), FALSE (leave the matrix alone),
-  `"center"` (subtract column means only), or `"scale"` (divide only).
-  Any other value is an error. The two dividing forms (`TRUE` and
-  `"scale"`) require every column to have non-zero variance (a standard
-  deviation above `1000 * .Machine$double.eps`, about 2e-13, times the
-  column's largest absolute value, so the check is unit-free), and
-  offending columns are reported by name (or by position when the matrix
-  has no column names); `"center"` has no such requirement. Note that
-  `"scale"` inherits
-  [`base::scale()`](https://rdrr.io/r/base/scale.html)'s semantics: with
-  no centering it divides by the root mean square, not by the standard
+  How to transform the columns before decomposing: `TRUE` (default)
+  centers and scales, `FALSE` leaves the matrix alone, `"center"`
+  subtracts column means only, and `"scale"` divides only. Any other
+  value is an error. The two dividing forms (`TRUE` and `"scale"`) need
+  every column to have non-zero variance, meaning a standard deviation
+  above `1000 * .Machine$double.eps` (about 2e-13) times the column's
+  largest absolute value, so the check does not depend on units.
+  Offending columns are named in the error, or numbered when the matrix
+  has no column names. `"scale"` follows
+  [`base::scale()`](https://rdrr.io/r/base/scale.html): without
+  centering it divides by the root mean square, not the standard
   deviation.
 
 - svd_method:
@@ -55,27 +57,25 @@ fs_svd(
 
 - svd_threshold:
 
-  Positive number; with `svd_method = "auto"`, the approximate solver is
-  considered only when `min(dim(x))` exceeds this value (default 100).
+  Positive number. With `svd_method = "auto"`, the approximate solver is
+  considered only when `min(dim(x))` exceeds it. Default 100.
 
 - approx_args:
 
   List of extra arguments passed to
-  [`RSpectra::svds()`](https://rdrr.io/pkg/RSpectra/man/svds.html) (for
-  example `tol` or `opts`). Must not include `A` or `k`, which are set
-  internally.
+  [`RSpectra::svds()`](https://rdrr.io/pkg/RSpectra/man/svds.html), for
+  example `tol` or `opts`. It must not include `A` or `k`, which are set
+  from `x` and `n_singular_values`.
 
 - verbose:
 
-  Logical; emit progress messages. Default FALSE.
+  Logical; print progress messages. Default `FALSE`.
 
 ## Value
 
-A plain list. `fs_svd()` is dimensionality reduction rather than feature
-selection, so it returns its own decomposition structure and not the
-`fs_result` object produced by the package's selection functions.
-Writing `k` for the number of triplets kept (`n_singular_values`, or
-`min(dim(x))` by default), the components are:
+A plain list, not an `fs_result`: `fs_svd()` reduces dimensions rather
+than selecting features. Writing `k` for the number kept
+(`n_singular_values`, or `min(dim(x))` by default), the components are:
 
 - `singular_values`: numeric vector of length `k`, in non-increasing
   order.
@@ -87,50 +87,51 @@ Writing `k` for the number of triplets kept (`n_singular_values`, or
   [`base::svd()`](https://rdrr.io/r/base/svd.html)).
 
 Singular vectors are unique only up to sign (and up to rotation within a
-tied block), so column signs may differ between the exact and
-approximate solvers and between platforms.
+block of tied singular values), so column signs can differ between the
+exact and approximate solvers and between platforms.
 
 ## Details
 
-Reach for this when you want a low-rank summary of a numeric matrix –
-the leading components for compression, denoising, or a latent-factor
-representation – rather than a subset of the original columns. Because
-the components are linear combinations of every input column, nothing is
-dropped and individual features stay uninterpretable; use one of the
-package's selection functions when you need to name the features you
-keep. [`fs_pca`](https://elkronos.github.io/featR/reference/fs_pca.md)
-covers the same ground with tidy, labeled output and variance-explained
+Use it for a low-rank summary of a numeric matrix: compression,
+denoising, or a latent-factor representation. The components are linear
+combinations of every input column, so nothing is dropped and the
+components cannot be read as individual features; use one of featR's
+selection functions when you need to name the features you keep.
+[`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md)
+covers the same ground with labeled output and variance-explained
 figures; `fs_svd()` is the lower-level decomposition.
 
-The exact path uses [`base::svd()`](https://rdrr.io/r/base/svd.html).
-The approximate path uses
-[`RSpectra::svds()`](https://rdrr.io/pkg/RSpectra/man/svds.html)
-(package RSpectra, a Suggests dependency, required only when that path
-is actually taken) and is only applicable when fewer than `min(dim(x))`
-singular values are requested. By default `n_singular_values = NULL`
-resolves to `min(dim(x))`, which implies the exact path; to enable the
-approximate solver on a large matrix, request
-`n_singular_values < min(dim(x))`.
+The exact solver is [`base::svd()`](https://rdrr.io/r/base/svd.html).
+The approximate solver is
+[`RSpectra::svds()`](https://rdrr.io/pkg/RSpectra/man/svds.html) (from
+RSpectra, a Suggests dependency needed only when that solver runs), and
+it can only return fewer than `min(dim(x))` singular values. The default
+`n_singular_values = NULL` asks for all `min(dim(x))` of them and so
+always takes the exact path; request fewer to make the approximate
+solver available.
 
-With `svd_method = "auto"`, the approximate solver is chosen only when
-`n_singular_values < min(dim(x))` and `min(dim(x)) > svd_threshold`;
-otherwise the exact solver is used, and a message explains why when a
-large matrix still ends up on the exact path because all singular values
-were requested. Asking for `svd_method = "approx"` outright when
-`n_singular_values` equals `min(dim(x))` is not an error: it falls back
-to the exact solver with a message, because
-[`RSpectra::svds()`](https://rdrr.io/pkg/RSpectra/man/svds.html) cannot
-return the full set. If
+With `svd_method = "auto"`, the approximate solver runs only when
+`n_singular_values < min(dim(x))` and `min(dim(x)) > svd_threshold`.
+Otherwise the exact solver runs, and a message explains why when a large
+matrix ends up on the exact path because all singular values were
+requested. `svd_method = "approx"` with `n_singular_values` equal to
+`min(dim(x))` is not an error: it falls back to the exact solver with a
+message. If
 [`RSpectra::svds()`](https://rdrr.io/pkg/RSpectra/man/svds.html)
-converges on fewer than the requested number of singular values, the
-call warns and recomputes them with the exact solver.
+converges on fewer singular values than requested, the call warns and
+recomputes them with the exact solver.
 
-Centering and scaling, when requested, happen *before* the
-decomposition, so the returned triplets factorize the transformed matrix
-rather than the raw input: with the default `scale_input = TRUE` they
-reconstruct `scale(x)`, not `x`. The transformation itself is not
-returned, so keep the column means and standard deviations yourself if
+Centering and scaling happen before the decomposition, so the returned
+values and vectors factorize the transformed matrix. With the default
+`scale_input = TRUE` they reconstruct `scale(x)`, not `x`. The column
+means and standard deviations are not returned; keep them yourself if
 you need to map results back to the original units.
+
+## See also
+
+The [Dimensionality
+reduction](https://elkronos.github.io/featR/articles/dimensionality-reduction.html)
+guide, which runs this function on a worked example.
 
 ## Examples
 

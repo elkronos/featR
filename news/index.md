@@ -4,15 +4,16 @@
 
 A correctness release. Two adversarial reviews of every function and
 every documentation page found and fixed silent wrong answers, hangs,
-crashes, and inaccurate claims. Several fixes change behaviour; they are
-listed first under each review. Where a result changed, the old result
-was wrong.
+crashes, and inaccurate claims. Fixes that change behavior are listed
+first under each review. Where a result changed, the old result was
+wrong.
 
 ### First adversarial review
 
-A full statistical, methodological, and programmatic review, with every
-finding reproduced in R before it was fixed and a regression test added
-for each. This round also added the pkgdown site’s guides and articles.
+A full statistical, methodological, and programmatic review. Every
+finding was reproduced in R before it was fixed, and each fix has a
+regression test. This round also added the pkgdown site’s guides and
+articles.
 
 #### Behavior changes
 
@@ -55,38 +56,32 @@ for each. This round also added the pkgdown site’s guides and articles.
   still the maximum over the candidate sizes, so it remains mildly
   optimistic (about 60% on the same noise); use the held-out
   `details$performance` as the honest estimate.
-
 - [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)
   no longer discards sampler and loo warnings. Convergence problems and
   high Pareto *k* values are collected and summarized after the search,
   saying whether the selected model is affected.
-
 - [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)
   pooled per-forest importance standard errors with
   [`randomForest::combine()`](https://rdrr.io/pkg/randomForest/man/combine.html)
-  when run in parallel, which inflates them by about `sqrt(n_cores)` and
+  when run in parallel. That inflated them by about `sqrt(n_cores)` and
   shrank scaled importance by the same factor. They are now pooled
   exactly across trees.
-
 - [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
   over-reported held-out accuracy for character and logical targets. The
   test factor was rebuilt from the test rows alone, and
   [`caret::postResample()`](https://rdrr.io/pkg/caret/man/postResample.html)
   silently dropped predictions of classes absent from them.
-
 - [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
   computes the ANOVA *F* in closed form. Perfect separation scores `Inf`
   instead of a rounding-noise value near 1e31, only observed groups
-  count towards the degrees of freedom, and the “essentially perfect
-  fit” warning is gone. The constant-column check for correlation scores
-  is relative to the data’s scale, so features measured in very small
-  units are no longer scored `NA`.
-
+  count toward the degrees of freedom, and the “essentially perfect fit”
+  warning is gone. The constant-column check for correlation scores is
+  relative to the data’s scale, so features measured in very small units
+  are no longer scored `NA`.
 - [`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
   clamps floating-point residue to zero, so exactly independent
   predictors score 0 and are not selected, and bins columns containing
   infinite values instead of failing.
-
 - [`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md) and
   [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md) use
   a relative zero-variance tolerance. Columns that are constant up to
@@ -96,16 +91,15 @@ for each. This round also added the pkgdown site’s guides and articles.
   [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md)
   rejects them with an error naming them when it is asked to scale.
   Columns in very small units are kept.
-  [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md)
+- [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md)
   falls back to the exact solver when RSpectra fails to converge.
-
 - [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
   returns regression predictions and `R2` as plain numbers rather than 1
   x 1 matrices.
 
 #### Bug fixes
 
-- Non-syntactic column names:
+- Non-syntactic column names now work.
   [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
   never selected such predictors, and
   [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md),
@@ -176,7 +170,7 @@ test.
   is constant only inside one cross-validation resample (a rare
   indicator) is now set aside for that resample’s fits, with importance
   0.
-- Encoding: when a dummy name such as `g1` (factor `g`, level `1`)
+- When a dummy-variable name such as `g1` (factor `g`, level `1`)
   collides with another column or the target,
   [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md),
   [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md),
@@ -257,15 +251,18 @@ test.
 - [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
   dropped predictors that are in the final earth model when their GCV
   importance was \<= 0. Selection now reads the model’s terms.
-- `fs_svm(rf_rfe)` weighted resamples by survivorship when averaging
-  importance.
+- `fs_svm(select_method = "rf_rfe")` weighted resamples by survivorship
+  when averaging importance. It now averages each predictor’s full-size
+  importance once per resample.
 - Seeded parallel
   [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
   and [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
-  runs were not reproducible (caret’s per-resample seeds); fixed.
+  runs are now reproducible. caret’s per-resample seeds made two such
+  runs differ.
 - [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md)
-  warns when its Monte Carlo p-value floor, `1/(B+1)`, means a feature
-  cannot reach `sig_level` after multiplicity adjustment.
+  warns when its Monte Carlo p-value floor, `1/(simulation_B + 1)`,
+  means a feature cannot reach `sig_level` after multiplicity
+  adjustment.
 - Constant-column tests across
   [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md),
   [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md),
@@ -399,7 +396,7 @@ dimensionality reduction and keep their own decomposition structure.
 - [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
   gained a real SVM-RFE implementation (linear-kernel weight-vector
   ranking with a refit at each elimination step, plus cross-validated
-  size selection). The previous behavior — random-forest RFE — is still
+  size selection). The previous behavior, random-forest RFE, is still
   available via `select_method = "rf_rfe"`.
 - [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
   gained `prune` (default `TRUE`): `selected` is now the reduced
@@ -446,169 +443,137 @@ dimensionality reduction and keep their own decomposition structure.
   names. loo 2.10.0 moved those labels out of the row names, which would
   otherwise have made the selection rule map comparison rows to the
   wrong candidate models.
-
 - [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
   coerces character and logical predictors to factors *before* fitting
   the one-hot encoder, so the encoder is not silently refitted on the
   test rows
   ([`caret::dummyVars()`](https://rdrr.io/pkg/caret/man/dummyVars.html)
   records levels only for columns that are already factors).
-
 - [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
   honors `na_rm = FALSE` on the ANOVA path, where
   [`stats::lm()`](https://rdrr.io/r/stats/lm.html)’s own NA handling
   previously made it behave like `na_rm = TRUE`.
-
 - [`fs_unsupervised()`](https://elkronos.github.io/featR/reference/fs_unsupervised.md)
   returns an undefined score rather than an error for `method = "iqr"`
   with `na_rm = FALSE`.
-
 - [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md)
   computes standardized scores by position rather than by column name,
   so a design matrix with duplicated names cannot pair a coefficient
   with the wrong standard deviation. Its `nfolds` minimum is now 3,
   matching glmnet.
-
 - [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
   checks for MLmetrics before selecting caret’s multi-class summary,
   instead of a test that could never fail; multi-class targets no longer
   fail after the resamples have been computed.
-
 - [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
   rejects duplicated column names instead of silently resolving every
   lookup to the first match, which could replace one column’s
   correlations with another’s and drop both members of the pair.
-
 - [`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
   validates `maxRuns` against Boruta’s own minimum of 11, so the error
   names the featR argument rather than surfacing from the dependency.
-
 - [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md)
   reports non-finite predictor values as a user-input problem, naming
   the offending columns, rather than as an internal error.
-
 - [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md)
   no longer errors with “missing value where TRUE/FALSE needed” when a
   tuning result column contains `NA`.
-
 - [`summary()`](https://rdrr.io/r/base/summary.html) on an `fs_result`
   ranks p-value scores ascending, so
   [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md)
   lists its most significant features first instead of last.
-
 - [`print()`](https://rdrr.io/r/base/print.html) on an `fs_result`
   reports the recorded candidate count in preference to the number of
   scored features, so methods that score only a subset (such as
   [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md))
   no longer report “Selected 2 of 2”.
-
 - The `fs_result` constructor rejects an unnamed numeric `scores` vector
   and a zero-length `task`, both of which
   [`print()`](https://rdrr.io/r/base/print.html) and
   [`summary()`](https://rdrr.io/r/base/summary.html) could not display.
-
 - [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)
   samples predictor combinations without enumerating them, so
   `sample_combinations` now works at the scale it exists for: previously
   every subset was materialized first, which exhausted memory past
   roughly 25 predictors. An unbounded search over a very large subset
   space now errors with instructions instead of dying on allocation.
-
 - [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)
   validates `brm_family`, so passing a family generator without
   parentheses reports the mistake instead of “object of type ‘closure’
   is not subsettable”.
-
 - [`fs_bayes()`](https://elkronos.github.io/featR/reference/fs_bayes.md)
   supports families whose
   [`fitted()`](https://rdrr.io/r/stats/fitted.values.html) is a 3-D
   array (categorical, multinomial, multivariate). Selection proceeds;
   the in-sample MAE and RMSE, which are undefined for those responses,
   are reported as `NA` rather than causing an error that was previously
-  mislabelled as a sampling failure.
-
+  mislabeled as a sampling failure.
 - [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
   errors rather than ranking features from a partially recovered weight
   vector, and reports a degenerate elimination-step fit as a featR error
   naming the likely cause instead of surfacing kernlab’s.
-
 - [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
   sets reproducible RNG streams on its parallel workers, so two seeded
   parallel runs agree, and stops its cluster if backend registration
   fails.
-
 - [`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md)
   rejects `scale_data = TRUE` with `center_data = FALSE`, which the two
   engines handled differently, and validates `num_pc` against the
   large-data engine’s own limit.
-
 - [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)
   replaces only the `NA` entries of a per-class `control$sampsize`,
   instead of discarding the sizes that were supplied.
-
 - [`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
   refuses to expand a date column when the resulting
   `<col>_year`/`_month`/`_day` name already exists. Previously that
   column was overwritten in place, silently, including when it was the
   target.
-
 - [`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
   caps the automatic bin count at the number of observations. A
   near-constant column beside one extreme outlier drove the
   Freedman-Diaconis count past the integer range, which became `NA` and
   made [`cut()`](https://rdrr.io/r/base/cut.html) fail with “invalid
   number of intervals”.
-
 - [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md)
   reports `correction_applied` from what
   [`stats::chisq.test()`](https://rdrr.io/r/stats/chisq.test.html)
   actually did. A 2x2 table sitting exactly at expectation receives no
   Yates correction even when one is requested, and the row previously
   claimed otherwise.
-
 - [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
   registers its cluster teardown before registering the parallel
   backend, so a failure there cannot leak the cluster, and restores the
   caller’s own foreach backend instead of forcing sequential execution.
-
 - [`fs_elastic()`](https://elkronos.github.io/featR/reference/fs_elastic.md)
   sets `allowParallel` from whether featR created a cluster. caret’s
   default of `TRUE` meant a single-worker call would dispatch resamples
   to whatever backend the caller had registered elsewhere.
-
 - In `fs_svm(select_method = "rf_rfe")`, when random-forest RFE fails,
   the fallback keeps every predictor with positive impurity importance,
   and only falls back to the top `n_features` (1 when
   `n_features = NULL`) if fewer qualify. It previously returned exactly
   one predictor.
-
 - [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
   no longer fails on every call (a data.table was indexed with the
   matrix returned by
   [`caret::createDataPartition()`](https://rdrr.io/pkg/caret/man/createDataPartition.html)).
-
 - [`fs_mars()`](https://elkronos.github.io/featR/reference/fs_mars.md)
   sanitizes factor levels with `make.names(unique = TRUE)`, so distinct
   classes such as `"class 1"` and `"class.1"` can no longer merge.
-
 - [`fs_lasso()`](https://elkronos.github.io/featR/reference/fs_lasso.md)
   accepts data frames containing `NA` (the previous
   [`model.matrix()`](https://rdrr.io/r/stats/model.matrix.html) call
   silently dropped those rows and then aborted).
-
 - [`fs_pca()`](https://elkronos.github.io/featR/reference/fs_pca.md)
   computes variance explained against total variance in the large-data
   path, labels its loadings, and no longer overflows on very large
   inputs.
-
 - [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
   reports point-biserial correlations with the correct sign.
-
 - [`fs_randomforest()`](https://elkronos.github.io/featR/reference/fs_randomforest.md)
   stratifies on the user’s target rather than any column literally named
   `"target"`, imputes test-only missing values, and accepts character
   predictors.
-
 - [`fs_svd()`](https://elkronos.github.io/featR/reference/fs_svd.md)
   errors on invalid arguments instead of silently repairing them.
 
@@ -616,7 +581,7 @@ dimensionality reduction and keep their own decomposition structure.
 
 - Modeling engines are Suggests; each function checks for what it needs.
 - Functions never seed the RNG unless `seed` is supplied, and restore
-  the previous RNG state afterwards.
+  the previous RNG state afterward.
 - Execution is sequential by default; worker counts are opt-in and
   capped.
 - No [`library()`](https://rdrr.io/r/base/library.html),

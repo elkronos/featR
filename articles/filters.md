@@ -1,11 +1,34 @@
 # Filter methods
 
-Filters score each feature without fitting a predictive model. They are
-the cheapest methods in featR and the right first step on wide data.
-They are also **univariate**: each feature is judged on its own, so a
-filter cannot see redundancy or interactions.
+A filter scores each feature with a statistic and keeps the features
+whose score passes a cut. No predictive model is fitted, so filters are
+the cheapest methods in featR and the usual first step on wide data.
+Each one is **univariate**: it judges every feature on its own, so it
+cannot see redundancy between features or effects that only appear in
+combination.
 
-The examples below use one simulated data set, so the answers are known
+featR has five filters, and they split by whether they look at the
+outcome:
+
+- [`fs_unsupervised()`](https://elkronos.github.io/featR/reference/fs_unsupervised.md)
+  and
+  [`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
+  never touch the outcome. You can run them before a train/test split.
+- [`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md),
+  [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md),
+  and
+  [`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
+  score features against the outcome. Selecting with them is part of
+  fitting the model, so run them on training rows only, or inside every
+  fold of a cross-validation.
+
+None of the filters reports a held-out performance number. Their scores
+are statistics on whatever rows you pass in. [Validation and
+leakage](https://elkronos.github.io/featR/articles/validation-and-leakage.md)
+shows how much a filter run on all the data inflates a later
+cross-validation estimate, and lists which numbers in featR are honest.
+
+The examples use one simulated data set, so the right answers are known
 in advance:
 
 ``` r
@@ -24,14 +47,20 @@ sim$y      <- 2 * sim$x_strong + 0.5 * sim$x_weak + rnorm(n)
 sim$class  <- factor(ifelse(sim$y > 0, "pos", "neg"))
 ```
 
-## `fs_unsupervised()`: clean-up without an outcome
+## Filters that ignore the outcome
+
+### `fs_unsupervised()`
 
 [`fs_unsupervised()`](https://elkronos.github.io/featR/reference/fs_unsupervised.md)
-scores each column by a target-free statistic: `"variance"`, `"mad"`,
-`"iqr"`, `"range"`, `"missing_prop"`, or `"n_unique"`. Because it never
-looks at the outcome, it is safe to run before a train/test split.
+scores each column by a statistic that needs no outcome: `"variance"`
+(the default), `"mad"`, `"iqr"`, `"range"`, `"missing_prop"`, or
+`"n_unique"`. Use it to drop constant columns, columns that are mostly
+missing, or columns with too few distinct values. Every column of `data`
+must be numeric.
 
-Drop constant columns:
+With the defaults (`method = "variance"`, `threshold = 0`), it keeps
+every column whose variance is above zero, which drops the constant
+ones.
 
 ``` r
 
@@ -43,10 +72,8 @@ fs_unsupervised(num, method = "variance", threshold = 0)
 #> Details: mask, indices, filtered, threshold, direction, action, n_features (in $details)
 ```
 
-Drop columns that are more than half missing. Note `action = "remove"`.
-The default `action = "keep"` would keep the *most* missing columns, and
-featR warns if you leave all three of `threshold`, `direction`, and
-`action` at their defaults for `"missing_prop"`.
+To drop columns that are more than half missing, you have to say
+`action = "remove"`:
 
 ``` r
 
@@ -55,17 +82,95 @@ fs_unsupervised(sim[, c("x_strong", "x_gappy")], method = "missing_prop",
 #> [1] "x_strong"
 ```
 
-Thresholds are on the scale of the statistic: a variance is in squared
-units, `"missing_prop"` is in \[0, 1\], and `"n_unique"` is a count. A
-threshold chosen for one method means nothing for another. `"mad"` uses
-R’s default normal-consistency constant (1.4826), so it estimates a
-standard deviation.
+With the default `action = "keep"`, the same call would keep the most
+missing columns. featR warns when you use `"missing_prop"` with all
+three of `threshold`, `direction`, and `action` at their defaults,
+because that combination keeps every column with any missing value.
 
-## `fs_supervised()`: one feature at a time against the outcome
+Thresholds are on the scale of the statistic. A variance is in squared
+units, `"missing_prop"` is a proportion in \[0, 1\], and `"n_unique"` is
+a count, so a threshold chosen for one method means nothing for another.
+`"mad"` uses R’s default consistency constant (1.4826), so for normally
+distributed data it estimates the standard deviation rather than giving
+the raw median absolute deviation.
 
-For a numeric target the score is the absolute Pearson correlation. For
-a factor target it is the one-way ANOVA *F* statistic. `method = "auto"`
-picks the right one.
+On missing values: `na_rm = TRUE` (the default) drops them before
+computing `"variance"`, `"mad"`, `"iqr"`, and `"range"`.
+`"missing_prop"` and `"n_unique"` always count the whole column. A
+column whose score comes out `NA` is never selected, and a warning says
+how many were excluded.
+
+A high variance says nothing about usefulness. A noisy column can have
+the largest variance in the data and a strong predictor the smallest, so
+use this function for clean-up, not for ranking.
+
+### `fs_correlation()`
+
+[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
+looks only at how the features relate to each other. It flags every pair
+whose absolute correlation is above `threshold` (which has no default),
+and with `prune = TRUE` (the default) it drops features one at a time
+until no two survivors are above it. In `sim`, `x_copy` is `x_strong`
+plus a little noise:
+
+``` r
+
+red <- fs_correlation(num[, c("x_strong", "x_weak", "x_noise", "x_copy")],
+                      threshold = 0.9)
+red$selected
+#> [1] "x_strong" "x_weak"   "x_noise"
+red$details$dropped
+#> [1] "x_copy"
+red$details$pairs
+#>       Var1   Var2 Correlation
+#> 1 x_strong x_copy   0.9984364
+```
+
+The pair correlates at 0.998, and one member goes. Each step takes the
+strongest remaining pair and drops the member with the larger mean
+absolute correlation to the other retained features. That is the
+tie-break
+[`caret::findCorrelation()`](https://rdrr.io/pkg/caret/man/findCorrelation.html)
+uses, but caret scans in a different order, so the two can drop
+different features. Neither is guaranteed to drop the fewest.
+
+The choice never consults the outcome, so it can drop the member that
+predicts better. Here it dropped `x_copy` and kept `x_strong`, but it
+could as easily have gone the other way. If the choice inside a
+correlated group should follow importance for a target, use
+[`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
+instead.
+
+Reading the result:
+
+- `scores` holds each feature’s largest absolute correlation with any
+  other feature.
+- With `prune = FALSE`, `selected` is the redundant set (both members of
+  every flagged pair) and nothing is dropped. `details$redundant` holds
+  that set in either mode.
+
+The correlation types are `"pearson"` (the default), `"spearman"`,
+`"kendall"`, `"polychoric"` (all columns ordered factors; needs the
+polycor package), and `"pointbiserial"` (a continuous column against a
+column with exactly two values).
+
+Missing values are not removed by default (`na.rm = FALSE`). An `NA` in
+a column makes its correlations `NA`, and pairs with an `NA` correlation
+are never flagged or pruned, so redundancy you cannot see is treated as
+none. featR warns when this happens. Set `na.rm = TRUE` for pairwise
+deletion, or casewise deletion under `"polychoric"`, which stops with an
+error on missing values otherwise.
+
+## Filters that score against the outcome
+
+### `fs_supervised()`
+
+[`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
+scores every feature against `target`, and every feature column must be
+numeric. For a numeric target the score is the absolute Pearson
+correlation, in \[0, 1\]. For a factor, character, or logical target it
+is the one-way ANOVA *F* statistic, which has no upper bound. The
+default `method = "auto"` picks between them from the target’s type.
 
 ``` r
 
@@ -89,9 +194,18 @@ summary(res)
 #> (* = selected)
 ```
 
-`x_copy` is kept alongside `x_strong` even though it adds nothing. This
-is the univariate blind spot. The *F* scale for a factor target is
-unbounded, so pick a threshold on that scale:
+`x_copy` scores 0.856, almost the same as `x_strong`, and is kept even
+though it adds nothing once `x_strong` is in. Every univariate filter
+behaves this way. Run
+[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
+afterwards to prune the duplicate.
+
+`x_weak` has a real effect (coefficient 0.5) but scores 0.17 and falls
+below the cut. The default `threshold = 0` would have kept all four
+features: any non-constant feature has a sample correlation above zero,
+even pure noise. Choose a threshold to make an actual selection.
+
+For a factor target, choose the threshold on the *F* scale:
 
 ``` r
 
@@ -101,81 +215,87 @@ fs_supervised(cls, target = "class", threshold = 10)$scores
 #> 141.5738542   5.4736576   0.2682509
 ```
 
-Pearson correlation measures **linear** association only. A feature with
-a strong U-shaped effect can score near zero. Use
-[`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
-or a model-based method if you suspect non-linear effects.
+`x_strong` scores 141.6, and `x_weak` (5.5) and `x_noise` (0.27) fall
+below 10. A feature that separates the classes perfectly scores `Inf`.
 
-## `fs_correlation()`: remove redundancy
+Caveats:
 
-[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
-ignores the outcome and looks at how the features relate to each other.
-With `prune = TRUE` (the default) it drops features one at a time until
-no two survivors correlate above `threshold`:
+- The task in the result is `"regression"` for a numeric target and
+  `"classification"` for a factor. A character or logical target is
+  scored with ANOVA, but the task is recorded as `NA`.
+- Pearson correlation and the *F* test measure a linear relationship or
+  a difference in class means. A feature with a strong U-shaped effect
+  can score near zero; the
+  [`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
+  section below shows one.
+- With `na_rm = TRUE` (the default), each feature is scored on the rows
+  where both it and the target are observed. A constant feature has no
+  defined score; it scores `NA` and is never selected.
 
-``` r
-
-red <- fs_correlation(num[, c("x_strong", "x_weak", "x_noise", "x_copy")],
-                      threshold = 0.9)
-red$selected
-#> [1] "x_strong" "x_weak"   "x_noise"
-red$details$dropped
-#> [1] "x_copy"
-red$details$pairs
-#>       Var1   Var2 Correlation
-#> 1 x_strong x_copy   0.9984364
-```
-
-Pruning is a variant of the
-[`caret::findCorrelation()`](https://rdrr.io/pkg/caret/man/findCorrelation.html)
-heuristic. It takes the strongest remaining pair first and drops the
-member with the larger mean absolute correlation to everything else.
-That choice does not consult the outcome, so it may drop the member that
-predicts better.
-[`fs_boruta()`](https://elkronos.github.io/featR/reference/fs_boruta.md)
-prunes by importance instead.
-
-Supported correlation types are `"pearson"`, `"spearman"`, `"kendall"`,
-`"polychoric"` (ordered factors, needs polycor), and `"pointbiserial"`
-(continuous against dichotomous).
-
-## `fs_chi()`: categorical features against a categorical outcome
+### `fs_chi()`
 
 [`fs_chi()`](https://elkronos.github.io/featR/reference/fs_chi.md) runs
-a chi-squared test of independence for every factor or character
-feature. It applies a multiple-testing correction (Bonferroni by
-default) and selects features whose adjusted p-value is below
-`sig_level`. When any expected cell count is below 5 it switches to a
-Monte-Carlo p-value, so pass `seed` for reproducibility.
+a chi-squared test of independence between each categorical feature and
+the target. Character columns become factors. Numeric, logical, and date
+columns are ignored, so discretize them first if you want them tested.
+The target is coerced to a factor too, and the task is always
+`"classification"`.
 
 ``` r
 
 cat_data <- data.frame(
-  colour = factor(ifelse(sim$x_strong > 0, "red", "blue")),
-  size   = factor(sample(c("S", "M", "L"), n, replace = TRUE)),
-  class  = sim$class
+  color = factor(ifelse(sim$x_strong > 0, "red", "blue")),
+  size  = factor(sample(c("S", "M", "L"), n, replace = TRUE)),
+  class = sim$class
 )
 chi <- fs_chi(cat_data, target = "class", seed = 1)
+chi$selected
+#> [1] "color"
 chi$details$results
 #>   feature   n df      p_value  adj_p_value significant     method
-#> 1  colour 200  1 3.090128e-16 6.180256e-16        TRUE asymptotic
+#> 1   color 200  1 3.090128e-16 6.180256e-16        TRUE asymptotic
 #> 2    size 200  2 6.356383e-01 1.000000e+00       FALSE asymptotic
 #>   correction_applied min_expected
 #> 1               TRUE        43.24
 #> 2              FALSE        25.76
 ```
 
-Scores are adjusted p-values, so **smaller is stronger**.
-[`summary()`](https://rdrr.io/r/base/summary.html) sorts them ascending.
-A p-value measures evidence against independence, not effect size: with
-enough rows, a negligible association is still significant. Numeric
-columns are ignored, so discretize them first if you want them tested.
+`color` is a coarsened copy of `x_strong`, and its adjusted p-value is
+about 6e-16. `size` is random and gets an adjusted p-value of 1.
 
-## `fs_infogain()`: bits of uncertainty removed
+The score for each feature is its adjusted p-value, so smaller means
+stronger evidence of association, and
+[`summary()`](https://rdrr.io/r/base/summary.html) sorts the scores
+ascending. A feature is selected when its adjusted p-value is below
+`sig_level` (default 0.05). The adjustment is Bonferroni by default
+(`p_adjust_method`), counting only the features that were actually
+tested.
 
-Information gain is `H(Y) - H(Y | X)` in bits. Numeric predictors are
-discretized into equal-width bins. A numeric target is discretized once,
-up front, so that every predictor is scored against the same classes.
+When every expected cell count is at least 5, the test is the usual
+asymptotic one, with Yates’ continuity correction on 2x2 tables (the
+`correction_applied` column). When any expected count is below 5, the
+p-value comes from a Monte Carlo simulation with `simulation_B = 2000`
+replicates and `df` is `NA`. Pass `seed` to make those p-values
+reproducible. A simulated p-value can never fall below 1 /
+(`simulation_B` + 1), so with many features and a Bonferroni correction
+it may be unable to reach `sig_level` at all; featR warns and says how
+large `simulation_B` would need to be.
+
+Each feature is tested on its own complete cases, so `n` can differ
+between rows of the results table. A feature or target left with fewer
+than two levels after dropping missing values is skipped, with an `NA`
+p-value.
+
+A p-value measures evidence against independence. It is not an effect
+size: with enough rows, a negligible association is still significant.
+
+### `fs_infogain()`
+
+[`fs_infogain()`](https://elkronos.github.io/featR/reference/fs_infogain.md)
+scores each feature by its information gain, `H(Y) - H(Y | X)`: how many
+bits of uncertainty about the target you lose by knowing the feature. It
+accepts numeric, factor, character, logical, and date features in the
+same data frame, and it does not assume a linear relationship.
 
 ``` r
 
@@ -186,10 +306,41 @@ ig$scores
 #> 0.41907995 0.11210176 0.05730707
 ```
 
-Raw information gain favors features with many levels. An ID column can
-achieve the maximum possible gain while predicting nothing. Use
-`normalize = "gain_ratio"`, which divides by the feature’s own entropy,
-when features differ in cardinality:
+The target is always treated as categorical, and the task is always
+`"classification"`. Numeric features are cut into equal-width bins,
+using the larger of the Freedman-Diaconis and Sturges bin counts unless
+you set `numeric_bins`. A numeric target is binned the same way, once
+and up front, so every feature is scored against the same classes. Date
+columns are expanded into year, month, and day columns. Missing values
+are dropped pair by pair, never across the whole data set.
+
+Because it bins rather than fitting a line, information gain catches the
+U-shaped effect that
+[`fs_supervised()`](https://elkronos.github.io/featR/reference/fs_supervised.md)
+misses:
+
+``` r
+
+set.seed(2)
+u <- data.frame(x_u = rnorm(n), x_lin = rnorm(n))
+u$y <- u$x_u^2 + 0.3 * u$x_lin + rnorm(n, sd = 0.3)
+fs_supervised(u, target = "y")$scores
+#>        x_u      x_lin 
+#> 0.04566085 0.36929494
+fs_infogain(u, target = "y")$scores
+#>       x_u     x_lin 
+#> 1.2513951 0.6727366
+```
+
+`x_u` drives most of `y`, yet its absolute correlation is 0.05 against
+0.37 for `x_lin`. Information gain ranks it first, 1.25 bits against
+0.67.
+
+Raw information gain favors features with many levels. An identifier
+column splits the data into single rows and reaches the largest gain
+possible, while predicting nothing about new data.
+`normalize = "gain_ratio"` divides each gain by the feature’s own
+entropy, which grows with the number of levels:
 
 ``` r
 
@@ -202,11 +353,19 @@ fs_infogain(with_id, "class", normalize = "gain_ratio")$scores
 #> 0.1302194 0.1285049
 ```
 
-The gain ratio cuts the ID column’s score by roughly a factor of eight,
-but on this data the ID column still ranks first. The gain ratio reduces
-the cardinality bias. It does not remove it. Drop identifier and other
-near-unique columns before you score anything.
+The gain ratio cuts the ID column’s score from 1.00 to 0.13, roughly a
+factor of eight, but on this data the ID column still ranks first (0.130
+against 0.129 for `x_strong`). The gain ratio reduces the bias toward
+many levels without removing it, so drop identifier and other
+near-unique columns before you score anything. Gain ratios are not on
+the bits scale, so a threshold chosen for raw gains does not carry over.
 
 By default `selected` holds every feature with a score above zero. With
-finite data almost every feature has *some* positive sample gain, so use
-`top_n` for a meaningful cut.
+finite data, almost every feature has some positive sample gain,
+including pure noise, so the default selects nearly everything. Use
+`top_n` to keep a fixed number of the highest-scoring features.
+
+`data` can also be a list of data frames that share the target column.
+The scores are then the union across the list, and a feature name that
+appears in more than one data frame keeps its highest score;
+`details$collisions` records which.

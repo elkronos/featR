@@ -1,8 +1,9 @@
-# Supervised Filter-Based Feature Selection
+# Supervised filter that scores each feature against a target
 
-Performs supervised, univariate, filter-based feature selection: every
-column of `data` except `target` is scored against the target, and
-features are selected or dropped by comparing that score to `threshold`.
+Scores every column of `data` except `target` against the target, one
+feature at a time, and keeps or drops each feature by comparing its
+score with `threshold`. A numeric target is scored by absolute Pearson
+correlation, a categorical target by the one-way ANOVA F statistic.
 
 ## Usage
 
@@ -25,163 +26,160 @@ fs_supervised(
 
 - data:
 
-  A data.frame, data.table, or matrix containing `target` and the
-  candidate feature columns. Every column other than `target` must be
-  numeric. The input is copied, never modified in place.
+  A data.frame, data.table, or matrix holding `target` and the candidate
+  features. Every column other than `target` must be numeric. The input
+  is copied, never modified in place.
 
 - target:
 
-  Character. Name of the target column in `data`. It is removed from the
-  candidate features and used as the scoring target. The target column
-  itself may be numeric, factor, character, or logical; any other type
-  is an error.
+  Single string naming the target column of `data`. The target may be
+  numeric, factor, character, or logical; any other type is an error. It
+  is removed from the candidates and used only for scoring.
 
 - method:
 
-  One of `"auto"` (default), `"correlation"`, `"anova"`.
+  One of `"auto"` (default), `"correlation"`, or `"anova"`. See Details.
 
 - threshold:
 
-  Non-negative, finite numeric scalar threshold applied to the feature
-  scores (not to the target directly). Default 0. Note that the two
-  methods put scores on different scales: `[0, 1]` for `"correlation"`
-  and `[0, Inf]` for `"anova"`. With the defaults (`threshold = 0`,
-  `direction = "above"`, `action = "keep"`) nothing is filtered in
-  practice: any non-constant feature has a sample \\\|r\| \> 0\\ or \\F
-  \> 0\\, even when it is pure noise, so every feature with a defined
-  score is kept. Choose a threshold to make an actual selection.
+  Non-negative, finite number compared with each feature's score.
+  Default 0. The scale depends on the method: `[0, 1]` for
+  `"correlation"`, `[0, Inf]` for `"anova"`. With the defaults
+  (`threshold = 0`, `direction = "above"`, `action = "keep"`) nothing is
+  filtered: any non-constant feature, pure noise included, has a sample
+  \\\|r\| \> 0\\ or \\F \> 0\\, so every feature with a defined score is
+  kept. Set a threshold to make a real selection.
 
 - direction:
 
-  One of `"above"` (default), `"below"`; compares scores to `threshold`.
+  `"above"` (default) or `"below"`: which side of `threshold` a score
+  must fall on to meet the condition.
 
 - action:
 
-  One of `"keep"` (default), `"remove"`; determines whether features
-  meeting the condition are retained or dropped.
+  `"keep"` (default) retains the features that meet the condition;
+  `"remove"` drops them.
 
 - include_equal:
 
-  Logical; if TRUE, comparisons are inclusive (greater/less than or
-  equal) instead of strict. Default FALSE.
+  Logical. If `TRUE`, a score equal to `threshold` meets the condition.
+  Default `FALSE`.
 
 - na_rm:
 
-  Logical; if TRUE (the default), rows with NA in a feature or in the
-  target are dropped when computing that feature's score. If FALSE, an
-  NA anywhere in a feature or the target makes that feature's score
-  undefined.
+  Logical. If `TRUE` (the default), rows with `NA` in a feature or in
+  the target are left out when that feature is scored. If `FALSE`, an
+  `NA` anywhere in a feature or in the target makes that feature's score
+  `NA`.
 
 - output:
 
-  One of `"result"` (default), `"matrix"`, `"dt"`, `"data.frame"`,
-  `"mask"`, `"indices"`, `"names"`, `"list"`. Throughout, "candidate
-  features" means the columns of `data` other than `target`, in their
-  original order.
+  Shape of the return value. "Candidate features" means the columns of
+  `data` other than `target`, in their original order.
 
   - `"result"` (default): an `fs_result` object (see Value).
 
-  - `"matrix"`: numeric matrix of the selected features.
+  - `"matrix"`, `"dt"`, `"data.frame"`: the selected features as a
+    numeric matrix, a data.table, or a data.frame.
 
-  - `"dt"`: data.table of the selected features.
+  - `"mask"`: logical vector with one element per candidate feature,
+    named after the candidates; `TRUE` marks a selected feature.
 
-  - `"data.frame"`: data.frame of the selected features.
+  - `"indices"`: integer positions of the selected features among the
+    candidates (that is, in `data` without `target`), named after the
+    selected features.
 
-  - `"mask"`: logical vector, one element per candidate feature, named
-    after the candidate features; TRUE marks a selected column.
+  - `"names"`: character vector of the selected feature names.
 
-  - `"indices"`: integer vector of the selected column indices, indexing
-    the candidate features (that is, `data` without `target`), named
-    after the selected columns.
-
-  - `"names"`: character vector of the selected column names.
-
-  - `"list"`: list with components `filtered` (matrix), `mask`,
-    `indices`, `names`, `scores` (all as above), and `meta`, a list
-    recording `method_arg` (the method as requested), `method_used` (the
-    method after `"auto"` was resolved), `threshold`, `direction`,
-    `action`, `include_equal`, `na_rm`, `n_input_cols`, and
-    `n_kept_cols`.
+  - `"list"`: a list with `filtered` (matrix), `mask`, `indices`,
+    `names`, `scores`, and `meta`. `meta` records `method_arg` (the
+    method as requested), `method_used` (after `"auto"` is resolved),
+    `threshold`, `direction`, `action`, `include_equal`, `na_rm`,
+    `n_input_cols`, and `n_kept_cols`.
 
 - verbose:
 
-  Logical; emit progress messages. Default FALSE.
+  Logical; print progress messages. Default `FALSE`.
 
 ## Value
 
-With the default `output = "result"`, an object of class `fs_result`
-with elements:
+With `output = "result"` (the default), an `fs_result` object:
 
 - `selected`: character vector of selected feature names.
 
-- `scores`: named numeric vector of per-feature scores, in column order,
-  `NA` where the score is undefined.
+- `scores`: named numeric vector with one score per candidate feature,
+  in column order, `NA` where the score is undefined.
 
-- `method`: `"supervised_"` followed by the resolved scoring method, for
+- `method`: `"supervised_"` followed by the method actually used, for
   example `"supervised_correlation"`.
 
 - `task`: `"regression"` for a numeric target, `"classification"` for a
-  factor target, `NA` otherwise.
+  factor target, and `NA` for a character or logical target, whose
+  intended task is ambiguous.
 
 - `model`: `NULL`.
 
 - `details`: a list holding, in this order, `mask` (the logical
-  keep-mask over the candidate features), `indices` (the selected column
-  indices, named after the selected columns), `filtered` (the selected
-  columns as a data.table), `threshold`, `direction`, `action`, and
-  `n_features` (the number of candidate features, that is
+  keep-mask over the candidates), `indices` (selected positions, named),
+  `filtered` (the selected columns as a data.table), `threshold`,
+  `direction`, `action`, and `n_features` (the number of candidates,
   `ncol(data) - 1`).
 
 - `call`: the matched call.
 
-Any other `output` returns that shape instead, exactly as documented
-above. When no feature meets the selection criteria, a warning is issued
-and the tabular shapes come back empty: `"matrix"` and `"data.frame"`
-have zero columns and keep the input row count, while the `"dt"` shape
-(and `details$filtered`) is only guaranteed to have zero columns –
-data.table represents a zero-column table as having zero rows, so its
-row count is not preserved.
+Any other `output` returns the shape described under `output`.
+
+When no feature meets the criteria, a warning is issued and the tabular
+shapes come back empty. `"matrix"` and `"data.frame"` then have zero
+columns and keep the input row count. The `"dt"` shape and
+`details$filtered` have zero columns and also zero rows, because
+data.table represents a zero-column table that way.
 
 ## Details
 
-This is one of the cheapest supervised screens in featR: no predictive
-model is fitted, each feature is scored on its own, and the cost is
-linear in the number of columns, so it scales to wide data. The flip
-side is that scoring is strictly univariate: it cannot see interactions
-between features, and it will happily keep a whole group of
-near-duplicate columns that all correlate with the target. Use
-[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md)
-to prune that redundancy afterwards, or a wrapper such as
+No model is fitted, so the cost grows linearly with the number of
+columns and the function copes with wide data. Each feature is scored on
+its own, which has two consequences: the filter cannot see interactions,
+and it keeps every member of a group of near-duplicate columns that all
+track the target. Prune that redundancy afterwards with
+[`fs_correlation()`](https://elkronos.github.io/featR/reference/fs_correlation.md),
+or use a wrapper such as
 [`fs_recursivefeature()`](https://elkronos.github.io/featR/reference/fs_recursivefeature.md)
 or [`fs_svm()`](https://elkronos.github.io/featR/reference/fs_svm.md)
-when the joint contribution is what matters.
+when the joint contribution of features is what you care about.
 
-Supported methods:
+The three values of `method`:
 
-- `"correlation"`: Absolute Pearson correlation (numeric target), so
-  scores lie in `[0, 1]`. A constant feature (or target) has no defined
-  correlation and scores `NA`; the check is relative to the column's
-  magnitude, so features measured on a very small scale are scored
-  normally.
+- `"correlation"` requires a numeric target. The score is the absolute
+  Pearson correlation, in `[0, 1]`. A constant feature or a constant
+  target has no defined correlation and scores `NA`. The constancy check
+  is relative to each column's magnitude, so a feature measured on a
+  very small or very large scale is scored normally.
 
-- `"anova"`: One-way ANOVA F-statistic (categorical target), so scores
-  lie in `[0, Inf]`: a feature that separates the classes perfectly (no
-  spread within any class) scores `Inf`, and a constant feature scores
-  `NA`.
+- `"anova"` requires a factor, character, or logical target. The score
+  is the one-way ANOVA F statistic, in `[0, Inf]`. A feature that
+  separates the classes perfectly (no spread within any class) scores
+  `Inf`, and a constant feature scores `NA`.
 
-- `"auto"`: Chooses `"correlation"` for a numeric target and `"anova"`
-  for a categorical one. Because the two score scales differ, a message
-  reports the resolved method when `verbose = TRUE`.
+- `"auto"` (the default) uses `"correlation"` for a numeric target and
+  `"anova"` otherwise. The two scales differ, so a threshold that suits
+  one is meaningless for the other; with `verbose = TRUE` a message
+  reports which method was chosen.
 
-Features whose score is undefined (`NA`) are never selected, under both
-`action = "keep"` and `action = "remove"`; a warning reports how many
-such features were excluded.
+A feature whose score is `NA` is never selected, whether `action` is
+`"keep"` or `"remove"`, and a warning reports how many features were
+excluded this way.
 
-Columns are subset by integer index, never by name, so duplicated
-feature names cannot select the wrong columns. The target's name must be
-unique, and every column must have a non-empty, non-NA name (a matrix
-keeps its own column names; `V1`, `V2`, ... are used only when it has
-none).
+Columns are subset by position, never by name, so duplicated feature
+names cannot pull in the wrong column. The target's name must be unique,
+and every column needs a non-empty, non-`NA` name. A matrix keeps its
+own column names; `V1`, `V2`, ... are used only when it has none.
+
+## See also
+
+The [Filter
+methods](https://elkronos.github.io/featR/articles/filters.html) guide,
+which runs this function on a worked example.
 
 ## Examples
 

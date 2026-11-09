@@ -190,5 +190,5 @@ if (requireNamespace("MASS", quietly = TRUE)) {
 #>       wt     qsec       am 
 #> 5.506882 4.246676 2.080819 
 #> mpg ~ qsec + am
-#> <environment: 0x55842f31bbb8>
+#> <environment: 0x5d909f48d558>
 ```
